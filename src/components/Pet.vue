@@ -4,8 +4,17 @@
     :style="{ transform: transformStyle }"
     @mouseenter="handleMouseEnter"
     @mouseleave="handleMouseLeave"
+    @contextmenu="handleContextMenu"
   >
-    <div class="pet-body">
+    <!-- 如果有立绘图片，显示图片；否则显示默认的 CSS 动画宠物 -->
+    <img 
+      v-if="imagePath" 
+      :src="imagePath" 
+      alt="桌宠立绘" 
+      class="pet-image"
+      @error="handleImageError"
+    />
+    <div v-else class="pet-body">
       <div class="pet-face">
         <div class="pet-eye left-eye"></div>
         <div class="pet-eye right-eye"></div>
@@ -28,7 +37,13 @@ const props = defineProps({
     type: Number,
     default: 0
   },
+  imagePath: {
+    type: String,
+    default: ''
+  }
 })
+
+const imageError = ref(false)
 
 const animationFrame = ref(null)
 const bounceOffset = ref(0)
@@ -58,6 +73,19 @@ const handleMouseLeave = () => {
   isHovered.value = false
 }
 
+// 处理右键菜单
+const handleContextMenu = (event) => {
+  event.preventDefault()
+  if (window.electronAPI && window.electronAPI.showContextMenu) {
+    window.electronAPI.showContextMenu()
+  }
+}
+
+// 处理图片加载错误
+const handleImageError = () => {
+  imageError.value = true
+}
+
 onMounted(() => {
   animate()
 })
@@ -76,6 +104,15 @@ onUnmounted(() => {
   position: relative;
   transition: transform 0.3s ease;
   cursor: pointer;
+  -webkit-app-region: drag;
+}
+
+.pet-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
 }
 
 .pet-body {

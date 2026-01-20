@@ -11,4 +11,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // 窗口拖拽
   startDrag: () => ipcRenderer.invoke('start-drag'),
+  
+  // 右键菜单
+  showContextMenu: () => ipcRenderer.invoke('show-context-menu'),
 })

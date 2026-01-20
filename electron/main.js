@@ -1,4 +1,4 @@
-const { app, BrowserWindow, screen } = require('electron')
+const { app, BrowserWindow, screen, Menu, ipcMain } = require('electron')
 const path = require('path')
 
 let petWindow = null
@@ -46,6 +46,47 @@ function createPetWindow() {
   // 点击穿透（可选，让宠物窗口可以点击穿透到下层）
   // petWindow.setIgnoreMouseEvents(true, { forward: true })
 }
+
+// 创建右键菜单
+function createContextMenu() {
+  return Menu.buildFromTemplate([
+    {
+      label: '设置',
+      click: () => {
+        // 预留设置功能
+        console.log('设置功能待实现')
+      }
+    },
+    {
+      type: 'separator'
+    },
+    {
+      label: '关于',
+      click: () => {
+        // 预留关于功能
+        console.log('关于功能待实现')
+      }
+    },
+    {
+      type: 'separator'
+    },
+    {
+      label: '关闭',
+      click: () => {
+        app.quit()
+      }
+    }
+  ])
+}
+
+// 处理右键菜单 IPC
+ipcMain.handle('show-context-menu', (event) => {
+  const menu = createContextMenu()
+  const window = BrowserWindow.fromWebContents(event.sender)
+  if (window) {
+    menu.popup({ window })
+  }
+})
 
 // 应用准备就绪
 app.whenReady().then(() => {
