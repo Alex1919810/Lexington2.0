@@ -14,4 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // 右键菜单
   showContextMenu: () => ipcRenderer.invoke('show-context-menu'),
+  
+  // 扫描立绘文件
+  scanIllustrations: () => ipcRenderer.invoke('scan-illustrations'),
 })
