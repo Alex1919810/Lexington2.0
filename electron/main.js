@@ -14,6 +14,10 @@ function createPetWindow() {
   const windowWidth = isDev ? 800 : 500
   const windowHeight = isDev ? 600 : 500
   
+  // 图标路径
+  const appPath = isDev ? process.cwd() : path.join(__dirname, '..')
+  const iconPath = path.join(appPath, 'resource', 'icon', 'Normal.ico')
+  
   // 创建无边框、透明、置顶的窗口
   petWindow = new BrowserWindow({
     width: windowWidth,
@@ -26,6 +30,7 @@ function createPetWindow() {
     skipTaskbar: true, // 不在任务栏显示
     resizable: isDev, // 开发模式下可调整大小
     movable: true, // 可移动
+    icon: fs.existsSync(iconPath) ? iconPath : undefined, // 设置窗口图标
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -100,7 +105,7 @@ ipcMain.handle('scan-illustrations', async () => {
   try {
     const illustrations = []
     const appPath = isDev ? process.cwd() : path.join(__dirname, '..')
-    const illustrationBasePath = path.join(appPath, 'illustration')
+    const illustrationBasePath = path.join(appPath, 'resource', 'illustration')
     
     // 检查illustration目录是否存在
     if (!fs.existsSync(illustrationBasePath)) {

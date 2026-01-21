@@ -1,7 +1,20 @@
 <template>
   <div 
     class="sidebar"
+    :class="{ 'always-visible': isAlwaysVisible, 'hover-only': !isAlwaysVisible }"
   >
+    <!-- 固定显示切换按钮 -->
+    <button 
+      class="sidebar-button pin-button" 
+      @click.stop.prevent="handleTogglePin"
+      @mousedown.stop.prevent
+      @mouseup.stop.prevent
+      type="button"
+      :title="isAlwaysVisible ? '点击后：鼠标经过才显示' : '点击后：一直可见'"
+    >
+      <span class="button-icon">{{ isAlwaysVisible ? '📌' : '📍' }}</span>
+    </button>
+    
     <!-- 刷新按钮 -->
     <button 
       class="sidebar-button refresh-button" 
@@ -56,6 +69,8 @@
 </template>
 
 <script setup>
+import { ref, onMounted } from 'vue'
+
 const props = defineProps({
   illustrations: {
     type: Array,
@@ -85,6 +100,47 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['refresh', 'switch', 'toggleFormat', 'switchCharacter'])
+
+// 侧边栏固定显示状态（默认开启，一直可见）
+const isAlwaysVisible = ref(true)
+
+// 从 localStorage 加载设置
+const loadSettings = () => {
+  try {
+    const saved = localStorage.getItem('sidebarAlwaysVisible')
+    if (saved !== null) {
+      isAlwaysVisible.value = saved === 'true'
+    }
+  } catch (error) {
+    console.warn('加载侧边栏设置失败:', error)
+  }
+}
+
+// 保存设置到 localStorage
+const saveSettings = () => {
+  try {
+    localStorage.setItem('sidebarAlwaysVisible', String(isAlwaysVisible.value))
+  } catch (error) {
+    console.warn('保存侧边栏设置失败:', error)
+  }
+}
+
+// 切换固定显示状态
+const handleTogglePin = (event) => {
+  if (event) {
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+  }
+  isAlwaysVisible.value = !isAlwaysVisible.value
+  saveSettings()
+  console.log('侧边栏：切换固定显示状态，当前状态:', isAlwaysVisible.value ? '一直可见' : '鼠标经过才显示')
+}
+
+// 组件挂载时加载设置
+onMounted(() => {
+  loadSettings()
+})
 
 const handleRefresh = (event) => {
   if (event) {
@@ -174,6 +230,21 @@ const handleSwitchCharacter = (event) => {
   will-change: transform;
   /* 确保侧边栏可以接收所有鼠标事件 */
   touch-action: manipulation;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+/* 固定显示模式：一直可见 */
+.sidebar.always-visible {
+  opacity: 1;
+}
+
+/* 鼠标悬停模式：默认半透明，鼠标经过时完全显示 */
+.sidebar.hover-only {
+  opacity: 0.2;
+}
+
+.sidebar.hover-only:hover {
+  opacity: 1;
 }
 
 .sidebar-button {
@@ -222,5 +293,14 @@ const handleSwitchCharacter = (event) => {
 .button-icon {
   display: block;
   line-height: 1;
+}
+
+/* 固定显示按钮的特殊样式 */
+.pin-button {
+  background: rgba(150, 100, 255, 0.8) !important;
+}
+
+.pin-button:hover:not(:disabled) {
+  background: rgba(150, 100, 255, 1) !important;
 }
 </style>
