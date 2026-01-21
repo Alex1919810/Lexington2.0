@@ -2,17 +2,22 @@
   <div class="visual-wifi-container">
     <VisualWifi :x="visualWifiX" :y="visualWifiY" :imagePath="visualWifiImagePath" />
     <Sidebar 
-      :illustrations="illustrations"
-      :current-index="currentIllustrationIndex"
+      :illustrations="filteredIllustrations"
+      :current-index="currentFilteredIndex"
       :is-refreshing="isLoading"
+      :current-format="currentFormat"
+      :characters="characters"
+      :current-character="currentCharacter"
       @refresh="refreshIllustrations"
       @switch="switchIllustration"
+      @toggle-format="toggleFormat"
+      @switch-character="switchCharacter"
     />
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import VisualWifi from './components/VisualWifi.vue'
 import Sidebar from './components/Sidebar.vue'
 
@@ -20,8 +25,43 @@ const visualWifiX = ref(0)
 const visualWifiY = ref(0)
 const visualWifiImagePath = ref('') // 立绘图片路径，默认为空则显示默认 CSS 动画
 const illustrations = ref([]) // 立绘列表
-const currentIllustrationIndex = ref(-1) // 当前选中的立绘索引
+const currentIllustrationIndex = ref(-1) // 当前选中的立绘索引（在所有立绘中的索引）
 const isLoading = ref(false) // 加载状态
+const currentFormat = ref('gif') // 当前选择的格式：'gif' 或 'png'
+const currentCharacter = ref('') // 当前选择的角色
+
+// 获取所有角色列表
+const characters = computed(() => {
+  const charSet = new Set()
+  illustrations.value.forEach(ill => {
+    if (ill.character) {
+      charSet.add(ill.character)
+    }
+  })
+  return Array.from(charSet).sort()
+})
+
+// 根据当前角色和格式过滤立绘列表
+const filteredIllustrations = computed(() => {
+  if (!currentCharacter.value) {
+    return []
+  }
+  return illustrations.value.filter(ill => 
+    ill.character === currentCharacter.value && ill.type === currentFormat.value
+  )
+})
+
+// 当前角色和格式立绘列表中的索引
+const currentFilteredIndex = computed(() => {
+  if (currentIllustrationIndex.value < 0) return -1
+  const currentIll = illustrations.value[currentIllustrationIndex.value]
+  if (!currentIll || 
+      currentIll.type !== currentFormat.value || 
+      currentIll.character !== currentCharacter.value) {
+    return -1
+  }
+  return filteredIllustrations.value.findIndex(ill => ill.path === currentIll.path)
+})
 
 // 加载立绘列表
 const loadIllustrations = async () => {
@@ -43,27 +83,41 @@ const loadIllustrations = async () => {
       
       // 如果有立绘
       if (illustrations.value.length > 0) {
+        // 如果没有当前角色或当前角色不存在，选择第一个角色
+        if (!currentCharacter.value || !characters.value.includes(currentCharacter.value)) {
+          if (characters.value.length > 0) {
+            currentCharacter.value = characters.value[0]
+          }
+        }
+        
         // 尝试保持当前选中的立绘（通过路径匹配）
         if (oldPath) {
           const matchingIndex = illustrations.value.findIndex(ill => ill.path === oldPath)
           if (matchingIndex >= 0) {
+            const matchedIll = illustrations.value[matchingIndex]
             currentIllustrationIndex.value = matchingIndex
-            visualWifiImagePath.value = illustrations.value[matchingIndex].path
+            visualWifiImagePath.value = matchedIll.path
+            // 更新格式和角色
+            currentFormat.value = matchedIll.type || 'gif'
+            if (matchedIll.character) {
+              currentCharacter.value = matchedIll.character
+            }
           } else {
-            // 如果找不到匹配的，选择第一个
-            switchIllustration(0)
+            // 如果找不到匹配的，选择当前角色和格式的第一个
+            selectFirstOfCurrentFormat()
           }
         } else if (currentIllustrationIndex.value === -1) {
-          // 如果之前没有选中，自动选择第一个
-          switchIllustration(0)
+          // 如果之前没有选中，自动选择当前角色和格式的第一个
+          selectFirstOfCurrentFormat()
         } else if (currentIllustrationIndex.value >= illustrations.value.length) {
-          // 如果当前索引超出范围，选择最后一个
-          switchIllustration(illustrations.value.length - 1)
+          // 如果当前索引超出范围，选择当前角色和格式的最后一个
+          selectLastOfCurrentFormat()
         }
       } else {
         // 如果没有立绘，清空当前选择
         currentIllustrationIndex.value = -1
         visualWifiImagePath.value = ''
+        currentCharacter.value = ''
       }
     } else {
       console.error('加载立绘列表失败:', result.error)
@@ -81,23 +135,130 @@ const refreshIllustrations = async () => {
   await loadIllustrations()
 }
 
-// 切换立绘
-const switchIllustration = (index) => {
-  console.log('App.vue：切换立绘，索引:', index, '立绘列表长度:', illustrations.value.length)
-  if (index >= 0 && index < illustrations.value.length) {
-    currentIllustrationIndex.value = index
-    const illustration = illustrations.value[index]
-    // 处理图片路径
-    if (illustration.path) {
-      console.log('切换立绘:', illustration.name, '路径:', illustration.path)
-      visualWifiImagePath.value = illustration.path
-    } else {
-      console.warn('立绘路径为空:', illustration)
+// 选择当前角色和格式的第一个立绘
+const selectFirstOfCurrentFormat = () => {
+  const filtered = filteredIllustrations.value
+  if (filtered.length > 0) {
+    const firstIll = filtered[0]
+    const index = illustrations.value.findIndex(ill => ill.path === firstIll.path)
+    if (index >= 0) {
+      currentIllustrationIndex.value = index
+      visualWifiImagePath.value = firstIll.path
     }
   } else {
-    console.warn('索引超出范围:', index, '立绘列表长度:', illustrations.value.length)
+    // 如果当前格式没有立绘，尝试切换到另一个格式
+    if (currentCharacter.value) {
+      const otherFormat = currentFormat.value === 'gif' ? 'png' : 'gif'
+      const otherFormatIlls = illustrations.value.filter(ill => 
+        ill.character === currentCharacter.value && ill.type === otherFormat
+      )
+      if (otherFormatIlls.length > 0) {
+        currentFormat.value = otherFormat
+        const firstIll = otherFormatIlls[0]
+        const index = illustrations.value.findIndex(ill => ill.path === firstIll.path)
+        if (index >= 0) {
+          currentIllustrationIndex.value = index
+          visualWifiImagePath.value = firstIll.path
+          return
+        }
+      }
+    }
+    currentIllustrationIndex.value = -1
+    visualWifiImagePath.value = ''
   }
 }
+
+// 选择当前角色和格式的最后一个立绘
+const selectLastOfCurrentFormat = () => {
+  const filtered = filteredIllustrations.value
+  if (filtered.length > 0) {
+    const lastIll = filtered[filtered.length - 1]
+    const index = illustrations.value.findIndex(ill => ill.path === lastIll.path)
+    if (index >= 0) {
+      currentIllustrationIndex.value = index
+      visualWifiImagePath.value = lastIll.path
+    }
+  } else {
+    currentIllustrationIndex.value = -1
+    visualWifiImagePath.value = ''
+  }
+}
+
+// 切换立绘（在同格式的立绘中切换）
+const switchIllustration = (filteredIndex) => {
+  const filtered = filteredIllustrations.value
+  console.log('App.vue：切换立绘，过滤后索引:', filteredIndex, '过滤后列表长度:', filtered.length)
+  if (filteredIndex >= 0 && filteredIndex < filtered.length) {
+    const illustration = filtered[filteredIndex]
+    // 找到该立绘在所有立绘中的索引
+    const fullIndex = illustrations.value.findIndex(ill => ill.path === illustration.path)
+    if (fullIndex >= 0) {
+      currentIllustrationIndex.value = fullIndex
+      // 处理图片路径
+      if (illustration.path) {
+        console.log('切换立绘:', illustration.name, '路径:', illustration.path, '格式:', illustration.type)
+        visualWifiImagePath.value = illustration.path
+      } else {
+        console.warn('立绘路径为空:', illustration)
+      }
+    } else {
+      console.warn('找不到立绘:', illustration)
+    }
+  } else {
+    console.warn('过滤后索引超出范围:', filteredIndex, '过滤后列表长度:', filtered.length)
+  }
+}
+
+// 切换格式（gif <-> png），只在当前角色内切换
+const toggleFormat = () => {
+  const newFormat = currentFormat.value === 'gif' ? 'png' : 'gif'
+  console.log('App.vue：切换格式，从', currentFormat.value, '到', newFormat, '角色:', currentCharacter.value)
+  currentFormat.value = newFormat
+  
+  // 切换到当前角色新格式的第一个立绘
+  selectFirstOfCurrentFormat()
+}
+
+// 切换角色
+const switchCharacter = () => {
+  if (characters.value.length === 0) {
+    console.warn('没有可用的角色')
+    return
+  }
+  
+  const currentIndex = characters.value.indexOf(currentCharacter.value)
+  let nextIndex = currentIndex + 1
+  if (nextIndex >= characters.value.length) {
+    nextIndex = 0
+  }
+  
+  const newCharacter = characters.value[nextIndex]
+  console.log('App.vue：切换角色，从', currentCharacter.value, '到', newCharacter)
+  currentCharacter.value = newCharacter
+  
+  // 切换到新角色的第一个立绘（当前格式）
+  selectFirstOfCurrentFormat()
+}
+
+// 监听格式变化，如果当前立绘不是新格式，自动切换
+watch(currentFormat, (newFormat) => {
+  if (currentIllustrationIndex.value >= 0) {
+    const currentIll = illustrations.value[currentIllustrationIndex.value]
+    if (currentIll && (currentIll.type !== newFormat || currentIll.character !== currentCharacter.value)) {
+      selectFirstOfCurrentFormat()
+    }
+  }
+})
+
+// 监听角色变化，如果当前立绘不是新角色，自动切换
+watch(currentCharacter, (newCharacter) => {
+  if (currentIllustrationIndex.value >= 0) {
+    const currentIll = illustrations.value[currentIllustrationIndex.value]
+    if (currentIll && currentIll.character !== newCharacter) {
+      selectFirstOfCurrentFormat()
+    }
+  }
+})
 
 onMounted(() => {
   // 初始化位置

@@ -27,6 +27,31 @@
     >
       <span class="button-icon">▶</span>
     </button>
+    
+    <!-- 格式切换按钮 -->
+    <button 
+      class="sidebar-button format-button" 
+      @click.stop.prevent="handleToggleFormat"
+      @mousedown.stop.prevent
+      @mouseup.stop.prevent
+      type="button"
+      :title="currentFormat === 'gif' ? '切换到 PNG 格式' : '切换到 GIF 格式'"
+    >
+      <span class="button-icon">{{ currentFormat === 'gif' ? 'G' : 'P' }}</span>
+    </button>
+    
+    <!-- 角色切换按钮 -->
+    <button 
+      class="sidebar-button character-button" 
+      @click.stop.prevent="handleSwitchCharacter"
+      @mousedown.stop.prevent
+      @mouseup.stop.prevent
+      type="button"
+      :disabled="characters.length === 0"
+      :title="characters.length === 0 ? '暂无角色' : `切换角色 (当前: ${currentCharacter || '无'})`"
+    >
+      <span class="button-icon">👤</span>
+    </button>
   </div>
 </template>
 
@@ -43,10 +68,23 @@ const props = defineProps({
   isRefreshing: {
     type: Boolean,
     default: false
+  },
+  currentFormat: {
+    type: String,
+    default: 'gif',
+    validator: (value) => ['gif', 'png'].includes(value)
+  },
+  characters: {
+    type: Array,
+    default: () => []
+  },
+  currentCharacter: {
+    type: String,
+    default: ''
   }
 })
 
-const emit = defineEmits(['refresh', 'switch'])
+const emit = defineEmits(['refresh', 'switch', 'toggleFormat', 'switchCharacter'])
 
 const handleRefresh = (event) => {
   if (event) {
@@ -72,14 +110,38 @@ const handleSwitch = (event) => {
     console.warn('侧边栏：没有立绘可以切换')
     return
   }
-  // 切换到下一个立绘，循环切换
+  // 切换到下一个立绘（同格式），循环切换
   let nextIndex = props.currentIndex + 1
   // 如果当前索引为-1（未选择）或超出范围，切换到第一个
   if (props.currentIndex < 0 || nextIndex >= props.illustrations.length) {
     nextIndex = 0
   }
-  console.log('侧边栏：切换到下一个立绘，当前索引:', props.currentIndex, '下一个索引:', nextIndex, '立绘名称:', props.illustrations[nextIndex]?.name)
+  console.log('侧边栏：切换到下一个立绘，当前索引:', props.currentIndex, '下一个索引:', nextIndex, '立绘名称:', props.illustrations[nextIndex]?.name, '格式:', props.illustrations[nextIndex]?.type)
   emit('switch', nextIndex)
+}
+
+const handleToggleFormat = (event) => {
+  if (event) {
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+  }
+  console.log('侧边栏：切换格式按钮被点击，当前格式:', props.currentFormat)
+  emit('toggleFormat')
+}
+
+const handleSwitchCharacter = (event) => {
+  if (event) {
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+  }
+  if (props.characters.length === 0) {
+    console.warn('侧边栏：没有角色可以切换')
+    return
+  }
+  console.log('侧边栏：切换角色按钮被点击，当前角色:', props.currentCharacter)
+  emit('switchCharacter')
 }
 </script>
 
@@ -155,24 +217,6 @@ const handleSwitch = (event) => {
   opacity: 0.5;
   cursor: not-allowed;
   transform: none;
-}
-
-.refresh-button {
-  background: rgba(100, 200, 100, 0.8);
-}
-
-.refresh-button:hover:not(:disabled) {
-  background: rgba(100, 200, 100, 1);
-  box-shadow: 0 4px 12px rgba(100, 200, 100, 0.4);
-}
-
-.switch-button {
-  background: rgba(255, 150, 100, 0.8);
-}
-
-.switch-button:hover:not(:disabled) {
-  background: rgba(255, 150, 100, 1);
-  box-shadow: 0 4px 12px rgba(255, 150, 100, 0.4);
 }
 
 .button-icon {

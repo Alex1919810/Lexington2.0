@@ -102,48 +102,66 @@ ipcMain.handle('scan-illustrations', async () => {
     const appPath = isDev ? process.cwd() : path.join(__dirname, '..')
     const illustrationBasePath = path.join(appPath, 'illustration')
     
-    // 扫描gif目录
-    const gifPath = path.join(illustrationBasePath, 'gif')
-    if (fs.existsSync(gifPath)) {
-      const gifFiles = fs.readdirSync(gifPath)
-      gifFiles.forEach(file => {
-        if (file.toLowerCase().endsWith('.gif')) {
-          const fullPath = path.join(gifPath, file)
-          // Windows格式: file:///D:/path/to/file
-          const normalizedPath = fullPath.replace(/\\/g, '/')
-          // 确保Windows路径格式正确：file:///D:/...
-          const fileUrl = `file:///${normalizedPath}`
-          illustrations.push({
-            name: file,
-            path: fileUrl,
-            type: 'gif',
-            fullPath: fullPath
-          })
-        }
-      })
+    // 检查illustration目录是否存在
+    if (!fs.existsSync(illustrationBasePath)) {
+      console.warn('illustration目录不存在:', illustrationBasePath)
+      return { success: true, illustrations: [] }
     }
     
-    // 扫描png目录
-    const pngPath = path.join(illustrationBasePath, 'png')
-    if (fs.existsSync(pngPath)) {
-      const pngFiles = fs.readdirSync(pngPath)
-      pngFiles.forEach(file => {
-        if (file.toLowerCase().endsWith('.png')) {
-          const fullPath = path.join(pngPath, file)
-          // Windows格式: file:///D:/path/to/file
-          const normalizedPath = fullPath.replace(/\\/g, '/')
-          // 确保Windows路径格式正确：file:///D:/...
-          const fileUrl = `file:///${normalizedPath}`
-          illustrations.push({
-            name: file,
-            path: fileUrl,
-            type: 'png',
-            fullPath: fullPath
-          })
-        }
-      })
-    }
+    // 遍历illustration下的所有子文件夹
+    const characterFolders = fs.readdirSync(illustrationBasePath, { withFileTypes: true })
     
+    characterFolders.forEach(characterDir => {
+      // 只处理文件夹，跳过文件
+      if (!characterDir.isDirectory()) {
+        return
+      }
+      
+      const characterName = characterDir.name
+      const characterPath = path.join(illustrationBasePath, characterName)
+      
+      // 扫描该角色文件夹下的gif子文件夹
+      const gifPath = path.join(characterPath, 'gif')
+      if (fs.existsSync(gifPath) && fs.statSync(gifPath).isDirectory()) {
+        const gifFiles = fs.readdirSync(gifPath)
+        gifFiles.forEach(file => {
+          if (file.toLowerCase().endsWith('.gif')) {
+            const fullPath = path.join(gifPath, file)
+            const normalizedPath = fullPath.replace(/\\/g, '/')
+            const fileUrl = `file:///${normalizedPath}`
+            illustrations.push({
+              name: `${characterName}/${file}`,
+              path: fileUrl,
+              type: 'gif',
+              fullPath: fullPath,
+              character: characterName
+            })
+          }
+        })
+      }
+      
+      // 扫描该角色文件夹下的png子文件夹
+      const pngPath = path.join(characterPath, 'png')
+      if (fs.existsSync(pngPath) && fs.statSync(pngPath).isDirectory()) {
+        const pngFiles = fs.readdirSync(pngPath)
+        pngFiles.forEach(file => {
+          if (file.toLowerCase().endsWith('.png')) {
+            const fullPath = path.join(pngPath, file)
+            const normalizedPath = fullPath.replace(/\\/g, '/')
+            const fileUrl = `file:///${normalizedPath}`
+            illustrations.push({
+              name: `${characterName}/${file}`,
+              path: fileUrl,
+              type: 'png',
+              fullPath: fullPath,
+              character: characterName
+            })
+          }
+        })
+      }
+    })
+    
+    console.log(`扫描完成，共找到 ${illustrations.length} 个立绘文件`)
     return { success: true, illustrations }
   } catch (error) {
     console.error('扫描立绘文件失败:', error)
