@@ -46,18 +46,10 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import DialogBubble from './DialogBubble.vue'
 
 const props = defineProps({
-  x: {
-    type: Number,
-    default: 0
-  },
-  y: {
-    type: Number,
-    default: 0
-  },
   imagePath: {
     type: String,
     default: ''
@@ -71,7 +63,6 @@ const props = defineProps({
 const imageError = ref(false)
 const imageRef = ref(null)
 const imageHeight = ref(0)
-const imageWidth = ref(0)
 const imageCenterX = ref(0)
 const imageCenterY = ref(0)
 
@@ -84,14 +75,11 @@ const isDialogVisible = ref(false)
 const dialogBubbleRef = ref(null)
 const dragCircleRef = ref(null) // 拖动区域元素引用
 const isProcessingDragClick = ref(false) // 标记是否正在处理拖动区域的点击
-const clickStartTime = ref(0)
-const clickTimeout = ref(null) // 点击检测的延迟定时器
 const hasMoved = ref(false) // 标记是否移动了
 const isDragging = ref(false) // 标记是否正在拖拽
 
 // 窗口位置信息（初始化时获取）
 const windowPosition = ref({ x: 0, y: 0 })
-const windowSize = ref({ width: 0, height: 0 })
 // 拖拽开始时记录的偏移量（指针相对于窗口左上角的偏移）
 const dragOffset = ref({ x: 0, y: 0 })
 
@@ -141,12 +129,10 @@ const updateImageInfo = () => {
     if (visualWifiElement) {
       const visualWifiRect = visualWifiElement.getBoundingClientRect()
       // visual-wifi-body 的尺寸是 120px x 120px
-      imageWidth.value = 120
       imageHeight.value = 120
       imageCenterX.value = visualWifiRect.width / 2
       imageCenterY.value = visualWifiRect.height / 2
       console.log('使用默认宠物尺寸:', {
-        width: imageWidth.value,
         height: imageHeight.value,
         centerX: imageCenterX.value,
         centerY: imageCenterY.value,
@@ -161,7 +147,6 @@ const updateImageInfo = () => {
   
   if (visualWifiRect) {
     // 获取图片的实际显示尺寸
-    imageWidth.value = rect.width
     imageHeight.value = rect.height
     
     // 计算图片中心相对于 .visual-wifi 容器的位置
@@ -170,7 +155,6 @@ const updateImageInfo = () => {
     imageCenterY.value = rect.top - visualWifiRect.top + rect.height / 2
     
     console.log('图片信息更新:', {
-      width: imageWidth.value,
       height: imageHeight.value,
       centerX: imageCenterX.value,
       centerY: imageCenterY.value,
@@ -224,13 +208,8 @@ const handleDragCirclePointerDown = (event) => {
   
   // 记录点击开始时间
   const startTime = Date.now()
-  clickStartTime.value = startTime
   hasMoved.value = false
   isDragging.value = false
-  
-  // 获取窗口当前的位置和大小（在组件挂载时已获取）
-  const windowX = windowPosition.value.x
-  const windowY = windowPosition.value.y
   
   // 计算指针在屏幕上的绝对坐标
   // screenX/screenY 是相对于整个屏幕的坐标
@@ -243,8 +222,6 @@ const handleDragCirclePointerDown = (event) => {
     x: event.clientX,
     y: event.clientY
   }
-  
-  console.log('pointerdown:', { screenX, screenY, offset: dragOffset.value, windowPos: { x: windowX, y: windowY } })
   
   // 处理指针移动事件
   const handlePointerMove = (e) => {
@@ -309,7 +286,6 @@ const handleDragCirclePointerDown = (event) => {
     }
     
     // 重置状态
-    clickStartTime.value = 0
     hasMoved.value = false
     isDragging.value = false
     dragOffset.value = { x: 0, y: 0 }
@@ -333,7 +309,6 @@ const handleDragCirclePointerDown = (event) => {
     element.removeEventListener('pointercancel', handlePointerCancel)
     
     // 重置状态
-    clickStartTime.value = 0
     hasMoved.value = false
     isDragging.value = false
     dragOffset.value = { x: 0, y: 0 }
@@ -397,7 +372,7 @@ watch(() => props.imagePath, (newPath) => {
 })
 
 // 监听图片尺寸变化
-watch([imageHeight, imageWidth], () => {
+watch(imageHeight, () => {
   if (imageHeight.value > 0) {
     updateImageInfo()
   }
@@ -410,8 +385,7 @@ const initializeWindowBounds = async () => {
       const result = await window.electronAPI.getWindowBounds()
       if (result.success) {
         windowPosition.value = { x: result.x, y: result.y }
-        windowSize.value = { width: result.width, height: result.height }
-        console.log('窗口位置信息已初始化:', { position: windowPosition.value, size: windowSize.value })
+        console.log('窗口位置信息已初始化:', { position: windowPosition.value })
       }
     } catch (error) {
       console.error('获取窗口位置信息失败:', error)
@@ -436,10 +410,6 @@ onUnmounted(() => {
     cancelAnimationFrame(animationFrame.value)
   }
   window.removeEventListener('resize', updateImageInfo)
-  // 清理点击检测定时器
-  if (clickTimeout.value) {
-    clearTimeout(clickTimeout.value)
-  }
 })
 
 </script>
