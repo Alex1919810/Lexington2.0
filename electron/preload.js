@@ -9,8 +9,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 获取屏幕信息
   getScreenSize: () => ipcRenderer.invoke('get-screen-size'),
   
-  // 窗口拖拽
-  startDrag: () => ipcRenderer.invoke('start-drag'),
+  // 获取窗口位置和大小（用于初始化）
+  getWindowBounds: () => ipcRenderer.invoke('get-window-bounds'),
+  
+  // 窗口拖拽（基于屏幕绝对坐标，直接设置窗口位置）
+  setWindowPosition: (absolutePosition) => ipcRenderer.invoke('set-window-position', absolutePosition),
   
   // 右键菜单
   showContextMenu: () => ipcRenderer.invoke('show-context-menu'),

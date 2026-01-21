@@ -2,6 +2,7 @@
   <div 
     class="sidebar"
     :class="{ 'always-visible': isAlwaysVisible, 'hover-only': !isAlwaysVisible }"
+    :style="sidebarStyle"
   >
     <!-- 固定显示切换按钮 -->
     <button 
@@ -69,7 +70,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed, onUnmounted } from 'vue'
 
 const props = defineProps({
   illustrations: {
@@ -104,6 +105,74 @@ const emit = defineEmits(['refresh', 'switch', 'toggleFormat', 'switchCharacter'
 // 侧边栏固定显示状态（默认开启，一直可见）
 const isAlwaysVisible = ref(true)
 
+// 窗口尺寸（用于响应式更新）
+const windowSize = ref({ width: 0, height: 0 })
+
+// 更新窗口尺寸
+const updateWindowSize = () => {
+  windowSize.value = {
+    width: window.innerWidth,
+    height: window.innerHeight
+  }
+}
+
+// 侧边栏样式计算（包含坐标校验）
+const sidebarStyle = computed(() => {
+  // 立绘宽度450px，居中显示
+  // 按钮宽度50px（包括padding）
+  // 按钮需要在立绘正左方40px
+  // 按钮右边缘 = 立绘左边缘 - 40px = (50% - 225px) - 40px = 50% - 265px
+  // 按钮左边缘 = 按钮右边缘 - 按钮宽度 = (50% - 265px) - 50px = 50% - 315px
+  const baseLeft = 'calc(50% - 315px)'
+  
+  // 获取窗口尺寸
+  const windowWidth = windowSize.value.width || window.innerWidth
+  const windowHeight = windowSize.value.height || window.innerHeight
+  
+  // 如果窗口尺寸还未初始化，使用默认calc值
+  if (windowWidth === 0) {
+    return {
+      left: baseLeft,
+      top: '50%',
+      transform: 'translateY(-50%)'
+    }
+  }
+  
+  // 侧边栏宽度（包括padding）
+  const sidebarWidth = 50
+  
+  // 计算侧边栏左边缘位置（相对于窗口）
+  // calc(50% - 315px) 在窗口宽度的一半减去315px
+  const calculatedLeft = windowWidth / 2 - 315
+  
+  // 校验：确保侧边栏不超出左边界
+  let finalLeft = calculatedLeft
+  if (calculatedLeft < 0) {
+    // 如果超出左边界，调整到距离左边缘10px的位置
+    finalLeft = 10
+  }
+  
+  // 校验：确保侧边栏不超出右边界（虽然不太可能，但也要检查）
+  if (calculatedLeft + sidebarWidth > windowWidth) {
+    finalLeft = windowWidth - sidebarWidth - 10
+  }
+  
+  // 如果位置需要调整，使用固定像素值；否则使用calc
+  if (Math.abs(finalLeft - calculatedLeft) > 1) {
+    return {
+      left: `${finalLeft}px`,
+      top: '50%',
+      transform: 'translateY(-50%)'
+    }
+  }
+  
+  return {
+    left: baseLeft,
+    top: '50%',
+    transform: 'translateY(-50%)'
+  }
+})
+
 // 从 localStorage 加载设置
 const loadSettings = () => {
   try {
@@ -137,9 +206,20 @@ const handleTogglePin = (event) => {
   console.log('侧边栏：切换固定显示状态，当前状态:', isAlwaysVisible.value ? '一直可见' : '鼠标经过才显示')
 }
 
+// 窗口大小变化时重新计算位置
+const handleResize = () => {
+  updateWindowSize()
+}
+
 // 组件挂载时加载设置
 onMounted(() => {
   loadSettings()
+  updateWindowSize() // 初始化窗口尺寸
+  window.addEventListener('resize', handleResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
 })
 
 const handleRefresh = (event) => {
@@ -212,10 +292,8 @@ const handleSwitchCharacter = (event) => {
    * - 按钮右边缘 = 立绘左边缘 - 40px = (50% - 225px) - 40px = 50% - 265px
    * - 按钮左边缘 = 按钮右边缘 - 按钮宽度 = (50% - 265px) - 50px = 50% - 315px
    * 注意：按钮 z-index 设置为 10000，位于立绘（z-index: 1）上方，即使重叠也能正常点击
+   * 注意：实际位置通过 sidebarStyle computed 属性动态计算，包含边界校验
    */
-  left: calc(50% - 225px);
-  top: 50%;
-  transform: translateY(-50%);
   width: 50px;
   z-index: 10000;
   display: flex;

@@ -23,17 +23,31 @@
         <div class="visual-wifi-mouth"></div>
       </div>
     </div>
-    <!-- 圆形拖动区域遮罩层 -->
+    <!-- 圆形拖动区域（使用自定义拖拽逻辑） -->
     <div 
+      ref="dragCircleRef"
       class="drag-circle"
       :style="circleStyle"
+      @pointerdown="handleDragCirclePointerDown"
     ></div>
     <div class="visual-wifi-shadow"></div>
+    <!-- 对话框 -->
+    <div 
+      v-if="isDialogVisible && dialogText"
+      ref="dialogRef"
+      class="dialog-bubble"
+      :style="dialogStyle"
+    >
+      <div class="dialog-content">
+        {{ displayedText }}
+      </div>
+      <div class="dialog-tail"></div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 
 const props = defineProps({
   x: {
@@ -45,6 +59,10 @@ const props = defineProps({
     default: 0
   },
   imagePath: {
+    type: String,
+    default: ''
+  },
+  dialogText: {
     type: String,
     default: ''
   }
@@ -60,6 +78,25 @@ const imageCenterY = ref(0)
 const animationFrame = ref(null)
 const bounceOffset = ref(0)
 const isHovered = ref(false)
+
+// 对话框相关状态
+const isDialogVisible = ref(false)
+const displayedText = ref('')
+const isTyping = ref(false)
+const typingTimer = ref(null)
+const dialogRef = ref(null)
+const dragCircleRef = ref(null) // 拖动区域元素引用
+const isProcessingDragClick = ref(false) // 标记是否正在处理拖动区域的点击
+const clickStartTime = ref(0)
+const clickTimeout = ref(null) // 点击检测的延迟定时器
+const hasMoved = ref(false) // 标记是否移动了
+const isDragging = ref(false) // 标记是否正在拖拽
+
+// 窗口位置信息（初始化时获取）
+const windowPosition = ref({ x: 0, y: 0 })
+const windowSize = ref({ width: 0, height: 0 })
+// 拖拽开始时记录的偏移量（指针相对于窗口左上角的偏移）
+const dragOffset = ref({ x: 0, y: 0 })
 
 // 计算 transform 样式
 const transformStyle = computed(() => {
@@ -175,6 +212,261 @@ const circleStyle = computed(() => {
   }
 })
 
+
+// 处理拖动区域的指针按下事件（使用 Pointer Events 和 setPointerCapture）
+const handleDragCirclePointerDown = (event) => {
+  // 阻止默认行为
+  event.preventDefault()
+  
+  // 获取拖动区域元素
+  const element = dragCircleRef.value
+  if (!element) return
+  
+  // 捕获指针事件，确保在拖拽期间持续接收事件，即使光标已离开窗口区域
+  element.setPointerCapture(event.pointerId)
+  
+  // 记录点击开始时间
+  const startTime = Date.now()
+  clickStartTime.value = startTime
+  hasMoved.value = false
+  isDragging.value = false
+  
+  // 获取窗口当前的位置和大小（在组件挂载时已获取）
+  const windowX = windowPosition.value.x
+  const windowY = windowPosition.value.y
+  
+  // 计算指针在屏幕上的绝对坐标
+  // screenX/screenY 是相对于整个屏幕的坐标
+  const screenX = event.screenX
+  const screenY = event.screenY
+  
+  // 计算指针相对于窗口左上角的偏移量
+  // clientX/clientY 是相对于窗口的坐标
+  dragOffset.value = {
+    x: event.clientX,
+    y: event.clientY
+  }
+  
+  console.log('pointerdown:', { screenX, screenY, offset: dragOffset.value, windowPos: { x: windowX, y: windowY } })
+  
+  // 处理指针移动事件
+  const handlePointerMove = (e) => {
+    // 使用屏幕坐标计算移动距离（因为指针可能已移出窗口）
+    const startScreenX = screenX
+    const startScreenY = screenY
+    const currentScreenX = e.screenX
+    const currentScreenY = e.screenY
+    const distance = Math.sqrt(
+      Math.pow(currentScreenX - startScreenX, 2) + 
+      Math.pow(currentScreenY - startScreenY, 2)
+    )
+    
+    // 如果移动距离大于5px，认为是拖拽
+    if (distance > 5) {
+      if (!isDragging.value) {
+        // 第一次检测到拖拽，开始拖拽
+        hasMoved.value = true
+        isDragging.value = true
+        console.log('检测到拖拽，开始窗口拖拽')
+      }
+      
+      // 基于屏幕绝对坐标，直接计算出"此刻窗口应该在的位置"
+      // 窗口位置 = 屏幕绝对坐标 - 相对偏移量
+      const newWindowX = e.screenX - dragOffset.value.x
+      const newWindowY = e.screenY - dragOffset.value.y
+      
+      // 更新窗口位置信息
+      windowPosition.value = { x: newWindowX, y: newWindowY }
+      
+      // 一次性发给主进程，直接设置窗口位置
+      if (window.electronAPI && window.electronAPI.setWindowPosition) {
+        window.electronAPI.setWindowPosition({ x: newWindowX, y: newWindowY })
+      }
+    }
+  }
+  
+  // 处理指针抬起事件
+  const handlePointerUp = (e) => {
+    // 释放指针捕获
+    if (element) {
+      element.releasePointerCapture(e.pointerId)
+    }
+    
+    // 计算移动距离和时间差（使用屏幕坐标）
+    const startScreenX = screenX
+    const startScreenY = screenY
+    const distance = Math.sqrt(
+      Math.pow(e.screenX - startScreenX, 2) + 
+      Math.pow(e.screenY - startScreenY, 2)
+    )
+    const timeDiff = Date.now() - startTime
+    
+    console.log('pointerup:', { distance, timeDiff, hasMoved: hasMoved.value, isDragging: isDragging.value })
+    
+    // 如果移动距离小于5px且时间小于300ms，认为是点击而不是拖拽
+    if (distance < 5 && timeDiff < 300 && !hasMoved.value) {
+      console.log('检测到点击，显示对话框')
+      setTimeout(() => {
+        handleDialogClick()
+      }, 50)
+    }
+    
+    // 重置状态
+    clickStartTime.value = 0
+    hasMoved.value = false
+    isDragging.value = false
+    dragOffset.value = { x: 0, y: 0 }
+    
+    // 移除事件监听器
+    element.removeEventListener('pointermove', handlePointerMove)
+    element.removeEventListener('pointerup', handlePointerUp)
+  }
+  
+  // 添加事件监听器
+  element.addEventListener('pointermove', handlePointerMove)
+  element.addEventListener('pointerup', handlePointerUp, { once: true })
+  
+  // 处理指针取消事件（例如指针被系统取消）
+  const handlePointerCancel = (e) => {
+    if (element) {
+      element.releasePointerCapture(e.pointerId)
+    }
+    element.removeEventListener('pointermove', handlePointerMove)
+    element.removeEventListener('pointerup', handlePointerUp)
+    element.removeEventListener('pointercancel', handlePointerCancel)
+    
+    // 重置状态
+    clickStartTime.value = 0
+    hasMoved.value = false
+    isDragging.value = false
+    dragOffset.value = { x: 0, y: 0 }
+  }
+  
+  element.addEventListener('pointercancel', handlePointerCancel, { once: true })
+}
+
+// 处理对话框点击逻辑
+const handleDialogClick = () => {
+  isProcessingDragClick.value = true
+  
+  // 如果有对话框文本
+  if (props.dialogText) {
+    if (isTyping.value) {
+      // 如果正在打字，跳过动画
+      skipTyping()
+    } else if (!isDialogVisible.value) {
+      // 如果对话框未显示，显示并开始打字机效果
+      showDialog()
+    }
+  } else {
+    console.log('对话框文本为空，无法显示对话框')
+  }
+  
+  // 延迟重置标志，确保 handleClickOutside 能正确判断
+  setTimeout(() => {
+    isProcessingDragClick.value = false
+  }, 100)
+}
+
+// 显示对话框
+const showDialog = () => {
+  isDialogVisible.value = true
+  displayedText.value = ''
+  startTyping()
+  // 添加点击外部关闭的事件监听
+  setTimeout(() => {
+    document.addEventListener('click', handleClickOutside)
+  }, 0)
+}
+
+// 开始打字机效果
+const startTyping = () => {
+  if (!props.dialogText) return
+  
+  isTyping.value = true
+  displayedText.value = ''
+  let currentIndex = 0
+  
+  const typeChar = () => {
+    if (currentIndex < props.dialogText.length && isTyping.value) {
+      displayedText.value = props.dialogText.substring(0, currentIndex + 1)
+      currentIndex++
+      typingTimer.value = setTimeout(typeChar, 50) // 50ms 一个字符
+    } else {
+      isTyping.value = false
+    }
+  }
+  
+  typeChar()
+}
+
+// 跳过打字机效果
+const skipTyping = () => {
+  if (typingTimer.value) {
+    clearTimeout(typingTimer.value)
+    typingTimer.value = null
+  }
+  isTyping.value = false
+  displayedText.value = props.dialogText
+}
+
+// 关闭对话框
+const closeDialog = () => {
+  isDialogVisible.value = false
+  displayedText.value = ''
+  isTyping.value = false
+  if (typingTimer.value) {
+    clearTimeout(typingTimer.value)
+    typingTimer.value = null
+  }
+  // 移除点击外部关闭的事件监听
+  document.removeEventListener('click', handleClickOutside)
+}
+
+// 处理点击外部事件
+const handleClickOutside = (event) => {
+  // 如果正在处理拖动区域的点击，不关闭对话框
+  if (isProcessingDragClick.value) {
+    return
+  }
+  
+  if (dialogRef.value && !dialogRef.value.contains(event.target)) {
+    // 检查点击是否在拖动区域内
+    const dragCircle = document.querySelector('.drag-circle')
+    if (dragCircle && !dragCircle.contains(event.target)) {
+      closeDialog()
+    }
+  }
+}
+
+// 计算对话框样式
+const dialogStyle = computed(() => {
+  // 获取图片的右下角位置
+  const height = imageHeight.value > 0 ? imageHeight.value : 120
+  const width = imageWidth.value > 0 ? imageWidth.value : 120
+  const centerX = imageCenterX.value > 0 ? imageCenterX.value : 225
+  const centerY = imageCenterY.value > 0 ? imageCenterY.value : 225
+  
+  // 计算图片右下角相对于容器的位置
+  // 图片左上是 (centerX - width/2, centerY - height/2)
+  // 右下角是 (centerX + width/2, centerY + height/2)
+  const rightX = centerX + width / 2
+  const bottomY = centerY + height / 2
+  
+  return {
+    left: `${rightX}px`,
+    top: `${bottomY + 10}px`,
+    transform: 'translate(-100%, 0)'
+  }
+})
+
+// 监听对话框文本变化，重置对话框状态
+watch(() => props.dialogText, (newText) => {
+  if (!newText) {
+    closeDialog()
+  }
+})
+
 // 监听图片路径变化，重置错误状态
 watch(() => props.imagePath, (newPath) => {
   if (newPath) {
@@ -192,8 +484,26 @@ watch([imageHeight, imageWidth], () => {
   }
 })
 
+// 初始化窗口位置信息
+const initializeWindowBounds = async () => {
+  if (window.electronAPI && window.electronAPI.getWindowBounds) {
+    try {
+      const result = await window.electronAPI.getWindowBounds()
+      if (result.success) {
+        windowPosition.value = { x: result.x, y: result.y }
+        windowSize.value = { width: result.width, height: result.height }
+        console.log('窗口位置信息已初始化:', { position: windowPosition.value, size: windowSize.value })
+      }
+    } catch (error) {
+      console.error('获取窗口位置信息失败:', error)
+    }
+  }
+}
+
 onMounted(() => {
   animate()
+  // 初始化窗口位置信息
+  initializeWindowBounds()
   // 初始化时更新图片信息
   setTimeout(() => {
     updateImageInfo()
@@ -207,6 +517,16 @@ onUnmounted(() => {
     cancelAnimationFrame(animationFrame.value)
   }
   window.removeEventListener('resize', updateImageInfo)
+  // 清理打字机定时器
+  if (typingTimer.value) {
+    clearTimeout(typingTimer.value)
+  }
+  // 清理点击检测定时器
+  if (clickTimeout.value) {
+    clearTimeout(clickTimeout.value)
+  }
+  // 移除点击外部关闭的事件监听
+  document.removeEventListener('click', handleClickOutside)
 })
 
 </script>
@@ -323,12 +643,14 @@ onUnmounted(() => {
   animation: shadow 2s ease-in-out infinite;
 }
 
-/* 圆形拖动区域 */
+/* 圆形拖动区域（使用自定义拖拽逻辑） */
 .drag-circle {
   position: absolute;
-  -webkit-app-region: drag;
+  -webkit-app-region: no-drag;
   pointer-events: auto;
   z-index: 2;
+  cursor: move;
+  touch-action: none; /* 禁用触摸默认行为，支持 Pointer Events */
   /* 可选：用于调试，显示圆形区域 */
   /* background: rgba(255, 0, 0, 0.1); */
   /* border: 1px dashed rgba(255, 0, 0, 0.3); */
@@ -343,5 +665,62 @@ onUnmounted(() => {
     width: 100px;
     opacity: 0.2;
   }
+}
+
+/* 对话框气泡样式 */
+.dialog-bubble {
+  position: absolute;
+  z-index: 100;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  max-width: 200px;
+  min-width: 100px;
+  width: fit-content;
+}
+
+.dialog-content {
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #333;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+  word-wrap: break-word;
+  word-break: break-word;
+  white-space: pre-wrap;
+  min-height: 40px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.dialog-tail {
+  position: absolute;
+  top: -8px;
+  left: 20px;
+  width: 0;
+  height: 0;
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  border-bottom: 8px solid rgba(255, 255, 255, 0.95);
+  filter: drop-shadow(0 -2px 2px rgba(0, 0, 0, 0.1));
+}
+
+/* 对话框滚动条样式 */
+.dialog-content::-webkit-scrollbar {
+  width: 4px;
+}
+
+.dialog-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.dialog-content::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 2px;
+}
+
+.dialog-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
 }
 </style>

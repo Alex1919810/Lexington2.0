@@ -1,6 +1,11 @@
 <template>
   <div class="visual-wifi-container">
-    <VisualWifi :x="visualWifiX" :y="visualWifiY" :imagePath="visualWifiImagePath" />
+    <VisualWifi 
+      :x="visualWifiX" 
+      :y="visualWifiY" 
+      :imagePath="visualWifiImagePath"
+      :dialogText="dialogText"
+    />
     <Sidebar 
       :illustrations="filteredIllustrations"
       :current-index="currentFilteredIndex"
@@ -29,6 +34,7 @@ const currentIllustrationIndex = ref(-1) // 当前选中的立绘索引（在所
 const isLoading = ref(false) // 加载状态
 const currentFormat = ref('gif') // 当前选择的格式：'gif' 或 'png'
 const currentCharacter = ref('') // 当前选择的角色
+const dialogText = ref('你好！这是一段测试对话文字。点击拖动区域可以看到对话框显示效果。') // 对话框文本，默认为空（可以设置为空字符串来隐藏对话框）
 
 // 获取所有角色列表
 const characters = computed(() => {
