@@ -357,9 +357,16 @@ const handleDialogClick = () => {
     } else if (!isDialogVisible.value) {
       // 如果对话框未显示，显示并开始打字机效果
       showDialog()
+    } else {
+      // 如果对话框已显示，关闭对话框
+      closeDialog()
     }
   } else {
     console.log('对话框文本为空，无法显示对话框')
+    // 即使没有对话框文本，如果对话框已显示，也应该关闭
+    if (isDialogVisible.value) {
+      closeDialog()
+    }
   }
   
   // 延迟重置标志，确保 handleClickOutside 能正确判断
@@ -441,22 +448,18 @@ const handleClickOutside = (event) => {
 
 // 计算对话框样式
 const dialogStyle = computed(() => {
-  // 获取图片的右下角位置
-  const height = imageHeight.value > 0 ? imageHeight.value : 120
-  const width = imageWidth.value > 0 ? imageWidth.value : 120
+  // 获取立绘中心位置
   const centerX = imageCenterX.value > 0 ? imageCenterX.value : 225
   const centerY = imageCenterY.value > 0 ? imageCenterY.value : 225
   
-  // 计算图片右下角相对于容器的位置
-  // 图片左上是 (centerX - width/2, centerY - height/2)
-  // 右下角是 (centerX + width/2, centerY + height/2)
-  const rightX = centerX + width / 2
-  const bottomY = centerY + height / 2
+  // 对话框相对于立绘中心的偏移量（可以根据需要调整）
+  const offsetX = 100  // 水平偏移：对话框在立绘中心右侧100px
+  const offsetY = 50  // 垂直偏移：对话框在立绘中心上方50px
   
   return {
-    left: `${rightX}px`,
-    top: `${bottomY + 10}px`,
-    transform: 'translate(-100%, 0)'
+    left: `${centerX + offsetX}px`,
+    top: `${centerY + offsetY}px`,
+    transform: 'translate(-100%, 0)'  // 保持对话框左对齐
   }
 })
 
