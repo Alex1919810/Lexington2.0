@@ -32,22 +32,22 @@
     ></div>
     <div class="visual-wifi-shadow"></div>
     <!-- 对话框 -->
-    <div 
-      v-if="isDialogVisible && dialogText"
-      ref="dialogRef"
-      class="dialog-bubble"
-      :style="dialogStyle"
-    >
-      <div class="dialog-content">
-        {{ displayedText }}
-      </div>
-      <div class="dialog-tail"></div>
-    </div>
+    <DialogBubble
+      :visible="isDialogVisible"
+      :text="dialogText"
+      :position="{ x: imageCenterX, y: imageCenterY }"
+      :offset-x="100"
+      :offset-y="50"
+      :should-ignore-click-outside="() => isProcessingDragClick"
+      @close="closeDialog"
+      ref="dialogBubbleRef"
+    />
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import DialogBubble from './DialogBubble.vue'
 
 const props = defineProps({
   x: {
@@ -81,10 +81,7 @@ const isHovered = ref(false)
 
 // 对话框相关状态
 const isDialogVisible = ref(false)
-const displayedText = ref('')
-const isTyping = ref(false)
-const typingTimer = ref(null)
-const dialogRef = ref(null)
+const dialogBubbleRef = ref(null)
 const dragCircleRef = ref(null) // 拖动区域元素引用
 const isProcessingDragClick = ref(false) // 标记是否正在处理拖动区域的点击
 const clickStartTime = ref(0)
@@ -351,12 +348,14 @@ const handleDialogClick = () => {
   
   // 如果有对话框文本
   if (props.dialogText) {
-    if (isTyping.value) {
+    if (dialogBubbleRef.value && isDialogVisible.value) {
       // 如果正在打字，跳过动画
-      skipTyping()
-    } else if (!isDialogVisible.value) {
-      // 如果对话框未显示，显示并开始打字机效果
-      showDialog()
+      dialogBubbleRef.value.skipTyping()
+    }
+    
+    if (!isDialogVisible.value) {
+      // 如果对话框未显示，显示对话框
+      isDialogVisible.value = true
     } else {
       // 如果对话框已显示，关闭对话框
       closeDialog()
@@ -375,93 +374,10 @@ const handleDialogClick = () => {
   }, 100)
 }
 
-// 显示对话框
-const showDialog = () => {
-  isDialogVisible.value = true
-  displayedText.value = ''
-  startTyping()
-  // 添加点击外部关闭的事件监听
-  setTimeout(() => {
-    document.addEventListener('click', handleClickOutside)
-  }, 0)
-}
-
-// 开始打字机效果
-const startTyping = () => {
-  if (!props.dialogText) return
-  
-  isTyping.value = true
-  displayedText.value = ''
-  let currentIndex = 0
-  
-  const typeChar = () => {
-    if (currentIndex < props.dialogText.length && isTyping.value) {
-      displayedText.value = props.dialogText.substring(0, currentIndex + 1)
-      currentIndex++
-      typingTimer.value = setTimeout(typeChar, 50) // 50ms 一个字符
-    } else {
-      isTyping.value = false
-    }
-  }
-  
-  typeChar()
-}
-
-// 跳过打字机效果
-const skipTyping = () => {
-  if (typingTimer.value) {
-    clearTimeout(typingTimer.value)
-    typingTimer.value = null
-  }
-  isTyping.value = false
-  displayedText.value = props.dialogText
-}
-
 // 关闭对话框
 const closeDialog = () => {
   isDialogVisible.value = false
-  displayedText.value = ''
-  isTyping.value = false
-  if (typingTimer.value) {
-    clearTimeout(typingTimer.value)
-    typingTimer.value = null
-  }
-  // 移除点击外部关闭的事件监听
-  document.removeEventListener('click', handleClickOutside)
 }
-
-// 处理点击外部事件
-const handleClickOutside = (event) => {
-  // 如果正在处理拖动区域的点击，不关闭对话框
-  if (isProcessingDragClick.value) {
-    return
-  }
-  
-  if (dialogRef.value && !dialogRef.value.contains(event.target)) {
-    // 检查点击是否在拖动区域内
-    const dragCircle = document.querySelector('.drag-circle')
-    if (dragCircle && !dragCircle.contains(event.target)) {
-      closeDialog()
-    }
-  }
-}
-
-// 计算对话框样式
-const dialogStyle = computed(() => {
-  // 获取立绘中心位置
-  const centerX = imageCenterX.value > 0 ? imageCenterX.value : 225
-  const centerY = imageCenterY.value > 0 ? imageCenterY.value : 225
-  
-  // 对话框相对于立绘中心的偏移量（可以根据需要调整）
-  const offsetX = 100  // 水平偏移：对话框在立绘中心右侧100px
-  const offsetY = 50  // 垂直偏移：对话框在立绘中心上方50px
-  
-  return {
-    left: `${centerX + offsetX}px`,
-    top: `${centerY + offsetY}px`,
-    transform: 'translate(-100%, 0)'  // 保持对话框左对齐
-  }
-})
 
 // 监听对话框文本变化，重置对话框状态
 watch(() => props.dialogText, (newText) => {
@@ -520,16 +436,10 @@ onUnmounted(() => {
     cancelAnimationFrame(animationFrame.value)
   }
   window.removeEventListener('resize', updateImageInfo)
-  // 清理打字机定时器
-  if (typingTimer.value) {
-    clearTimeout(typingTimer.value)
-  }
   // 清理点击检测定时器
   if (clickTimeout.value) {
     clearTimeout(clickTimeout.value)
   }
-  // 移除点击外部关闭的事件监听
-  document.removeEventListener('click', handleClickOutside)
 })
 
 </script>
@@ -670,60 +580,4 @@ onUnmounted(() => {
   }
 }
 
-/* 对话框气泡样式 */
-.dialog-bubble {
-  position: absolute;
-  z-index: 100;
-  pointer-events: auto;
-  -webkit-app-region: no-drag;
-  max-width: 200px;
-  min-width: 100px;
-  width: fit-content;
-}
-
-.dialog-content {
-  background: rgba(255, 255, 255, 0.95);
-  border-radius: 12px;
-  padding: 10px 14px;
-  font-size: 14px;
-  line-height: 1.5;
-  color: #333;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
-  word-wrap: break-word;
-  word-break: break-word;
-  white-space: pre-wrap;
-  min-height: 40px;
-  max-height: 120px;
-  overflow-y: auto;
-}
-
-.dialog-tail {
-  position: absolute;
-  top: -8px;
-  left: 20px;
-  width: 0;
-  height: 0;
-  border-left: 8px solid transparent;
-  border-right: 8px solid transparent;
-  border-bottom: 8px solid rgba(255, 255, 255, 0.95);
-  filter: drop-shadow(0 -2px 2px rgba(0, 0, 0, 0.1));
-}
-
-/* 对话框滚动条样式 */
-.dialog-content::-webkit-scrollbar {
-  width: 4px;
-}
-
-.dialog-content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.dialog-content::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 2px;
-}
-
-.dialog-content::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.3);
-}
 </style>
