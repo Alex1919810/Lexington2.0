@@ -5,7 +5,7 @@
     class="dialog-bubble"
     :style="dialogStyle"
   >
-    <div class="dialog-content">
+    <div class="dialog-content" :style="dialogContentStyle">
       {{ displayedText }}
     </div>
     <div class="dialog-tail"></div>
@@ -13,7 +13,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onUnmounted } from 'vue'
+import { ref, computed, watch, onUnmounted, onMounted } from 'vue'
 
 const props = defineProps({
   visible: {
@@ -48,6 +48,7 @@ const displayedText = ref('')
 const isTyping = ref(false)
 const typingTimer = ref(null)
 const dialogRef = ref(null)
+const backgroundImage = ref('')
 
 // 计算对话框样式
 const dialogStyle = computed(() => {
@@ -60,6 +61,44 @@ const dialogStyle = computed(() => {
     transform: 'translate(-100%, 0)'
   }
 })
+
+// 计算对话框内容样式（包含背景图片）
+const dialogContentStyle = computed(() => {
+  const style = {}
+  if (backgroundImage.value) {
+    style.backgroundImage = `url(${backgroundImage.value})`
+    style.backgroundSize = 'cover'
+    style.backgroundPosition = 'center'
+    style.backgroundRepeat = 'no-repeat'
+    // 有背景图片时，移除默认背景色，让图片显示
+    style.backgroundColor = 'transparent'
+  }
+  return style
+})
+
+// 加载对话框背景图片
+const loadDialogBackground = async () => {
+  if (window.electronAPI && window.electronAPI.scanDialogBackgrounds) {
+    try {
+      const result = await window.electronAPI.scanDialogBackgrounds()
+      if (result.success && result.backgrounds && result.backgrounds.length > 0) {
+        // 使用第一张图片作为背景
+        backgroundImage.value = result.backgrounds[0].path
+        console.log('对话框背景已加载:', backgroundImage.value)
+      } else {
+        // 没有背景图片，不设置背景
+        backgroundImage.value = ''
+        console.log('未找到对话框背景图片')
+      }
+    } catch (error) {
+      console.error('加载对话框背景失败:', error)
+      backgroundImage.value = ''
+    }
+  } else {
+    console.warn('electronAPI.scanDialogBackgrounds 不可用')
+    backgroundImage.value = ''
+  }
+}
 
 // 开始打字机效果
 const startTyping = () => {
@@ -145,6 +184,11 @@ defineExpose({
   skipTyping
 })
 
+onMounted(() => {
+  // 组件挂载时加载对话框背景
+  loadDialogBackground()
+})
+
 onUnmounted(() => {
   // 清理打字机定时器
   if (typingTimer.value) {
@@ -168,7 +212,7 @@ onUnmounted(() => {
 }
 
 .dialog-content {
-  background: rgba(255, 255, 255, 0.95);
+  background-color: rgba(255, 255, 255, 0.95);
   border-radius: 12px;
   padding: 10px 14px;
   font-size: 14px;

@@ -20,4 +20,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // 扫描立绘文件
   scanIllustrations: () => ipcRenderer.invoke('scan-illustrations'),
+  
+  // 扫描对话框背景文件
+  scanDialogBackgrounds: () => ipcRenderer.invoke('scan-dialog-backgrounds'),
 })
