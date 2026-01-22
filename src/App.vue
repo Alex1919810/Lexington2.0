@@ -23,7 +23,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, computed, watch, nextTick } from 'vue'
 import VisualWifi from './components/VisualWifi.vue'
 import Sidebar from './components/Sidebar.vue'
 import { createHotReloadManager, provideHotReload } from './composables/useHotReload'
@@ -282,13 +282,20 @@ const getRandomDialogText = () => {
 }
 
 // 处理对话框请求
-const handleRequestDialog = () => {
+const handleRequestDialog = async () => {
   const randomText = getRandomDialogText()
   if (randomText) {
+    // 如果获取到的文本和当前文本相同，先清空再设置，确保触发更新
+    if (dialogText.value === randomText) {
+      dialogText.value = ''
+      await nextTick()
+    }
     dialogText.value = randomText
     console.log('显示随机对话框文本:', randomText)
   } else {
     console.warn('当前角色没有可用的文本')
+    // 如果没有文本，也清空对话框文本
+    dialogText.value = ''
   }
 }
 

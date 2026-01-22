@@ -44,7 +44,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import DialogBubble from './DialogBubble.vue'
 
 const props = defineProps({
@@ -352,15 +352,26 @@ const closeDialog = () => {
 }
 
 // 监听对话框文本变化，重置对话框状态
-watch(() => props.dialogText, (newText) => {
+watch(() => props.dialogText, async (newText, oldText) => {
+  console.log('对话框文本变化:', { newText, oldText, isDialogVisible: isDialogVisible.value })
   if (!newText) {
+    // 如果文本为空，关闭对话框
     closeDialog()
-  } else if (newText && !isDialogVisible.value) {
-    // 如果有新文本且对话框未显示，显示对话框
+  } else if (newText) {
+    // 如果有新文本，显示对话框（无论之前是否已显示）
+    // 如果文本发生变化，重置点击计数
+    if (newText !== oldText) {
+      dialogOpenClickCount.value = 0
+    }
+    // 确保对话框显示，使用 nextTick 确保状态更新
+    await nextTick()
+    if (!isDialogVisible.value) {
+      console.log('打开对话框，文本:', newText)
+    }
     isDialogVisible.value = true
-    dialogOpenClickCount.value = 0
+    console.log('对话框状态已更新，isDialogVisible:', isDialogVisible.value)
   }
-})
+}, { immediate: false })
 
 // 监听图片路径变化，重置错误状态
 watch(() => props.imagePath, (newPath) => {
