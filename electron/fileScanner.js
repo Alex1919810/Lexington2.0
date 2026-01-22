@@ -84,30 +84,24 @@ async function scanIllustrations() {
   }
 }
 
-// 扫描对话框背景文件
-async function scanDialogBackgrounds() {
+// 扫描指定目录下的背景图片（通用逻辑）
+async function scanBackgrounds(relativeDir) {
   try {
     const backgrounds = []
     const appPath = getAppPath()
-    const dialogBackgroundPath = path.join(appPath, 'resource', 'background', 'dialog')
-    
-    // 检查dialog背景目录是否存在
-    if (!fs.existsSync(dialogBackgroundPath)) {
-      console.warn('dialog背景目录不存在:', dialogBackgroundPath)
+    const backgroundPath = path.join(appPath, 'resource', 'background', relativeDir)
+
+    if (!fs.existsSync(backgroundPath)) {
+      console.warn(`背景目录不存在:`, backgroundPath)
       return { success: true, backgrounds: [] }
     }
-    
-    // 读取目录下的所有文件
-    const files = fs.readdirSync(dialogBackgroundPath)
-    
-    // 支持的图片格式
+
+    const files = fs.readdirSync(backgroundPath)
     const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp']
-    
+
     files.forEach(file => {
-      const filePath = path.join(dialogBackgroundPath, file)
+      const filePath = path.join(backgroundPath, file)
       const stat = fs.statSync(filePath)
-      
-      // 只处理文件，跳过目录
       if (stat.isFile()) {
         const ext = path.extname(file).toLowerCase()
         if (imageExtensions.includes(ext)) {
@@ -121,16 +115,31 @@ async function scanDialogBackgrounds() {
         }
       }
     })
-    
-    // 按文件名排序，确保顺序一致
+
     backgrounds.sort((a, b) => a.name.localeCompare(b.name))
-    
-    console.log(`扫描完成，共找到 ${backgrounds.length} 个对话框背景文件`)
     return { success: true, backgrounds }
   } catch (error) {
-    console.error('扫描对话框背景文件失败:', error)
+    console.error(`扫描背景文件失败 (${relativeDir}):`, error)
     return { success: false, error: error.message, backgrounds: [] }
   }
+}
+
+// 扫描对话框背景文件
+async function scanDialogBackgrounds() {
+  const result = await scanBackgrounds('dialog')
+  if (result.success && result.backgrounds) {
+    console.log(`扫描完成，共找到 ${result.backgrounds.length} 个对话框背景文件`)
+  }
+  return result
+}
+
+// 扫描输入框背景文件
+async function scanInputBackgrounds() {
+  const result = await scanBackgrounds('input')
+  if (result.success && result.backgrounds) {
+    console.log(`扫描完成，共找到 ${result.backgrounds.length} 个输入框背景文件`)
+  }
+  return result
 }
 
 // 加载指定角色的文本文件
@@ -189,5 +198,6 @@ async function loadCharacterText(characterName) {
 module.exports = {
   scanIllustrations,
   scanDialogBackgrounds,
+  scanInputBackgrounds,
   loadCharacterText
 }

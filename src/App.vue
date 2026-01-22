@@ -6,6 +6,7 @@
       :imagePath="visualWifiImagePath"
       :dialogText="dialogText"
       @request-dialog="handleRequestDialog"
+      @llm-response="handleLLMResponse"
     />
     <Sidebar 
       :illustrations="filteredIllustrations"
@@ -295,6 +296,22 @@ const handleRequestDialog = async () => {
   } else {
     console.warn('当前角色没有可用的文本')
     // 如果没有文本，也清空对话框文本
+    dialogText.value = ''
+  }
+}
+
+// 处理LLM API返回结果
+const handleLLMResponse = async (responseText) => {
+  if (responseText) {
+    // 如果获取到的文本和当前文本相同，先清空再设置，确保触发更新
+    if (dialogText.value === responseText) {
+      dialogText.value = ''
+      await nextTick()
+    }
+    dialogText.value = responseText
+    console.log('显示LLM API返回的文本:', responseText)
+  } else {
+    console.warn('LLM API返回的文本为空')
     dialogText.value = ''
   }
 }

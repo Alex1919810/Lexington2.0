@@ -17,6 +17,11 @@ const defaultConfig = {
     maxHeight: 120,
     offsetX: 100,
     offsetY: 50
+  },
+  llm: {
+    apiUrl: "https://api.openai.com/v1/chat/completions",
+    apiKey: "",
+    model: "gpt-3.5-turbo"
   }
 }
 
@@ -46,6 +51,11 @@ async function getConfig() {
         maxHeight: config.dialog?.maxHeight ?? defaultConfig.dialog.maxHeight,
         offsetX: config.dialog?.offsetX ?? defaultConfig.dialog.offsetX,
         offsetY: config.dialog?.offsetY ?? defaultConfig.dialog.offsetY
+      },
+      llm: {
+        apiUrl: config.llm?.apiUrl ?? defaultConfig.llm.apiUrl,
+        apiKey: config.llm?.apiKey ?? defaultConfig.llm.apiKey,
+        model: config.llm?.model ?? defaultConfig.llm.model
       }
     }
     

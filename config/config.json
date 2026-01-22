@@ -4,5 +4,10 @@
     "maxHeight": 120,
     "offsetX": 150,
     "offsetY": 50
+  },
+  "llm": {
+    "apiUrl": "https://api.openai.com/v1/chat/completions",
+    "apiKey": "",
+    "model": "gpt-3.5-turbo"
   }
 }

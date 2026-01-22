@@ -40,12 +40,20 @@
       @close="closeDialog"
       ref="dialogBubbleRef"
     />
+    <!-- 输入对话框 -->
+    <InputDialog
+      :visible="true"
+      :position="{ x: imageCenterX, y: imageCenterY, imageHeight: imageHeight }"
+      @submit="handleInputSubmit"
+      @close="closeInputDialog"
+    />
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import DialogBubble from './DialogBubble.vue'
+import InputDialog from './InputDialog.vue'
 
 const props = defineProps({
   imagePath: {
@@ -58,7 +66,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['request-dialog'])
+const emit = defineEmits(['request-dialog', 'llm-response'])
 
 const imageError = ref(false)
 const imageRef = ref(null)
@@ -79,6 +87,8 @@ const hasMoved = ref(false) // 标记是否移动了
 const isDragging = ref(false) // 标记是否正在拖拽
 // 对话框打开期间，在立绘上的点击次数：0=刚打开，1=已点击一次（显示全部），2=再点击则关闭
 const dialogOpenClickCount = ref(0)
+
+// 输入对话框始终显示，不需要状态管理
 
 // 窗口位置信息（初始化时获取）
 const windowPosition = ref({ x: 0, y: 0 })
@@ -281,7 +291,7 @@ const handleDragCirclePointerDown = (event) => {
     
     // 如果移动距离小于5px且时间小于300ms，认为是点击而不是拖拽
     if (distance < 5 && timeDiff < 300 && !hasMoved.value) {
-      console.log('检测到点击，显示对话框')
+      console.log('检测到点击')
       setTimeout(() => {
         handleDialogClick()
       }, 50)
@@ -349,6 +359,19 @@ const handleDialogClick = () => {
 const closeDialog = () => {
   isDialogVisible.value = false
   dialogOpenClickCount.value = 0
+}
+
+// 输入对话框始终显示，不需要打开/关闭函数
+const closeInputDialog = () => {
+  // 输入框始终显示，关闭事件由InputDialog内部处理
+}
+
+// 处理输入对话框提交
+const handleInputSubmit = (responseText) => {
+  // 关闭输入对话框
+  closeInputDialog()
+  // 将API返回的文本传递给父组件
+  emit('llm-response', responseText)
 }
 
 // 监听对话框文本变化，重置对话框状态

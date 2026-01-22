@@ -300,7 +300,7 @@ onUnmounted(() => {
 /* 对话框气泡样式 */
 .dialog-bubble {
   position: absolute;
-  z-index: 100;
+  z-index: 102;
   pointer-events: auto;
   -webkit-app-region: no-drag;
 }

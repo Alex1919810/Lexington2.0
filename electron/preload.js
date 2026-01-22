@@ -23,10 +23,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // 扫描对话框背景文件
   scanDialogBackgrounds: () => ipcRenderer.invoke('scan-dialog-backgrounds'),
+
+  // 扫描输入框背景文件
+  scanInputBackgrounds: () => ipcRenderer.invoke('scan-input-backgrounds'),
   
   // 读取配置文件
   getConfig: () => ipcRenderer.invoke('get-config'),
   
   // 加载角色文本文件
   loadCharacterText: (characterName) => ipcRenderer.invoke('load-character-text', characterName),
+  
+  // 调用大模型API
+  callLLMAPI: (userInput) => ipcRenderer.invoke('call-llm-api', userInput),
 })

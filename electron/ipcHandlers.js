@@ -1,8 +1,9 @@
 const { ipcMain, BrowserWindow } = require('electron')
 const { getPetWindow, getWindowInitialSize } = require('./window')
 const { createContextMenu } = require('./menu')
-const { scanIllustrations, scanDialogBackgrounds, loadCharacterText } = require('./fileScanner')
+const { scanIllustrations, scanDialogBackgrounds, scanInputBackgrounds, loadCharacterText } = require('./fileScanner')
 const { getConfig } = require('./config')
+const { callLLMAPI } = require('./llmApi')
 
 // 注册所有 IPC 处理器
 function registerIpcHandlers() {
@@ -61,6 +62,11 @@ function registerIpcHandlers() {
     return await scanDialogBackgrounds()
   })
 
+  // 扫描输入框背景文件
+  ipcMain.handle('scan-input-backgrounds', async () => {
+    return await scanInputBackgrounds()
+  })
+
   // 读取配置文件
   ipcMain.handle('get-config', async () => {
     return await getConfig()
@@ -69,6 +75,31 @@ function registerIpcHandlers() {
   // 加载角色文本文件
   ipcMain.handle('load-character-text', async (event, characterName) => {
     return await loadCharacterText(characterName)
+  })
+
+  // 调用大模型API
+  ipcMain.handle('call-llm-api', async (event, userInput) => {
+    try {
+      // 获取配置
+      const configResult = await getConfig()
+      if (!configResult.success || !configResult.config || !configResult.config.llm) {
+        return {
+          success: false,
+          error: '无法读取LLM配置，请检查config.json'
+        }
+      }
+
+      const llmConfig = configResult.config.llm
+      
+      // 调用API
+      const result = await callLLMAPI(userInput, llmConfig)
+      return result
+    } catch (error) {
+      return {
+        success: false,
+        error: `调用LLM API时发生错误: ${error.message}`
+      }
+    }
   })
 }
 
