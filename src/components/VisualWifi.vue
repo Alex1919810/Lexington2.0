@@ -36,8 +36,6 @@
       :visible="isDialogVisible"
       :text="dialogText"
       :position="{ x: imageCenterX, y: imageCenterY }"
-      :offset-x="100"
-      :offset-y="50"
       :should-ignore-click-outside="() => isProcessingDragClick"
       @close="closeDialog"
       ref="dialogBubbleRef"

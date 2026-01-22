@@ -23,4 +23,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // 扫描对话框背景文件
   scanDialogBackgrounds: () => ipcRenderer.invoke('scan-dialog-backgrounds'),
+  
+  // 读取配置文件
+  getConfig: () => ipcRenderer.invoke('get-config'),
 })

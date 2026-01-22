@@ -5,7 +5,7 @@
     class="dialog-bubble"
     :style="dialogStyle"
   >
-    <div class="dialog-content" :style="dialogContentStyle">
+    <div class="dialog-content" :style="mergedDialogContentStyle">
       {{ displayedText }}
     </div>
     <div class="dialog-tail"></div>
@@ -30,11 +30,11 @@ const props = defineProps({
   },
   offsetX: {
     type: Number,
-    default: 100
+    default: undefined
   },
   offsetY: {
     type: Number,
-    default: 50
+    default: undefined
   },
   shouldIgnoreClickOutside: {
     type: Function,
@@ -50,15 +50,26 @@ const typingTimer = ref(null)
 const dialogRef = ref(null)
 const backgroundImage = ref('')
 
+// 配置相关
+const dialogWidth = ref(200)
+const dialogMaxHeight = ref(120)
+const dialogOffsetX = ref(100)
+const dialogOffsetY = ref(50)
+const calculatedHeight = ref(null)
+
 // 计算对话框样式
 const dialogStyle = computed(() => {
   const centerX = props.position.x > 0 ? props.position.x : 225
   const centerY = props.position.y > 0 ? props.position.y : 225
+  // 优先使用 props 传入的偏移值，如果没有则使用配置值
+  const offsetX = props.offsetX !== undefined ? props.offsetX : dialogOffsetX.value
+  const offsetY = props.offsetY !== undefined ? props.offsetY : dialogOffsetY.value
   
   return {
-    left: `${centerX + props.offsetX}px`,
-    top: `${centerY + props.offsetY}px`,
-    transform: 'translate(-100%, 0)'
+    left: `${centerX + offsetX}px`,
+    top: `${centerY + offsetY}px`,
+    transform: 'translate(-100%, 0)',
+    width: `${dialogWidth.value}px`
   }
 })
 
@@ -72,6 +83,15 @@ const dialogContentStyle = computed(() => {
     style.backgroundRepeat = 'no-repeat'
     // 有背景图片时，移除默认背景色，让图片显示
     style.backgroundColor = 'transparent'
+  }
+  return style
+})
+
+// 合并对话框内容样式（包含计算的高度）
+const mergedDialogContentStyle = computed(() => {
+  const style = { ...dialogContentStyle.value }
+  if (calculatedHeight.value !== null) {
+    style.height = `${calculatedHeight.value}px`
   }
   return style
 })
@@ -98,6 +118,57 @@ const loadDialogBackground = async () => {
     console.warn('electronAPI.scanDialogBackgrounds 不可用')
     backgroundImage.value = ''
   }
+}
+
+// 加载配置
+const loadConfig = async () => {
+  if (window.electronAPI && window.electronAPI.getConfig) {
+    try {
+      const result = await window.electronAPI.getConfig()
+      if (result.success && result.config && result.config.dialog) {
+        dialogWidth.value = result.config.dialog.width || 200
+        dialogMaxHeight.value = result.config.dialog.maxHeight || 120
+        dialogOffsetX.value = result.config.dialog.offsetX || 100
+        dialogOffsetY.value = result.config.dialog.offsetY || 50
+        console.log('对话框配置已加载:', { 
+          width: dialogWidth.value, 
+          maxHeight: dialogMaxHeight.value,
+          offsetX: dialogOffsetX.value,
+          offsetY: dialogOffsetY.value
+        })
+      }
+    } catch (error) {
+      console.error('加载配置失败:', error)
+    }
+  } else {
+    console.warn('electronAPI.getConfig 不可用')
+  }
+}
+
+// 计算文本所需高度
+const calculateTextHeight = (text) => {
+  if (!text) return null
+  
+  // 创建临时测量元素
+  const measureElement = document.createElement('div')
+  measureElement.style.position = 'absolute'
+  measureElement.style.visibility = 'hidden'
+  measureElement.style.width = `${dialogWidth.value}px`
+  measureElement.style.padding = '10px 14px'
+  measureElement.style.fontSize = '14px'
+  measureElement.style.lineHeight = '1.5'
+  measureElement.style.wordWrap = 'break-word'
+  measureElement.style.wordBreak = 'break-word'
+  measureElement.style.whiteSpace = 'pre-wrap'
+  measureElement.style.boxSizing = 'border-box'
+  measureElement.textContent = text
+  
+  // 添加到 DOM 进行测量
+  document.body.appendChild(measureElement)
+  const height = measureElement.scrollHeight
+  document.body.removeChild(measureElement)
+  
+  return height
 }
 
 // 开始打字机效果
@@ -150,6 +221,15 @@ const handleClickOutside = (event) => {
 // 监听 visible 变化
 watch(() => props.visible, (newVal) => {
   if (newVal) {
+    // 在显示前计算所需高度
+    const textHeight = calculateTextHeight(props.text)
+    if (textHeight !== null) {
+      // 如果计算高度 <= 最大高度，使用计算高度；否则使用最大高度
+      calculatedHeight.value = textHeight <= dialogMaxHeight.value ? textHeight : dialogMaxHeight.value
+    } else {
+      calculatedHeight.value = dialogMaxHeight.value
+    }
+    
     displayedText.value = ''
     startTyping()
     // 添加点击外部关闭的事件监听
@@ -158,6 +238,7 @@ watch(() => props.visible, (newVal) => {
     }, 0)
   } else {
     displayedText.value = ''
+    calculatedHeight.value = null
     isTyping.value = false
     if (typingTimer.value) {
       clearTimeout(typingTimer.value)
@@ -173,7 +254,13 @@ watch(() => props.text, (newText) => {
   if (!newText && props.visible) {
     emit('close')
   } else if (props.visible && newText) {
-    // 如果对话框已显示且文本变化，重新开始打字机效果
+    // 如果对话框已显示且文本变化，重新计算高度并开始打字机效果
+    const textHeight = calculateTextHeight(newText)
+    if (textHeight !== null) {
+      calculatedHeight.value = textHeight <= dialogMaxHeight.value ? textHeight : dialogMaxHeight.value
+    } else {
+      calculatedHeight.value = dialogMaxHeight.value
+    }
     skipTyping()
     startTyping()
   }
@@ -185,7 +272,8 @@ defineExpose({
 })
 
 onMounted(() => {
-  // 组件挂载时加载对话框背景
+  // 组件挂载时加载配置和对话框背景
+  loadConfig()
   loadDialogBackground()
 })
 
@@ -206,9 +294,6 @@ onUnmounted(() => {
   z-index: 100;
   pointer-events: auto;
   -webkit-app-region: no-drag;
-  max-width: 200px;
-  min-width: 100px;
-  width: fit-content;
 }
 
 .dialog-content {
@@ -222,9 +307,8 @@ onUnmounted(() => {
   word-wrap: break-word;
   word-break: break-word;
   white-space: pre-wrap;
-  min-height: 40px;
-  max-height: 120px;
   overflow-y: auto;
+  box-sizing: border-box;
 }
 
 .dialog-tail {
