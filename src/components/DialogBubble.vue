@@ -14,6 +14,7 @@
 
 <script setup>
 import { ref, computed, watch, onUnmounted, onMounted } from 'vue'
+import { useHotReload } from '../composables/useHotReload'
 
 const props = defineProps({
   visible: {
@@ -268,7 +269,13 @@ watch(() => props.text, (newText) => {
 
 // 暴露方法供父组件调用
 defineExpose({
-  skipTyping
+  skipTyping,
+  loadConfig
+})
+
+// 注册热加载
+const { unregister } = useHotReload('对话框配置', async () => {
+  await loadConfig()
 })
 
 onMounted(() => {
@@ -278,6 +285,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  // 取消注册热加载
+  unregister()
   // 清理打字机定时器
   if (typingTimer.value) {
     clearTimeout(typingTimer.value)

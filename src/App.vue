@@ -25,6 +25,7 @@
 import { ref, onMounted, computed, watch } from 'vue'
 import VisualWifi from './components/VisualWifi.vue'
 import Sidebar from './components/Sidebar.vue'
+import { createHotReloadManager, provideHotReload } from './composables/useHotReload'
 
 const visualWifiX = ref(0)
 const visualWifiY = ref(0)
@@ -35,6 +36,15 @@ const isLoading = ref(false) // 加载状态
 const currentFormat = ref('gif') // 当前选择的格式：'gif' 或 'png'
 const currentCharacter = ref('') // 当前选择的角色
 const dialogText = ref('你好！这是一段测试对话文字。点击拖动区域可以看到对话框显示效果。') // 对话框文本，默认为空（可以设置为空字符串来隐藏对话框）
+
+// 创建并提供热加载管理器
+const hotReloadManager = createHotReloadManager()
+provideHotReload(hotReloadManager)
+
+// 注册立绘列表的热加载
+hotReloadManager.register('立绘列表', async () => {
+  await loadIllustrations()
+})
 
 // 获取所有角色列表
 const characters = computed(() => {
@@ -137,8 +147,9 @@ const loadIllustrations = async () => {
 
 // 刷新立绘列表
 const refreshIllustrations = async () => {
-  console.log('App.vue：刷新立绘列表')
-  await loadIllustrations()
+  console.log('App.vue：触发所有热加载项刷新')
+  // 触发所有已注册的热加载项（包括立绘列表）
+  await hotReloadManager.reload()
 }
 
 // 选择当前角色和格式的第一个立绘
