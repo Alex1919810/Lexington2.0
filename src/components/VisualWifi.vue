@@ -77,6 +77,8 @@ const dragCircleRef = ref(null) // 拖动区域元素引用
 const isProcessingDragClick = ref(false) // 标记是否正在处理拖动区域的点击
 const hasMoved = ref(false) // 标记是否移动了
 const isDragging = ref(false) // 标记是否正在拖拽
+// 对话框打开期间，在立绘上的点击次数：0=刚打开，1=已点击一次（显示全部），2=再点击则关闭
+const dialogOpenClickCount = ref(0)
 
 // 窗口位置信息（初始化时获取）
 const windowPosition = ref({ x: 0, y: 0 })
@@ -318,32 +320,30 @@ const handleDragCirclePointerDown = (event) => {
 }
 
 // 处理对话框点击逻辑
+// 第一次点击：显示对话框并开始打字；第二次点击：显示全部文字不关闭；第三次点击：关闭
 const handleDialogClick = () => {
   isProcessingDragClick.value = true
   
-  // 如果有对话框文本
   if (props.dialogText) {
-    if (dialogBubbleRef.value && isDialogVisible.value) {
-      // 如果正在打字，跳过动画
-      dialogBubbleRef.value.skipTyping()
-    }
-    
     if (!isDialogVisible.value) {
-      // 如果对话框未显示，显示对话框
+      // 第一次点击：对话框未显示，显示对话框
+      dialogOpenClickCount.value = 0
       isDialogVisible.value = true
     } else {
-      // 如果对话框已显示，关闭对话框
-      closeDialog()
+      // 对话框已显示，按打开期间的点击次数处理
+      dialogOpenClickCount.value += 1
+      if (dialogOpenClickCount.value === 1) {
+        // 第二次点击：显示全部文字，不关闭
+        dialogBubbleRef.value?.skipTyping?.()
+      } else {
+        // 第三次及以后点击：关闭对话框
+        closeDialog()
+      }
     }
   } else {
-    console.log('对话框文本为空，无法显示对话框')
-    // 即使没有对话框文本，如果对话框已显示，也应该关闭
-    if (isDialogVisible.value) {
-      closeDialog()
-    }
+    if (isDialogVisible.value) closeDialog()
   }
   
-  // 延迟重置标志，确保 handleClickOutside 能正确判断
   setTimeout(() => {
     isProcessingDragClick.value = false
   }, 100)
@@ -352,6 +352,7 @@ const handleDialogClick = () => {
 // 关闭对话框
 const closeDialog = () => {
   isDialogVisible.value = false
+  dialogOpenClickCount.value = 0
 }
 
 // 监听对话框文本变化，重置对话框状态
