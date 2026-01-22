@@ -26,4 +26,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // 读取配置文件
   getConfig: () => ipcRenderer.invoke('get-config'),
+  
+  // 加载角色文本文件
+  loadCharacterText: (characterName) => ipcRenderer.invoke('load-character-text', characterName),
 })

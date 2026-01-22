@@ -133,7 +133,61 @@ async function scanDialogBackgrounds() {
   }
 }
 
+// 加载指定角色的文本文件
+async function loadCharacterText(characterName) {
+  try {
+    if (!characterName) {
+      console.warn('角色名为空，无法加载文本')
+      return { success: false, error: '角色名为空', texts: [] }
+    }
+    
+    const appPath = getAppPath()
+    const textFilePath = path.join(appPath, 'resource', 'texts', characterName, 'text.json')
+    
+    // 检查文件是否存在
+    if (!fs.existsSync(textFilePath)) {
+      console.warn(`角色 ${characterName} 的文本文件不存在:`, textFilePath)
+      return { success: true, texts: [] }
+    }
+    
+    // 读取文件内容
+    const fileContent = fs.readFileSync(textFilePath, 'utf-8')
+    
+    // 解析 JSON
+    let texts = []
+    try {
+      texts = JSON.parse(fileContent)
+      
+      // 验证是否为数组
+      if (!Array.isArray(texts)) {
+        console.error(`角色 ${characterName} 的文本文件格式错误：不是数组`)
+        return { success: false, error: '文本文件格式错误：不是数组', texts: [] }
+      }
+      
+      // 验证数组元素是否为字符串
+      const invalidItems = texts.filter(item => typeof item !== 'string')
+      if (invalidItems.length > 0) {
+        console.error(`角色 ${characterName} 的文本文件包含非字符串元素`)
+        return { success: false, error: '文本文件格式错误：包含非字符串元素', texts: [] }
+      }
+      
+      // 过滤空字符串
+      texts = texts.filter(text => text && text.trim().length > 0)
+      
+      console.log(`成功加载角色 ${characterName} 的文本，共 ${texts.length} 条`)
+      return { success: true, texts }
+    } catch (parseError) {
+      console.error(`解析角色 ${characterName} 的文本文件失败:`, parseError)
+      return { success: false, error: `JSON 解析失败: ${parseError.message}`, texts: [] }
+    }
+  } catch (error) {
+    console.error(`加载角色 ${characterName} 的文本文件失败:`, error)
+    return { success: false, error: error.message, texts: [] }
+  }
+}
+
 module.exports = {
   scanIllustrations,
-  scanDialogBackgrounds
+  scanDialogBackgrounds,
+  loadCharacterText
 }

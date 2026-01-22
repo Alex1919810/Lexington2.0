@@ -58,6 +58,8 @@ const props = defineProps({
   }
 })
 
+const emit = defineEmits(['request-dialog'])
+
 const imageError = ref(false)
 const imageRef = ref(null)
 const imageHeight = ref(0)
@@ -322,24 +324,20 @@ const handleDragCirclePointerDown = (event) => {
 const handleDialogClick = () => {
   isProcessingDragClick.value = true
   
-  if (props.dialogText) {
-    if (!isDialogVisible.value) {
-      // 第一次点击：对话框未显示，显示对话框
-      dialogOpenClickCount.value = 0
-      isDialogVisible.value = true
-    } else {
-      // 对话框已显示，按打开期间的点击次数处理
-      dialogOpenClickCount.value += 1
-      if (dialogOpenClickCount.value === 1) {
-        // 第二次点击：显示全部文字，不关闭
-        dialogBubbleRef.value?.skipTyping?.()
-      } else {
-        // 第三次及以后点击：关闭对话框
-        closeDialog()
-      }
-    }
+  if (!isDialogVisible.value) {
+    // 第一次点击：对话框未显示，通知父组件获取随机文本
+    dialogOpenClickCount.value = 0
+    emit('request-dialog')
   } else {
-    if (isDialogVisible.value) closeDialog()
+    // 对话框已显示，按打开期间的点击次数处理
+    dialogOpenClickCount.value += 1
+    if (dialogOpenClickCount.value === 1) {
+      // 第二次点击：显示全部文字，不关闭
+      dialogBubbleRef.value?.skipTyping?.()
+    } else {
+      // 第三次及以后点击：关闭对话框
+      closeDialog()
+    }
   }
   
   setTimeout(() => {
@@ -357,6 +355,10 @@ const closeDialog = () => {
 watch(() => props.dialogText, (newText) => {
   if (!newText) {
     closeDialog()
+  } else if (newText && !isDialogVisible.value) {
+    // 如果有新文本且对话框未显示，显示对话框
+    isDialogVisible.value = true
+    dialogOpenClickCount.value = 0
   }
 })
 

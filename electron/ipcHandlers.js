@@ -1,7 +1,7 @@
 const { ipcMain, BrowserWindow } = require('electron')
 const { getPetWindow, getWindowInitialSize } = require('./window')
 const { createContextMenu } = require('./menu')
-const { scanIllustrations, scanDialogBackgrounds } = require('./fileScanner')
+const { scanIllustrations, scanDialogBackgrounds, loadCharacterText } = require('./fileScanner')
 const { getConfig } = require('./config')
 
 // 注册所有 IPC 处理器
@@ -64,6 +64,11 @@ function registerIpcHandlers() {
   // 读取配置文件
   ipcMain.handle('get-config', async () => {
     return await getConfig()
+  })
+
+  // 加载角色文本文件
+  ipcMain.handle('load-character-text', async (event, characterName) => {
+    return await loadCharacterText(characterName)
   })
 }
 

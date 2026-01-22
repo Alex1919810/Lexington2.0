@@ -5,6 +5,7 @@
       :y="visualWifiY" 
       :imagePath="visualWifiImagePath"
       :dialogText="dialogText"
+      @request-dialog="handleRequestDialog"
     />
     <Sidebar 
       :illustrations="filteredIllustrations"
@@ -35,7 +36,8 @@ const currentIllustrationIndex = ref(-1) // 当前选中的立绘索引（在所
 const isLoading = ref(false) // 加载状态
 const currentFormat = ref('gif') // 当前选择的格式：'gif' 或 'png'
 const currentCharacter = ref('') // 当前选择的角色
-const dialogText = ref('你好！这是一段测试对话文字。点击拖动区域可以看到对话框显示效果。') // 对话框文本，默认为空（可以设置为空字符串来隐藏对话框）
+const dialogText = ref('') // 对话框文本，默认为空（可以设置为空字符串来隐藏对话框）
+const currentCharacterTexts = ref([]) // 当前角色的文本列表
 
 // 创建并提供热加载管理器
 const hotReloadManager = createHotReloadManager()
@@ -103,7 +105,12 @@ const loadIllustrations = async () => {
         if (!currentCharacter.value || !characters.value.includes(currentCharacter.value)) {
           if (characters.value.length > 0) {
             currentCharacter.value = characters.value[0]
+            // 加载第一个角色的文本（watch 会自动触发，但为了确保，这里也调用一次）
+            loadCharacterTexts(currentCharacter.value)
           }
+        } else {
+          // 如果当前角色存在，确保加载了文本
+          loadCharacterTexts(currentCharacter.value)
         }
         
         // 尝试保持当前选中的立绘（通过路径匹配）
@@ -236,6 +243,55 @@ const toggleFormat = () => {
   selectFirstOfCurrentFormat()
 }
 
+// 加载角色文本
+const loadCharacterTexts = async (characterName) => {
+  if (!characterName) {
+    currentCharacterTexts.value = []
+    return
+  }
+  
+  if (!window.electronAPI || !window.electronAPI.loadCharacterText) {
+    console.warn('electronAPI.loadCharacterText 不可用')
+    currentCharacterTexts.value = []
+    return
+  }
+  
+  try {
+    const result = await window.electronAPI.loadCharacterText(characterName)
+    if (result.success) {
+      currentCharacterTexts.value = result.texts || []
+      console.log(`成功加载角色 ${characterName} 的文本，共 ${currentCharacterTexts.value.length} 条`)
+    } else {
+      console.error(`加载角色 ${characterName} 的文本失败:`, result.error)
+      currentCharacterTexts.value = []
+    }
+  } catch (error) {
+    console.error(`加载角色 ${characterName} 的文本异常:`, error)
+    currentCharacterTexts.value = []
+  }
+}
+
+// 获取随机对话框文本
+const getRandomDialogText = () => {
+  if (currentCharacterTexts.value.length === 0) {
+    return ''
+  }
+  
+  const randomIndex = Math.floor(Math.random() * currentCharacterTexts.value.length)
+  return currentCharacterTexts.value[randomIndex] || ''
+}
+
+// 处理对话框请求
+const handleRequestDialog = () => {
+  const randomText = getRandomDialogText()
+  if (randomText) {
+    dialogText.value = randomText
+    console.log('显示随机对话框文本:', randomText)
+  } else {
+    console.warn('当前角色没有可用的文本')
+  }
+}
+
 // 切换角色
 const switchCharacter = () => {
   if (characters.value.length === 0) {
@@ -269,6 +325,13 @@ watch(currentFormat, (newFormat) => {
 
 // 监听角色变化，如果当前立绘不是新角色，自动切换
 watch(currentCharacter, (newCharacter) => {
+  // 加载新角色的文本
+  if (newCharacter) {
+    loadCharacterTexts(newCharacter)
+  } else {
+    currentCharacterTexts.value = []
+  }
+  
   if (currentIllustrationIndex.value >= 0) {
     const currentIll = illustrations.value[currentIllustrationIndex.value]
     if (currentIll && currentIll.character !== newCharacter) {
