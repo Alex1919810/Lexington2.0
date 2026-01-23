@@ -16,7 +16,8 @@ const defaultConfig = {
     width: 200,
     maxHeight: 120,
     offsetX: 100,
-    offsetY: 50
+    offsetY: 50,
+    autoCloseDelay: 10
   },
   llm: {
     apiUrl: "https://api.openai.com/v1/chat/completions",
@@ -50,13 +51,15 @@ async function getConfig() {
         width: config.dialog?.width ?? defaultConfig.dialog.width,
         maxHeight: config.dialog?.maxHeight ?? defaultConfig.dialog.maxHeight,
         offsetX: config.dialog?.offsetX ?? defaultConfig.dialog.offsetX,
-        offsetY: config.dialog?.offsetY ?? defaultConfig.dialog.offsetY
+        offsetY: config.dialog?.offsetY ?? defaultConfig.dialog.offsetY,
+        autoCloseDelay: config.dialog?.autoCloseDelay ?? 10
       },
       llm: {
         apiUrl: config.llm?.apiUrl ?? defaultConfig.llm.apiUrl,
         apiKey: config.llm?.apiKey ?? defaultConfig.llm.apiKey,
         model: config.llm?.model ?? defaultConfig.llm.model
-      }
+      },
+      clockIn: config.clockIn || undefined
     }
     
     console.log('配置文件已加载:', mergedConfig)

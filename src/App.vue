@@ -46,6 +46,11 @@ const currentCharacterTexts = ref([]) // 当前角色的文本列表
 const isClockedIn = ref(false) // 是否正在打卡中
 const clockOutTimer = ref(null) // 下班提醒定时器ID
 
+// 对话框自动关闭相关
+const dialogAutoCloseTimer = ref(null) // 对话框自动关闭定时器ID
+const dialogAutoCloseDelay = ref(10000) // 对话框自动关闭延迟（毫秒），默认10秒
+let mouseMoveDebounceTimer = null // 鼠标移动防抖定时器
+
 // 打卡配置
 const clockInConfig = ref({
   workReminderHours: 0.001,
@@ -258,6 +263,25 @@ const toggleFormat = () => {
   selectFirstOfCurrentFormat()
 }
 
+// 加载对话框配置
+const loadDialogConfig = async () => {
+  if (window.electronAPI && window.electronAPI.getConfig) {
+    try {
+      const result = await window.electronAPI.getConfig()
+      if (result.success && result.config && result.config.dialog) {
+        // 加载自动关闭延迟配置（单位：秒，转换为毫秒）
+        const delaySeconds = result.config.dialog.autoCloseDelay
+        if (delaySeconds !== undefined && delaySeconds !== null) {
+          dialogAutoCloseDelay.value = delaySeconds * 1000
+          console.log('对话框自动关闭延迟已加载:', delaySeconds, '秒')
+        }
+      }
+    } catch (error) {
+      console.error('加载对话框配置失败:', error)
+    }
+  }
+}
+
 // 加载打卡配置
 const loadClockInConfig = async () => {
   if (window.electronAPI && window.electronAPI.getConfig) {
@@ -296,6 +320,8 @@ const handleClockIn = async () => {
     }
     dialogText.value = message
     console.log('打卡计时已终止，显示对话框:', message)
+    // 启动自动关闭定时器
+    startDialogAutoCloseTimer()
   } else {
     // 如果未打卡，开始打卡
     isClockedIn.value = true
@@ -308,6 +334,8 @@ const handleClockIn = async () => {
     }
     dialogText.value = message
     console.log('打卡成功，显示对话框:', message)
+    // 启动自动关闭定时器
+    startDialogAutoCloseTimer()
     
     // 启动定时器，在指定小时后显示下班提醒
     const hours = clockInConfig.value.workReminderHours
@@ -328,6 +356,9 @@ const showClockOutReminder = async () => {
   }
   dialogText.value = message
   console.log('下班提醒，显示对话框:', message)
+  
+  // 启动自动关闭定时器
+  startDialogAutoCloseTimer()
   
   // 重置打卡状态
   isClockedIn.value = false
@@ -372,6 +403,52 @@ const getRandomDialogText = () => {
   return currentCharacterTexts.value[randomIndex] || ''
 }
 
+// 启动对话框自动关闭定时器
+const startDialogAutoCloseTimer = () => {
+  // 清除之前的定时器
+  if (dialogAutoCloseTimer.value) {
+    clearTimeout(dialogAutoCloseTimer.value)
+    dialogAutoCloseTimer.value = null
+  }
+  
+  // 如果对话框有文本，启动定时器
+  if (dialogText.value) {
+      dialogAutoCloseTimer.value = setTimeout(() => {
+      // 再次检查对话框是否还有文本（可能在定时器触发前已被关闭）
+      if (dialogText.value) {
+        dialogText.value = ''
+        dialogAutoCloseTimer.value = null
+        console.log(`对话框已自动关闭（${dialogAutoCloseDelay.value / 1000}秒无鼠标活动）`)
+      }
+    }, dialogAutoCloseDelay.value)
+  }
+}
+
+// 重置对话框自动关闭定时器（鼠标移动时调用）
+const resetDialogAutoCloseTimer = () => {
+  // 只有在对话框有文本时才重置定时器
+  if (dialogText.value && dialogAutoCloseTimer.value) {
+    // 清除现有定时器
+    clearTimeout(dialogAutoCloseTimer.value)
+    dialogAutoCloseTimer.value = null
+    // 重新启动定时器
+    startDialogAutoCloseTimer()
+  }
+}
+
+// 处理鼠标移动事件
+const handleMouseMove = () => {
+  // 使用防抖，避免频繁触发
+  if (mouseMoveDebounceTimer) {
+    clearTimeout(mouseMoveDebounceTimer)
+  }
+  
+  mouseMoveDebounceTimer = setTimeout(() => {
+    resetDialogAutoCloseTimer()
+    mouseMoveDebounceTimer = null
+  }, 100) // 100ms 防抖
+}
+
 // 处理对话框请求
 const handleRequestDialog = async () => {
   const randomText = getRandomDialogText()
@@ -383,6 +460,8 @@ const handleRequestDialog = async () => {
     }
     dialogText.value = randomText
     console.log('显示随机对话框文本:', randomText)
+    // 启动自动关闭定时器
+    startDialogAutoCloseTimer()
   } else {
     console.warn('当前角色没有可用的文本')
     // 如果没有文本，也清空对话框文本
@@ -400,6 +479,8 @@ const handleLLMResponse = async (responseText) => {
     }
     dialogText.value = responseText
     console.log('显示LLM API返回的文本:', responseText)
+    // 启动自动关闭定时器
+    startDialogAutoCloseTimer()
   } else {
     console.warn('LLM API返回的文本为空')
     dialogText.value = ''
@@ -459,19 +540,34 @@ onMounted(() => {
   visualWifiX.value = 0
   visualWifiY.value = 0
   
+  // 加载对话框配置
+  loadDialogConfig()
+  
   // 加载打卡配置
   loadClockInConfig()
   
   // 加载立绘列表
   loadIllustrations()
+  
+  // 监听鼠标移动事件，用于重置对话框自动关闭定时器
+  window.addEventListener('mousemove', handleMouseMove)
 })
 
-// 组件卸载时清理定时器
+// 组件卸载时清理定时器和事件监听器
 onUnmounted(() => {
   if (clockOutTimer.value) {
     clearTimeout(clockOutTimer.value)
     clockOutTimer.value = null
   }
+  if (dialogAutoCloseTimer.value) {
+    clearTimeout(dialogAutoCloseTimer.value)
+    dialogAutoCloseTimer.value = null
+  }
+  if (mouseMoveDebounceTimer) {
+    clearTimeout(mouseMoveDebounceTimer)
+    mouseMoveDebounceTimer = null
+  }
+  window.removeEventListener('mousemove', handleMouseMove)
 })
 </script>
 
