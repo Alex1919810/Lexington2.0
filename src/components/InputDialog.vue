@@ -22,10 +22,12 @@
           type="text"
           class="input-field"
           placeholder="输入消息..."
+          tabindex="-1"
           @keydown.enter="handleSubmit"
           @keydown.esc="handleClose"
-          @focus="isFocused = true"
-          @blur="isFocused = false"
+          @focus="handleInputFocus"
+          @blur="handleInputBlur"
+          @mousedown="handleInputMouseDown"
         />
       </div>
     </div>
@@ -65,6 +67,7 @@ const inputRef = ref(null)
 const backgroundImage = ref('')
 const isFocused = ref(false)
 const isHovered = ref(false)
+const isUserInitiatedFocus = ref(false) // 标记是否由用户主动点击触发的聚焦
 
 // 窗口尺寸（用于边界校验）
 const windowWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 450)
@@ -235,6 +238,36 @@ const handleClose = () => {
   error.value = ''
   // 输入框始终显示，不需要emit close事件
   // emit('close')
+}
+
+// 处理输入框鼠标按下事件，允许用户主动点击时聚焦
+const handleInputMouseDown = (event) => {
+  // 标记这是用户主动点击触发的聚焦
+  isUserInitiatedFocus.value = true
+  // 允许用户点击输入框时聚焦
+  if (inputRef.value && !isFocused.value) {
+    // 不需要 preventDefault，让浏览器正常处理聚焦
+    inputRef.value.focus()
+  }
+}
+
+// 处理输入框获得焦点事件
+const handleInputFocus = () => {
+  // 只有当用户主动点击时才允许聚焦并显示
+  if (isUserInitiatedFocus.value) {
+    isFocused.value = true
+  } else {
+    // 如果不是用户主动点击，立即失焦
+    if (inputRef.value) {
+      inputRef.value.blur()
+    }
+  }
+}
+
+// 处理输入框失去焦点事件
+const handleInputBlur = () => {
+  isFocused.value = false
+  isUserInitiatedFocus.value = false
 }
 
 // 处理点击外部事件（输入框始终显示，不需要点击外部关闭）

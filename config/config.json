@@ -4,7 +4,7 @@
     "maxHeight": 120,
     "offsetX": 150,
     "offsetY": 50,
-    "autoCloseDelay": 1
+    "autoCloseDelay": 10
   },
   "llm": {
     "apiUrl": "https://api.deepseek.com/chat/completions",
