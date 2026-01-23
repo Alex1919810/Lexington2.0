@@ -66,6 +66,19 @@
     >
       <span class="button-icon">👤</span>
     </button>
+    
+    <!-- 打卡按钮 -->
+    <button 
+      class="sidebar-button clock-in-button" 
+      :class="{ 'clocked-in': isClockedIn }"
+      @click.stop.prevent="handleClockIn"
+      @mousedown.stop.prevent
+      @mouseup.stop.prevent
+      type="button"
+      :title="isClockedIn ? '点击终止计时' : '上班打卡'"
+    >
+      <span class="button-icon">⏰</span>
+    </button>
   </div>
 </template>
 
@@ -97,10 +110,14 @@ const props = defineProps({
   currentCharacter: {
     type: String,
     default: ''
+  },
+  isClockedIn: {
+    type: Boolean,
+    default: false
   }
 })
 
-const emit = defineEmits(['refresh', 'switch', 'toggleFormat', 'switchCharacter'])
+const emit = defineEmits(['refresh', 'switch', 'toggleFormat', 'switchCharacter', 'clock-in'])
 
 // 侧边栏固定显示状态（默认开启，一直可见）
 const isAlwaysVisible = ref(true)
@@ -279,6 +296,16 @@ const handleSwitchCharacter = (event) => {
   console.log('侧边栏：切换角色按钮被点击，当前角色:', props.currentCharacter)
   emit('switchCharacter')
 }
+
+const handleClockIn = (event) => {
+  if (event) {
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+  }
+  console.log('侧边栏：打卡按钮被点击，当前状态:', props.isClockedIn ? '已打卡' : '未打卡')
+  emit('clock-in')
+}
 </script>
 
 <style scoped>
@@ -380,5 +407,22 @@ const handleSwitchCharacter = (event) => {
 
 .pin-button:hover:not(:disabled) {
   background: rgba(150, 100, 255, 1) !important;
+}
+
+/* 打卡按钮的特殊样式 */
+.clock-in-button {
+  background: rgba(100, 150, 255, 0.8) !important;
+}
+
+.clock-in-button:hover:not(:disabled) {
+  background: rgba(100, 150, 255, 1) !important;
+}
+
+.clock-in-button.clocked-in {
+  background: rgba(76, 175, 80, 0.8) !important;
+}
+
+.clock-in-button.clocked-in:hover:not(:disabled) {
+  background: rgba(76, 175, 80, 1) !important;
 }
 </style>

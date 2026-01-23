@@ -15,16 +15,18 @@
       :current-format="currentFormat"
       :characters="characters"
       :current-character="currentCharacter"
+      :is-clocked-in="isClockedIn"
       @refresh="refreshIllustrations"
       @switch="switchIllustration"
       @toggle-format="toggleFormat"
       @switch-character="switchCharacter"
+      @clock-in="handleClockIn"
     />
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, computed, watch, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import VisualWifi from './components/VisualWifi.vue'
 import Sidebar from './components/Sidebar.vue'
 import { createHotReloadManager, provideHotReload } from './composables/useHotReload'
@@ -39,6 +41,18 @@ const currentFormat = ref('gif') // 当前选择的格式：'gif' 或 'png'
 const currentCharacter = ref('') // 当前选择的角色
 const dialogText = ref('') // 对话框文本，默认为空（可以设置为空字符串来隐藏对话框）
 const currentCharacterTexts = ref([]) // 当前角色的文本列表
+
+// 打卡相关状态
+const isClockedIn = ref(false) // 是否正在打卡中
+const clockOutTimer = ref(null) // 下班提醒定时器ID
+
+// 打卡配置
+const clockInConfig = ref({
+  workReminderHours: 0.001,
+  clockInMessage: '打卡成功！',
+  clockOutMessage: '下班时间到了！',
+  clockInCancelMessage: '打卡已终止'
+})
 
 // 创建并提供热加载管理器
 const hotReloadManager = createHotReloadManager()
@@ -244,6 +258,82 @@ const toggleFormat = () => {
   selectFirstOfCurrentFormat()
 }
 
+// 加载打卡配置
+const loadClockInConfig = async () => {
+  if (window.electronAPI && window.electronAPI.getConfig) {
+    try {
+      const result = await window.electronAPI.getConfig()
+      if (result.success && result.config && result.config.clockIn) {
+        clockInConfig.value = {
+          workReminderHours: result.config.clockIn.workReminderHours || 12,
+          clockInMessage: result.config.clockIn.clockInMessage || '打卡成功！',
+          clockOutMessage: result.config.clockIn.clockOutMessage || '下班时间到了！',
+          clockInCancelMessage: result.config.clockIn.clockInCancelMessage || '打卡已终止'
+        }
+        console.log('打卡配置已加载:', clockInConfig.value)
+      }
+    } catch (error) {
+      console.error('加载打卡配置失败:', error)
+    }
+  }
+}
+
+// 处理打卡
+const handleClockIn = async () => {
+  if (isClockedIn.value) {
+    // 如果已打卡，终止计时
+    if (clockOutTimer.value) {
+      clearTimeout(clockOutTimer.value)
+      clockOutTimer.value = null
+    }
+    isClockedIn.value = false
+    
+    // 显示终止打卡对话框
+    const message = clockInConfig.value.clockInCancelMessage
+    if (dialogText.value === message) {
+      dialogText.value = ''
+      await nextTick()
+    }
+    dialogText.value = message
+    console.log('打卡计时已终止，显示对话框:', message)
+  } else {
+    // 如果未打卡，开始打卡
+    isClockedIn.value = true
+    
+    // 显示打卡成功对话框
+    const message = clockInConfig.value.clockInMessage
+    if (dialogText.value === message) {
+      dialogText.value = ''
+      await nextTick()
+    }
+    dialogText.value = message
+    console.log('打卡成功，显示对话框:', message)
+    
+    // 启动定时器，在指定小时后显示下班提醒
+    const hours = clockInConfig.value.workReminderHours
+    const milliseconds = hours * 60 * 60 * 1000
+    clockOutTimer.value = setTimeout(() => {
+      showClockOutReminder()
+    }, milliseconds)
+    console.log(`已启动下班提醒定时器，${hours}小时后提醒`)
+  }
+}
+
+// 显示下班提醒
+const showClockOutReminder = async () => {
+  const message = clockInConfig.value.clockOutMessage
+  if (dialogText.value === message) {
+    dialogText.value = ''
+    await nextTick()
+  }
+  dialogText.value = message
+  console.log('下班提醒，显示对话框:', message)
+  
+  // 重置打卡状态
+  isClockedIn.value = false
+  clockOutTimer.value = null
+}
+
 // 加载角色文本
 const loadCharacterTexts = async (characterName) => {
   if (!characterName) {
@@ -369,8 +459,19 @@ onMounted(() => {
   visualWifiX.value = 0
   visualWifiY.value = 0
   
+  // 加载打卡配置
+  loadClockInConfig()
+  
   // 加载立绘列表
   loadIllustrations()
+})
+
+// 组件卸载时清理定时器
+onUnmounted(() => {
+  if (clockOutTimer.value) {
+    clearTimeout(clockOutTimer.value)
+    clockOutTimer.value = null
+  }
 })
 </script>
 

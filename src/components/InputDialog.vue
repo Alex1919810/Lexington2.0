@@ -1,9 +1,11 @@
 <template>
-  <div 
+  <div
     v-if="visible"
     ref="inputDialogRef"
     class="input-dialog"
-    :style="dialogStyle"
+    :style="{ ...dialogStyle, opacity: dialogOpacity }"
+    @mouseenter="isHovered = true"
+    @mouseleave="isHovered = false"
   >
     <div class="input-dialog-content" :style="mergedDialogContentStyle">
       <div v-if="isLoading" class="loading-state">
@@ -22,6 +24,8 @@
           placeholder="输入消息..."
           @keydown.enter="handleSubmit"
           @keydown.esc="handleClose"
+          @focus="isFocused = true"
+          @blur="isFocused = false"
         />
       </div>
     </div>
@@ -59,6 +63,8 @@ const error = ref('')
 const inputDialogRef = ref(null)
 const inputRef = ref(null)
 const backgroundImage = ref('')
+const isFocused = ref(false)
+const isHovered = ref(false)
 
 // 窗口尺寸（用于边界校验）
 const windowWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 450)
@@ -265,6 +271,11 @@ watch(() => props.position, () => {
   // 位置变化时不需要特殊处理，computed会自动更新
 }, { deep: true })
 
+// 计算输入框的透明度（鼠标悬停、获得焦点或加载中时显示）
+const dialogOpacity = computed(() => {
+  return isFocused.value || isHovered.value || isLoading.value ? 1 : 0
+})
+
 // 监听窗口大小变化，更新窗口尺寸以触发位置重新计算
 const handleWindowResize = () => {
   if (typeof window !== 'undefined') {
@@ -297,14 +308,7 @@ onUnmounted(() => {
   z-index: 101;
   pointer-events: auto;
   -webkit-app-region: no-drag;
-  /* 正常状态透明 */
-  opacity: 0;
   transition: opacity 0.3s ease;
-}
-
-/* 鼠标经过时显示 */
-.input-dialog:hover {
-  opacity: 1;
 }
 
 .input-dialog-content {
