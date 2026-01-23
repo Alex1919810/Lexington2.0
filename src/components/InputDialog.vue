@@ -297,6 +297,14 @@ onUnmounted(() => {
   z-index: 101;
   pointer-events: auto;
   -webkit-app-region: no-drag;
+  /* 正常状态透明 */
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+/* 鼠标经过时显示 */
+.input-dialog:hover {
+  opacity: 1;
 }
 
 .input-dialog-content {
@@ -378,5 +386,7 @@ onUnmounted(() => {
   border-right: 8px solid transparent;
   border-bottom: 8px solid rgba(255, 255, 255, 0.95);
   filter: drop-shadow(0 -2px 2px rgba(0, 0, 0, 0.1));
+  /* 与输入框保持一致的透明行为 */
+  opacity: inherit;
 }
 </style>
