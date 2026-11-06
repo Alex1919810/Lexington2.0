@@ -490,6 +490,84 @@ fn right_click_in_drag_circle_opens_context_menu() {
     );
 }
 #[test]
+fn hovering_artwork_reveals_input_and_keeps_draft_visible_in_both_window_sizes() {
+    for size in [vec2(500., 500.), vec2(800., 600.)] {
+        let ctx = egui::Context::default();
+        let mut app = Pet::from_context(&ctx, true);
+        let mut run = |events| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.ui(ctx),
+            );
+        };
+        for _ in 0..3 {
+            run(vec![]);
+        }
+        run(vec![egui::Event::PointerMoved((size / 2.).to_pos2())]);
+        for _ in 0..3 {
+            run(vec![]);
+        }
+        let bounds = app.input_bounds.expect("input bounds");
+        assert!(
+            Rect::from_min_size(egui::Pos2::ZERO, size).contains_rect(bounds),
+            "input must fit in viewport: {bounds:?}"
+        );
+        assert!(
+            app.input_regions.iter().any(|r| r.contains_rect(bounds)),
+            "hovering the artwork must reveal a clickable input"
+        );
+        let point = bounds.center();
+        for pressed in [true, false] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events: vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ctx| app.ui(ctx),
+            );
+        }
+        assert!(ctx.memory(|m| m.has_focus("message-input".into())));
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)),
+                events: vec![egui::Event::Text("草稿".into())],
+                ..Default::default()
+            },
+            |ctx| app.ui(ctx),
+        );
+        assert_eq!(app.input, "草稿");
+        ctx.memory_mut(|m| m.surrender_focus("message-input".into()));
+        for _ in 0..30 {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events: vec![egui::Event::PointerGone],
+                    ..Default::default()
+                },
+                |ctx| app.ui(ctx),
+            );
+        }
+        let bounds = app.input_bounds.unwrap();
+        assert!(
+            app.input_regions.iter().any(|r| r.contains_rect(bounds)),
+            "draft must remain visible after leaving artwork and losing focus"
+        );
+    }
+}
+#[test]
 fn input_focus_enter_error_and_escape_use_real_ui_events() {
     let ctx = egui::Context::default();
     let mut app = Pet::from_context(&ctx, true);

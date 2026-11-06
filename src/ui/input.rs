@@ -66,14 +66,17 @@ impl Pet {
         // Transparent areas receive no native motion events. Poll for hover
         // discovery without claiming clicks or stealing another app's focus.
         let pointer = self.drag_window.as_ref().map_or(pointer, |window| {
-            window.pointer_position(ctx.pixels_per_point())
+            window.pointer_position(ctx.pixels_per_point()).or(pointer)
         });
-        let hovered = pointer.is_some_and(|p| (input_transform * rect).contains(p));
+        let hovered = pointer.is_some_and(|p| {
+            (input_transform * rect).contains(p)
+                || (input_transform * Rect::from_center_size(center, vec2(450., 450.))).contains(p)
+        });
         self.input_bounds = Some(input_transform * rect);
         let focused = ctx.memory(|m| m.has_focus(id));
         let alpha = ctx.animate_value_with_time(
             egui::Id::new("input-alpha"),
-            if hovered || focused || self.busy {
+            if hovered || focused || self.busy || !self.input.is_empty() || !self.error.is_empty() {
                 1.
             } else {
                 0.
