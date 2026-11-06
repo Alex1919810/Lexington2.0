@@ -60,7 +60,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary")
     parser.add_argument("screenshot")
-    parser.add_argument("mode", choices=["drag", "drag-edges", "click-through", "clock", "input", "pin", "idle"], default="clock", nargs="?")
+    parser.add_argument("mode", choices=["drag", "drag-edges", "position", "click-through", "clock", "input", "pin", "idle"], default="clock", nargs="?")
     parser.add_argument("--production", action="store_true", help="check the default 500x500 window")
     args = parser.parse_args()
     display = X.XOpenDisplay(None)
@@ -227,6 +227,22 @@ def main():
                 assert size(window) == original_size, "drag changed window dimensions"
             button(False)
             print("Drag threshold, distance, reversal, capture and size: passed")
+        elif args.mode == "position":
+            width, height = size(root)
+            start = (original[0] + original_size[0] // 2 - 60,
+                     original[1] + original_size[1] // 2 - 20)
+            # Leave transparent margins offscreen while the actual artwork stays reachable.
+            expected = (width - original_size[0] // 2 + 46,
+                        height - original_size[1] // 2 - 18)
+            target = (start[0] + expected[0] - original[0],
+                      start[1] + expected[1] - original[1])
+            warp(*start)
+            button(True)
+            for step in range(1, 6):
+                warp(round(start[0] + (target[0] - start[0]) * step / 5),
+                     round(start[1] + (target[1] - start[1]) * step / 5))
+            button(False)
+            assert position(window) == expected, (position(window), expected)
         elif args.mode in ("clock", "pin"):
             sidebar_x = original_size[0] / 2 - 315
             if sidebar_x < 0:
@@ -240,6 +256,20 @@ def main():
         if args.mode != "input":
             warp(0, 0)
         assert process.wait(timeout=25 if args.mode in ("drag-edges", "click-through") else 15) == 0, process.stderr.read().decode()
+        if args.mode == "position":
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            deadline = time.monotonic() + 10
+            window = None
+            while not window and time.monotonic() < deadline:
+                assert process.poll() is None, process.stderr.read().decode()
+                window = find(root, process.pid)
+                time.sleep(0.05)
+            assert window, "reopened window did not appear"
+            time.sleep(1)
+            assert position(window) == expected, ("position was not restored", position(window), expected)
+            assert size(window) == original_size, "restoring position changed the window size"
+            assert process.wait(timeout=15) == 0, process.stderr.read().decode()
+            print("Close and reopen preserves exact position, offscreen transparent margins and window size: passed")
     finally:
         T.XTestFakeButtonEvent(display, 1, 0, 0)
         X.XSync(display, 0)

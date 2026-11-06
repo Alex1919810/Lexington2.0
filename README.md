@@ -12,7 +12,7 @@
 cargo run --release --locked
 ```
 
-默认窗口为 500×500、透明、无边框、置顶。开发窗口与原版相同，为 800×600，位置 (100,100)：
+默认窗口为 500×500、透明、无边框、置顶。开发窗口与原版相同，为 800×600，首次位置 (100,100)，之后恢复上次位置：
 
 ```bash
 cargo run --locked -- --dev
@@ -50,6 +50,7 @@ Windows 在对应系统使用 `cargo build --release --locked` 构建，将 `tar
 - 对话：每 50ms 显示一个字符，鼠标活动重置自动关闭计时；点击圆形区域和气泡以外的位置关闭。
 - 输入框：在立绘下方悬停显示，点击后输入；Enter 发送给 Codex，等待时显示“Lexington正在思考”，回复流式显示在气泡中；连接期间发送的第一条消息会等待会话就绪。任务进行中按 Escape 中断，否则清空输入和错误。请求失败显示错误。窗口启动时不自动聚焦输入框。
 - 右键宠物：设置、关于、关闭。
+- 正常退出后保存窗口位置，下次启动恢复；普通与开发模式分别记录，窗口尺寸保持不变。屏幕布局变化导致立绘不可见时回到默认位置（原生 Wayland 由合成器管理位置）。
 - X11/XWayland 下透明空白区域可点击穿透；立绘按当前帧轮廓接收鼠标，侧栏、输入框和打开的窗口保留交互。
 
 | 侧栏按钮 | 功能 |
@@ -156,13 +157,14 @@ cargo run --locked -- --dev --screenshot /tmp/lexington.png
 ```bash
 python3 scripts/native-smoke.py target/release/lexington /tmp/lexington-drag.png drag
 python3 scripts/native-smoke.py target/release/lexington /tmp/lexington-edges.png drag-edges --production
+python3 scripts/native-smoke.py target/release/lexington /tmp/lexington-position.png position --production
 python3 scripts/native-smoke.py target/release/lexington /tmp/lexington-click-through.png click-through --production
 python3 scripts/native-smoke.py target/release/lexington /tmp/lexington-clock.png clock
 python3 scripts/native-smoke.py target/release/lexington /tmp/lexington-input.png input
 python3 scripts/native-smoke.py target/release/lexington /tmp/lexington-production.png idle --production
 ```
 
-脚本验证窗口尺寸、置顶、隐藏任务栏和窗口切换器；`drag` 还断言 5px 阈值、精确位移、反向移动、离开初始命中区域和拖动后尺寸。`click-through` 检查透明空白处将点击传给真实底层窗口，立绘与侧栏仍接收点击。`drag-edges` 从可见立绘按下并检查四角、贴边释放与拖回，透明窗体允许部分出屏且保持尺寸。`pin` 模式切换侧栏显示模式，配合独立 `XDG_DATA_HOME` 可验证重启后的保存结果（Linux 状态文件为 `$XDG_DATA_HOME/lexington/app.ron`，默认位于 `~/.local/share/lexington/`）。测试宜使用 Xephyr + 窗口管理器等独立 X11 桌面，避免影响工作桌面。
+脚本验证窗口尺寸、置顶、隐藏任务栏和窗口切换器；`drag` 还断言 5px 阈值、精确位移、反向移动、离开初始命中区域和拖动后尺寸。`click-through` 检查透明空白处将点击传给真实底层窗口，立绘与侧栏仍接收点击。`drag-edges` 从可见立绘按下并检查四角、贴边释放与拖回，透明窗体允许部分出屏且保持尺寸。`position` 模式拖动后正常关闭并再次启动，检查位置及尺寸恢复。`pin` 模式切换侧栏显示模式，配合独立 `XDG_DATA_HOME` 可验证重启后的保存结果（Linux 状态文件为 `$XDG_DATA_HOME/lexington/app.ron`，默认位于 `~/.local/share/lexington/`）。测试宜使用 Xephyr + 窗口管理器等独立 X11 桌面，避免影响工作桌面。
 
 已在 Linux X11 独立桌面验证上述窗口行为、500×500 普通窗口、800×600 开发窗口和侧栏状态保存，并对照原 Vue 渲染检查立绘、气泡、输入框和默认宠物。
 

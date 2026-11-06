@@ -149,6 +149,56 @@ impl DragWindow {
             )
         })
     }
+    pub fn position(&self, pixels_per_point: f32) -> Option<eframe::egui::Pos2> {
+        use x11rb::protocol::xproto::ConnectionExt;
+        let position = self
+            .connection
+            .translate_coordinates(self.window, self.root, 0, 0)
+            .ok()?
+            .reply()
+            .ok()?;
+        Some(eframe::egui::pos2(
+            f32::from(position.dst_x) / pixels_per_point,
+            f32::from(position.dst_y) / pixels_per_point,
+        ))
+    }
+    pub fn monitors(&self, pixels_per_point: f32) -> Vec<eframe::egui::Rect> {
+        use eframe::egui::{Rect, pos2, vec2};
+        use x11rb::protocol::{randr::ConnectionExt as _, xproto::ConnectionExt as _};
+        if let Some(mut monitors) = self
+            .connection
+            .randr_get_monitors(self.root, true)
+            .ok()
+            .and_then(|reply| reply.reply().ok())
+            .map(|reply| reply.monitors)
+        {
+            monitors.sort_by_key(|monitor| !monitor.primary);
+            let monitors: Vec<_> = monitors
+                .into_iter()
+                .filter(|m| m.width > 0 && m.height > 0)
+                .map(|m| {
+                    Rect::from_min_size(
+                        pos2(f32::from(m.x), f32::from(m.y)) / pixels_per_point,
+                        vec2(f32::from(m.width), f32::from(m.height)) / pixels_per_point,
+                    )
+                })
+                .collect();
+            if !monitors.is_empty() {
+                return monitors;
+            }
+        }
+        self.connection
+            .get_geometry(self.root)
+            .ok()
+            .and_then(|reply| reply.reply().ok())
+            .map(|geometry| {
+                vec![Rect::from_min_size(
+                    eframe::egui::Pos2::ZERO,
+                    vec2(f32::from(geometry.width), f32::from(geometry.height)) / pixels_per_point,
+                )]
+            })
+            .unwrap_or_default()
+    }
     pub fn set_input_regions(
         &mut self,
         regions: &[eframe::egui::Rect],

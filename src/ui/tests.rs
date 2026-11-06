@@ -35,6 +35,87 @@ fn click(app: &mut Pet, ctx: &egui::Context, point: egui::Pos2) {
     );
 }
 #[test]
+fn window_position_persists_without_size_or_dev_mode_leaking_and_recovers_offscreen() {
+    use eframe::App;
+    #[derive(Default)]
+    struct Storage(std::collections::HashMap<String, String>);
+    impl eframe::Storage for Storage {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.into(), value);
+        }
+        fn flush(&mut self) {}
+    }
+    let root = std::env::temp_dir().join(format!("lexington-position-{}", rand::random::<u64>()));
+    crate::backend::config::Config::save_no_approval(&root, false).unwrap();
+    let ctx = egui::Context::default();
+    let run = |app: &mut Pet, position: egui::Pos2| {
+        let mut raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(500., 500.))),
+            ..Default::default()
+        };
+        let viewport = raw.viewports.get_mut(&egui::ViewportId::ROOT).unwrap();
+        viewport.monitor_size = Some(vec2(1080., 720.));
+        viewport.outer_rect = Some(Rect::from_min_size(position, vec2(500., 500.)));
+        ctx.run(raw, |ctx| app.ui(ctx))
+    };
+    let mut storage = Storage::default();
+    let mut app = Pet::from_root(&ctx, false, root.clone());
+    run(&mut app, egui::Pos2::ZERO);
+    let edge = pos2(-260., 480.);
+    run(&mut app, edge);
+    app.save(&mut storage);
+    assert_eq!(
+        serde_json::from_str::<[f32; 2]>(&storage.0["windowPosition"]).unwrap(),
+        [edge.x, edge.y]
+    );
+    assert!(storage.0["window"].is_empty());
+
+    let mut reopened = Pet::from_root(&ctx, true, root.clone());
+    reopened.restore_state(&storage);
+    let output = run(&mut reopened, egui::Pos2::ZERO);
+    assert_eq!(
+        reopened.window_position,
+        Some(edge),
+        "partly offscreen position must survive"
+    );
+    assert!(!reopened.pinned);
+    assert!(output.viewport_output[&egui::ViewportId::ROOT].commands.iter().any(|cmd| matches!(cmd, egui::ViewportCommand::InnerSize(size) if *size == vec2(500.,500.))));
+
+    let mut dev = Pet::from_root(&ctx, true, root.clone());
+    dev.dev = true;
+    dev.restore_state(&storage);
+    assert!(dev.window_position.is_none());
+    let output = run(&mut dev, egui::Pos2::ZERO);
+    assert_eq!(dev.window_position, Some(pos2(100., 100.)));
+    assert!(output.viewport_output[&egui::ViewportId::ROOT].commands.iter().any(|cmd| matches!(cmd, egui::ViewportCommand::InnerSize(size) if *size == vec2(800.,600.))));
+    run(&mut dev, pos2(80., 70.));
+    dev.save(&mut storage);
+    assert_eq!(storage.0["devWindowPosition"], "[80.0,70.0]");
+    assert_eq!(storage.0["windowPosition"], "[-260.0,480.0]");
+
+    for value in [
+        "[50000,50000]",
+        "[-50000,-50000]",
+        "[1e30,1e30]",
+        "[null,0]",
+        "invalid",
+    ] {
+        storage.0.insert("windowPosition".into(), value.into());
+        let mut app = Pet::from_root(&ctx, true, root.clone());
+        app.restore_state(&storage);
+        run(&mut app, egui::Pos2::ZERO);
+        assert_eq!(
+            app.window_position,
+            Some(pos2(560., 50.)),
+            "invalid or unavailable screen: {value}"
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+#[test]
 fn input_regions_exclude_blank_background_and_clear_closed_windows() {
     let root =
         std::env::temp_dir().join(format!("lexington-input-regions-{}", rand::random::<u64>()));

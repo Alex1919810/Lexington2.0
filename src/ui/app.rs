@@ -5,7 +5,7 @@ use crate::{
     },
     tools::{paths, platform},
 };
-use eframe::egui::{self, Rect, Vec2, pos2, vec2};
+use eframe::egui::{self, Rect, Vec2, vec2};
 use std::{
     collections::VecDeque,
     path::PathBuf,
@@ -50,6 +50,10 @@ pub struct Pet {
     pub(super) capture_delay: Duration,
     pub(super) started: Instant,
     pub(super) placed: bool,
+    pub(super) dev: bool,
+    pub(super) window_position: Option<egui::Pos2>,
+    #[cfg(target_os = "linux")]
+    window_pixels_per_point: f32,
     pub(super) raised: bool,
     pub(super) hints_applied: bool,
     pub(super) about: bool,
@@ -59,17 +63,30 @@ pub struct Pet {
 impl Pet {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         platform::configure(cc);
-        let pinned = cc
-            .storage
-            .and_then(|s| s.get_string("sidebarAlwaysVisible"))
-            .is_none_or(|s| s != "false");
-        let mut app = Self::from_context(&cc.egui_ctx, pinned);
+        let mut app = Self::from_context(&cc.egui_ctx, true);
+        if let Some(storage) = cc.storage {
+            app.restore_state(storage);
+        }
         #[cfg(target_os = "linux")]
         {
             app.drag_window = platform::DragWindow::new(cc);
         }
         app.start_codex(&cc.egui_ctx);
         app
+    }
+    pub(super) fn restore_state(&mut self, storage: &dyn eframe::Storage) {
+        self.pinned = storage
+            .get_string("sidebarAlwaysVisible")
+            .is_none_or(|s| s != "false");
+        self.window_position = storage
+            .get_string(if self.dev {
+                "devWindowPosition"
+            } else {
+                "windowPosition"
+            })
+            .and_then(|s| serde_json::from_str::<[f32; 2]>(&s).ok())
+            .map(egui::Pos2::from)
+            .filter(|position| position.is_finite());
     }
     pub(super) fn from_context(ctx: &egui::Context, pinned: bool) -> Self {
         Self::from_root(ctx, pinned, paths::resource_root())
@@ -125,6 +142,10 @@ impl Pet {
             ),
             started: Instant::now(),
             placed: false,
+            dev: std::env::args().any(|arg| arg == "--dev"),
+            window_position: None,
+            #[cfg(target_os = "linux")]
+            window_pixels_per_point: 1.,
             raised: false,
             hints_applied: false,
             about: false,
@@ -197,6 +218,25 @@ impl eframe::App for Pet {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string("window", String::new());
         storage.set_string("sidebarAlwaysVisible", self.pinned.to_string());
+        let position = self.window_position;
+        #[cfg(target_os = "linux")]
+        let position = self
+            .drag_window
+            .as_ref()
+            .and_then(|window| window.position(self.window_pixels_per_point))
+            .or(position);
+        if self.placed
+            && let Some(position) = position.filter(|p| p.is_finite())
+        {
+            storage.set_string(
+                if self.dev {
+                    "devWindowPosition"
+                } else {
+                    "windowPosition"
+                },
+                serde_json::to_string(&[position.x, position.y]).expect("finite window position"),
+            );
+        }
     }
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.ui(ctx);
@@ -205,6 +245,10 @@ impl eframe::App for Pet {
 impl Pet {
     pub(super) fn ui(&mut self, ctx: &egui::Context) {
         self.input_regions.clear();
+        #[cfg(target_os = "linux")]
+        {
+            self.window_pixels_per_point = ctx.pixels_per_point();
+        }
         ctx.request_repaint_after(Duration::from_millis(16));
         #[cfg(target_os = "linux")]
         if let Some(window) = &mut self.drag_window {
@@ -229,18 +273,69 @@ impl Pet {
         if !self.placed
             && let Some(size) = ctx.input(|i| i.viewport().monitor_size)
         {
-            let dev = std::env::args().any(|a| a == "--dev");
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(if dev {
+            let window_size = if self.dev {
                 vec2(800., 600.)
             } else {
                 vec2(500., 500.)
-            }));
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(if dev {
-                pos2(100., 100.)
+            };
+            let mut monitors = vec![Rect::from_min_size(egui::Pos2::ZERO, size)];
+            #[cfg(target_os = "linux")]
+            if let Some(window) = &self.drag_window {
+                let native_monitors = window.monitors(ctx.pixels_per_point());
+                if !native_monitors.is_empty() {
+                    monitors = native_monitors;
+                }
+            }
+            // Use visible artwork, not the transparent window rectangle, when
+            // checking whether a saved position is still reachable on any monitor.
+            let content = if let Some(picture) = &self.picture {
+                let image_size = picture.size() * (450. / picture.size().max_elem()).min(1.);
+                let image_origin = (window_size - image_size) / 2.;
+                picture
+                    .opaque_regions
+                    .iter()
+                    .fold(Rect::NOTHING, |bounds, region| {
+                        bounds.union(Rect::from_min_max(
+                            (image_origin + region.min.to_vec2() * image_size).to_pos2(),
+                            (image_origin + region.max.to_vec2() * image_size).to_pos2(),
+                        ))
+                    })
             } else {
-                pos2((size.x - 520.).max(0.), 50.)
-            }));
+                Rect::from_center_size((window_size / 2.).to_pos2(), vec2(120., 120.))
+            };
+            let position = self
+                .window_position
+                .filter(|position| {
+                    position.is_finite()
+                        && monitors.iter().any(|monitor| {
+                            let visible = content.translate(position.to_vec2()).intersect(*monitor);
+                            visible.width() >= 24. && visible.height() >= 24.
+                        })
+                })
+                .unwrap_or_else(|| {
+                    let monitor = monitors[0];
+                    monitor.min
+                        + if self.dev {
+                            vec2(100., 100.)
+                        } else {
+                            vec2((monitor.width() - 520.).max(0.), 50.)
+                        }
+                });
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(window_size));
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(position));
+            self.window_position = Some(position);
             self.placed = true;
+        } else if self.placed {
+            let position = ctx.input(|i| i.viewport().outer_rect.map(|rect| rect.min));
+            #[cfg(target_os = "linux")]
+            let position = self
+                .drag_window
+                .as_ref()
+                .and_then(|window| window.position(ctx.pixels_per_point()))
+                .or(position);
+            if let Some(position) = position.filter(|p| p.is_finite()) {
+                self.window_position = Some(position);
+            }
         }
         if self.capture.is_some()
             && !self.capture_requested
