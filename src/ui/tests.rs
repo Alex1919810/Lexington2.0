@@ -61,6 +61,34 @@ fn real_resources_select_cycle_refresh_and_change_format() {
     assert!(app.picture.is_some());
 }
 #[test]
+fn sidebar_switches_matching_damage_versions_and_separate_next_queues() {
+    let ctx = egui::Context::default();
+    let mut app = Pet::from_context(&ctx, true);
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![]);
+    assert_eq!(
+        app.library.selected_path().unwrap().file_name().unwrap(),
+        "BiKiNi_Normal.gif"
+    );
+    for (point, filename, damaged) in [
+        (pos2(110., 225.), "BiKiNi_Damage.gif", true),
+        (pos2(110., 275.), "Flower_Damage.gif", true),
+        (pos2(110., 225.), "Flower_Normal.gif", false),
+        (pos2(110., 275.), "Moon_Normal.gif", false),
+        (pos2(110., 325.), "Moon_Normal.png", false),
+        (pos2(110., 225.), "Moon_Damage.png", true),
+        (pos2(110., 275.), "Normal_Damage.png", true),
+    ] {
+        click(&mut app, &ctx, point);
+        assert_eq!(
+            app.library.selected_path().unwrap().file_name().unwrap(),
+            filename
+        );
+        assert_eq!(app.library.damaged, damaged);
+        assert!(app.picture.is_some());
+    }
+}
+#[test]
 fn native_pointer_events_drive_sidebar_and_pet_click_cycle() {
     let ctx = egui::Context::default();
     let mut app = Pet::from_context(&ctx, true);
@@ -248,7 +276,7 @@ fn enter_delivers_successful_llm_reply_through_the_native_ui() {
     std::fs::remove_dir_all(fixture).unwrap();
 }
 #[test]
-fn empty_library_and_character_format_fallback_work_through_buttons() {
+fn empty_library_character_format_fallback_and_resource_reload() {
     let fixture =
         std::env::temp_dir().join(format!("lexington-characters-{}", rand::random::<u64>()));
     std::fs::create_dir_all(&fixture).unwrap();
@@ -273,7 +301,7 @@ fn empty_library_and_character_format_fallback_work_through_buttons() {
     }
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![]);
-    click(&mut app, &ctx, pos2(110., 225.));
+    app.refresh(&ctx);
     assert_eq!(app.library.character, "a");
     assert_eq!(app.library.format, "png");
     assert_eq!(app.library.texts, ["a的台词"]);
@@ -305,7 +333,7 @@ fn empty_library_and_character_format_fallback_work_through_buttons() {
     image::RgbImage::from_pixel(4, 3, image::Rgb([255, 255, 255]))
         .save(&background)
         .unwrap();
-    click(&mut app, &ctx, pos2(110., 225.));
+    app.refresh(&ctx);
     assert_eq!(app.library.character, "a");
     assert_eq!(app.library.format, "png");
     assert_eq!(app.library.texts, ["更新后的台词"]);
@@ -313,7 +341,7 @@ fn empty_library_and_character_format_fallback_work_through_buttons() {
     assert_eq!(app.dialog_bg.as_ref().unwrap().size(), vec2(4., 3.));
     std::fs::remove_file(background).unwrap();
     std::fs::remove_file(fixture.join("resource/illustration/a/png/sample.png")).unwrap();
-    click(&mut app, &ctx, pos2(110., 225.));
+    app.refresh(&ctx);
     assert!(app.dialog_bg.is_none());
     assert!(app.picture.is_none());
     assert!(app.library.selected.is_none());

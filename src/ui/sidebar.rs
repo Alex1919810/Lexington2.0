@@ -36,10 +36,21 @@ impl Pet {
                     "👤",
                     "⏰",
                 ];
+                let can_toggle_damage = self.library.damage_counterpart().is_some();
                 let tips = [
                     "切换侧边栏显示模式",
-                    "刷新列表",
-                    "切换到下一个立绘",
+                    if !can_toggle_damage {
+                        "当前立绘没有对应的正常／战损版本"
+                    } else if self.library.damaged {
+                        "切换为对应的正常立绘"
+                    } else {
+                        "切换为对应的战损立绘"
+                    },
+                    if self.library.damaged {
+                        "下一张战损立绘"
+                    } else {
+                        "下一张正常立绘"
+                    },
                     "切换 GIF/PNG 格式",
                     "切换角色",
                     if self.clock_state.started.is_some() {
@@ -49,9 +60,16 @@ impl Pet {
                     },
                 ];
                 for n in 0..6 {
-                    let enabled = !((n == 2 || n == 4) && self.library.illustrations.is_empty());
+                    let enabled = match n {
+                        1 => can_toggle_damage,
+                        2 => self.library.selected.is_some(),
+                        3 | 4 => !self.library.illustrations.is_empty(),
+                        _ => true,
+                    };
                     let color = if n == 0 {
                         Color32::from_rgba_unmultiplied(150, 100, 255, 204)
+                    } else if n == 1 && self.library.damaged {
+                        Color32::from_rgba_unmultiplied(255, 152, 0, 204)
                     } else if n == 5 && self.clock_state.started.is_some() {
                         Color32::from_rgba_unmultiplied(76, 175, 80, 204)
                     } else {
@@ -126,7 +144,10 @@ impl Pet {
                         handled = true;
                         match n {
                             0 => self.pinned = !self.pinned,
-                            1 => self.refresh(ctx),
+                            1 => {
+                                self.library.toggle_damage();
+                                self.load_picture(ctx);
+                            }
                             2 => {
                                 self.library.next_illustration();
                                 self.load_picture(ctx);

@@ -7,8 +7,10 @@ pub struct CharacterState {
     pub selected: Option<usize>,
     pub character: String,
     pub format: String,
+    pub damaged: bool,
     pub texts: Vec<String>,
 }
+
 impl Default for CharacterState {
     fn default() -> Self {
         Self {
@@ -16,6 +18,7 @@ impl Default for CharacterState {
             selected: None,
             character: String::new(),
             format: "gif".into(),
+            damaged: false,
             texts: vec![],
         }
     }
@@ -35,7 +38,11 @@ impl CharacterState {
         self.illustrations
             .iter()
             .enumerate()
-            .filter(|(_, i)| i.character == self.character && i.format == self.format)
+            .filter(|(_, i)| {
+                i.character == self.character
+                    && i.format == self.format
+                    && i.damaged == self.damaged
+            })
             .map(|(n, _)| n)
             .collect()
     }
@@ -43,17 +50,38 @@ impl CharacterState {
         self.selected.map(|i| self.illustrations[i].path.as_path())
     }
     pub fn select_first(&mut self) {
-        if self.filtered().is_empty() {
-            let other = if self.format == "gif" { "png" } else { "gif" };
-            if self
-                .illustrations
-                .iter()
-                .any(|ill| ill.character == self.character && ill.format == other)
-            {
-                self.format = other.into();
-            }
+        let other = if self.format == "gif" { "png" } else { "gif" };
+        self.selected = [
+            (self.format.as_str(), self.damaged),
+            (other, self.damaged),
+            (self.format.as_str(), !self.damaged),
+            (other, !self.damaged),
+        ]
+        .into_iter()
+        .find_map(|(format, damaged)| {
+            self.illustrations.iter().position(|ill| {
+                ill.character == self.character && ill.format == format && ill.damaged == damaged
+            })
+        });
+        if let Some(i) = self.selected {
+            self.format.clone_from(&self.illustrations[i].format);
+            self.damaged = self.illustrations[i].damaged;
         }
-        self.selected = self.filtered().first().copied();
+    }
+    pub fn damage_counterpart(&self) -> Option<usize> {
+        let current = self.illustrations.get(self.selected?)?;
+        self.illustrations.iter().position(|ill| {
+            ill.character == current.character
+                && ill.format == current.format
+                && ill.outfit.eq_ignore_ascii_case(&current.outfit)
+                && ill.damaged != current.damaged
+        })
+    }
+    pub fn toggle_damage(&mut self) {
+        if let Some(i) = self.damage_counterpart() {
+            self.selected = Some(i);
+            self.damaged = self.illustrations[i].damaged;
+        }
     }
     pub fn refresh(&mut self, root: &Path) {
         let old = self.selected.map(|i| self.illustrations[i].path.clone());
@@ -66,6 +94,7 @@ impl CharacterState {
             old.and_then(|path| self.illustrations.iter().position(|ill| ill.path == path))
         {
             self.selected = Some(i);
+            self.damaged = self.illustrations[i].damaged;
         } else {
             self.select_first();
         }
@@ -73,15 +102,23 @@ impl CharacterState {
     }
     pub fn next_illustration(&mut self) {
         let indices = self.filtered();
-        let current = indices
+        let next = indices
             .iter()
             .position(|i| Some(*i) == self.selected)
-            .unwrap_or(0);
-        self.selected = indices.get((current + 1) % indices.len().max(1)).copied();
+            .map_or(0, |current| (current + 1) % indices.len());
+        self.selected = indices.get(next).copied();
     }
     pub fn toggle_format(&mut self) {
+        let outfit = self.selected.map(|i| self.illustrations[i].outfit.clone());
         self.format = if self.format == "gif" { "png" } else { "gif" }.into();
         self.select_first();
+        if let Some(i) = self.filtered().into_iter().find(|&i| {
+            outfit
+                .as_ref()
+                .is_some_and(|outfit| self.illustrations[i].outfit.eq_ignore_ascii_case(outfit))
+        }) {
+            self.selected = Some(i);
+        }
     }
     pub fn next_character(&mut self, root: &Path) {
         let names = self.characters();
@@ -91,5 +128,133 @@ impl CharacterState {
             self.texts = resources::texts(root, &self.character);
             self.select_first();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_outfits_pair_both_ways_and_wrap_in_separate_queues() {
+        let mut library = CharacterState::default();
+        library.refresh(Path::new(env!("CARGO_MANIFEST_DIR")));
+        assert!(!library.damaged, "start with normal artwork");
+        for (format, count) in [("gif", 7), ("png", 8)] {
+            library.format = format.into();
+            for damaged in [false, true] {
+                library.damaged = damaged;
+                library.select_first();
+                let first = library.selected;
+                let mut outfits = std::collections::BTreeSet::new();
+                for _ in 0..count {
+                    let index = library.selected.unwrap();
+                    let current = &library.illustrations[index];
+                    assert_eq!(current.format, format);
+                    assert_eq!(current.damaged, damaged);
+                    assert!(
+                        outfits.insert(current.outfit.clone()),
+                        "duplicate outfit in queue"
+                    );
+                    let counterpart = &library.illustrations[library.damage_counterpart().unwrap()];
+                    assert_eq!(current.outfit, counterpart.outfit);
+                    assert_eq!(current.character, counterpart.character);
+                    assert_eq!(counterpart.format, format);
+                    assert_ne!(current.damaged, counterpart.damaged);
+                    library.toggle_damage();
+                    assert_eq!(library.damaged, !damaged);
+                    library.toggle_damage();
+                    assert_eq!(library.selected, Some(index));
+                    library.next_illustration();
+                }
+                assert_eq!(outfits.len(), count);
+                assert_eq!(
+                    library.selected, first,
+                    "queue must wrap after every outfit"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn missing_pairs_stay_put_and_reload_recovers_with_matching_state_first() {
+        let root = std::env::temp_dir().join(format!("lexington-pairs-{}", rand::random::<u64>()));
+        for path in [
+            "a/gif/A_Normal.gif",
+            "a/png/A_Damage.png",
+            "b/gif/A_Damage.gif",
+            "a/gif/Summer_Event_Normal.gif",
+            "a/gif/summer_event_dAmAgE.GIF",
+            "a/gif/Legacy.gif",
+        ] {
+            let path = root.join("resource/illustration").join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, []).unwrap();
+        }
+        let mut library = CharacterState::default();
+        library.refresh(&root);
+        assert_eq!(
+            library.selected_path().unwrap().file_name().unwrap(),
+            "A_Normal.gif"
+        );
+        assert!(
+            library.damage_counterpart().is_none(),
+            "never pair across characters or formats"
+        );
+        let old = library.selected;
+        library.toggle_damage();
+        assert_eq!(library.selected, old);
+        assert!(!library.damaged);
+        library.next_illustration();
+        assert_eq!(
+            library.illustrations[library.selected.unwrap()].outfit,
+            "Legacy"
+        );
+        library.next_illustration();
+        assert_eq!(
+            library.illustrations[library.selected.unwrap()].outfit,
+            "Summer_Event"
+        );
+        library.toggle_damage();
+        assert_eq!(
+            library.selected_path().unwrap().file_name().unwrap(),
+            "summer_event_dAmAgE.GIF"
+        );
+        library.next_illustration();
+        assert_eq!(library.filtered().len(), 1);
+        assert!(library.damaged);
+        library.toggle_format();
+        assert_eq!(library.format, "png");
+        assert!(library.damaged);
+        assert_eq!(
+            library.selected_path().unwrap().file_name().unwrap(),
+            "A_Damage.png"
+        );
+        library.next_character(&root);
+        assert_eq!(library.character, "b");
+        assert_eq!(library.format, "gif");
+        assert!(library.damaged);
+        assert!(library.damage_counterpart().is_none());
+        // Removing the selected character and the GIF damage queue should prefer
+        // PNG damage over jumping into the normal GIF queue.
+        std::fs::remove_dir_all(root.join("resource/illustration/b")).unwrap();
+        std::fs::remove_file(root.join("resource/illustration/a/gif/summer_event_dAmAgE.GIF"))
+            .unwrap();
+        library.refresh(&root);
+        assert_eq!(library.character, "a");
+        assert_eq!(library.format, "png");
+        assert!(library.damaged);
+        std::fs::remove_file(root.join("resource/illustration/a/png/A_Damage.png")).unwrap();
+        library.refresh(&root);
+        assert_eq!(library.format, "gif");
+        assert!(
+            !library.damaged,
+            "fall back to normal only if damage is unavailable"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+        library.refresh(&root);
+        library.next_illustration();
+        library.toggle_damage();
+        assert!(library.selected.is_none());
     }
 }

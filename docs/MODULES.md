@@ -45,14 +45,14 @@ docs/
 | 文件 | 职责与主要接口 | 依赖及约束 |
 |---|---|---|
 | `ui/mod.rs` | 声明 UI 子模块，对入口导出 `Pet` | 具体组件保持在 UI 模块内部 |
-| `ui/app.rs` | 定义 `Pet` 与 `eframe::App`；初始化、刷新资源与纹理、每帧编排、结果接收、自动关闭对话、点击外部关闭、设置/关于菜单、截图、窗口状态和侧栏模式持久化。主要接口：`Pet::new`、`refresh`、`load_picture`、`ui` | 持有 `CharacterState`、`ClockState`、请求接收通道及 UI 状态；协调其他 UI 模块、配置/资源和平台适配。只持久化侧栏模式，不恢复窗口及 egui 缓存；截图事件读取后须释放 input 锁再发窗口命令 |
+| `ui/app.rs` | 定义 `Pet` 与 `eframe::App`；初始化、刷新资源与纹理、每帧编排、结果接收、自动关闭对话、点击外部关闭、设置/关于菜单、截图、窗口状态和侧栏模式持久化。主要接口：`Pet::new`、`refresh`、`load_picture`、`ui`；设置窗口提供“重新加载资源与配置”按钮 | 持有 `CharacterState`、`ClockState`、请求接收通道及 UI 状态；协调其他 UI 模块、配置/资源和平台适配。设置窗口关闭/折叠时不触发重载；在窗口回调结束后执行刷新。只持久化侧栏模式，不恢复窗口及 egui 缓存；截图事件读取后须释放 input 锁再发窗口命令 |
 | `ui/pet.rs` | `pet_ui` 绘制立绘/默认宠物和阴影，设置宠物、对话、输入层的共同变换，处理圆形命中、点击与拖动；默认宠物几何和变换测试也在此 | 使用 `Picture` 和平台拖动；返回尺寸、变换和点击结果供 app 编排。容器 450×450，侧栏不参与共同缩放；拖动阈值 5 个逻辑像素 |
-| `ui/sidebar.rs` | `sidebar` 绘制六个按钮、悬停提示与动画，报告本帧是否处理点击；`clock` 将打卡结果转为对话 | 调用角色状态的刷新/切换能力及 `ClockState::toggle`，选择变更后通过 app 重载纹理。按钮 40×40、间隔 10；侧栏点击须阻止同帧外部点击关闭 |
+| `ui/sidebar.rs` | `sidebar` 绘制六个按钮、悬停提示与动画，报告本帧是否处理点击；↻ 调用 `toggle_damage` 切换同服装正常/战损，▶ 调用 `next_illustration` 在当前状态队列循环；`clock` 将打卡结果转为对话 | 用 `damage_counterpart` 判断切换按钮是否可用，缺少同角色/格式/服装配对时禁用；战损时 ↻ 为橙色，悬停提示显示切换目标和下一张所属队列。选择变更后通过 app 重载纹理；按钮 40×40、间隔 10；侧栏点击须阻止同帧外部点击关闭 |
 | `ui/dialog.rs` | `say` 初始化消息与打字机状态，`click_pet` 处理随机台词/显示全文/关闭，`bubble` 测量和绘制对话及滚动区 | 台词来自 `CharacterState`；使用共享样式与背景纹理。每 50ms 一个字符，按全文保留高度，14px 字号、21px 行高、10/14px 内边距；自动关闭与外部点击由 app 协调 |
 | `ui/input.rs` | `submit` 发起聊天，`input_ui` 管理输入框位置、焦点、悬停、加载动画、错误展示、Enter 与 Escape | 提交时重新读取配置并调用 `llm::request`，完成回调只请求重绘；app 接收结果并显示对话。Enter 同时检查 `has_focus`/`lost_focus`；启动不抢焦点，占位色固定 #999 |
 | `ui/assets.rs` | `Picture::load/size/texture` 将解码像素上传到 GPU，复用纹理并更新动画帧；`icons` 加载内置侧栏图标；保留 GIF 像素、循环、局部帧处置与纹理复用回归测试 | 调用 `tools::gif::Decoder`，不实现循环策略；立绘/背景使用线性 mipmap。字体和图标的 `include_bytes!` 路径相对 `src/ui/` |
 | `ui/style.rs` | `install` 注册字体和浅色主题；`font`、`bubble_tail`、`draw_bubble`、`draw_shadow` 提供共同绘制规则 | 使用 egui 与 `Picture`；CJK TTC 使用简体中文 face index 2；对话尾尖距左边 28px，输入尾尖居中。气泡 Area 的溢出策略由对话/输入组件保持 `constrain(false)` |
-| `ui/tests.rs` | 使用真实 egui 指针和键盘事件验证组件协作：侧栏、角色与格式、刷新恢复、对话、打卡、输入、HTTP 回复及中文排版 | 使用本地 HTTP 模拟和临时配置，不访问真实 API；GIF 和几何专项测试靠近各自 UI 实现 |
+| `ui/tests.rs` | 使用真实 egui 指针和键盘事件验证组件协作：侧栏、正常/战损对应切换、下一张的状态隔离、跨格式保留服装、角色与格式、对话、打卡、输入、HTTP 回复及中文排版；直接调用 `refresh` 验证资源重载恢复 | 使用本地 HTTP 模拟和临时配置，不访问真实 API；GIF 和几何专项测试靠近各自 UI 实现 |
 
 ## 后端功能
 
@@ -60,8 +60,8 @@ docs/
 |---|---|---|
 | `backend/mod.rs` | 声明后端子模块，集中保留配置、扫描和 HTTP 的测试及共享临时目录夹具 | 测试使用本地模拟 HTTP，不连接外部 API |
 | `backend/config.rs` | 定义 `Config`、`DialogConfig`、`LlmConfig`、`ClockConfig`；`Config::load` 读取配置、补默认值并限制尺寸和计时范围 | 标准库文件读取和 serde；保持 `config/config.json` 的 camelCase 兼容及错误时默认回退，不记录 API key |
-| `backend/resources.rs` | 定义 `Illustration`；`illustrations` 扫描排序立绘，`background` 选择首张支持的背景，`texts` 读取非空角色台词 | 标准库文件读取和 serde_json；保留 `resource/` 布局，按目录识别角色与格式，拒绝台词路径穿越，不解码图片 |
-| `backend/character.rs` | `CharacterState` 持有资源列表、角色、格式、选中索引与台词；`refresh` 保留当前路径并恢复失效选择，`next_illustration`、`toggle_format`、`next_character` 实现切换，`selected_path` 提供当前资源路径 | 仅依赖资源扫描模块和标准库；默认 GIF、缺失格式自动回退。只选择路径，纹理和加载失败的默认宠物由 UI 处理 |
+| `backend/resources.rs` | 定义 `Illustration`（含服装名 `outfit` 和战损标记 `damaged`）；`illustrations` 扫描排序立绘并解析配对元数据，`background` 选择首张支持的背景，`texts` 读取非空角色台词 | 标准库文件读取和 serde_json；只解析文件名最后的 `_Normal` / `_Damage` 后缀，ASCII 大小写不敏感；无后缀按正常处理，其完整文件名主体作为服装名。保留 `resource/` 布局，按目录识别角色与格式，拒绝台词路径穿越，不解码图片 |
+| `backend/character.rs` | `CharacterState` 持有资源列表、角色、格式、正常/战损状态、选中索引与台词；`filtered` 返回当前角色/格式/状态的队列，`damage_counterpart` 查同服装的相反状态，`toggle_damage` 双向切换；`refresh` 保留当前路径并恢复失效选择，`next_illustration` 循环当前队列，`toggle_format`/`next_character` 切换格式/角色，`selected_path` 提供路径 | 仅依赖资源扫描模块和标准库；默认 GIF + 正常。配对严格限制同角色、同格式、服装名 ASCII 大小写不敏感，缺少对应版本时不切换；格式切换尽量保留同服装。选取回退顺序为当前格式/当前状态 → 另一格式/当前状态 → 当前格式/另一状态 → 另一格式/另一状态。含现有 15 对资源双向匹配、独立队列循环、后缀大小写、缺失配对及删除恢复测试；只选择路径，纹理和默认宠物由 UI 处理 |
 | `backend/llm.rs` | `call_llm` 执行兼容 Chat Completions 的 HTTP 请求和响应/错误解析；`request` 启动工作线程，返回 `Receiver<Result<String, String>>`，完成后调用 `wake` 回调 | 配置、reqwest、serde_json、标准库通道/线程；只发当前用户消息，超时 60 秒。回调不绑定任何 UI 框架；UI 负责防止重复提交与结果展示 |
 | `backend/clock.rs` | `ClockState::toggle` 开始/取消计时并返回配置消息，`poll` 检查到期并清除状态、返回下班消息 | 仅依赖 `ClockConfig` 与 `Instant`；不绘制对话、不发起系统通知 |
 

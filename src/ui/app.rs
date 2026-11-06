@@ -276,12 +276,16 @@ impl Pet {
             .show(ctx, |ui| {
                 ui.label("Lexington 2.0\n纯 Rust 桌面宠物\neframe / egui");
             });
-        egui::Window::new("设置")
+        let reload = egui::Window::new("设置")
             .open(&mut self.settings)
             .show(ctx, |ui| {
                 ui.label("配置文件：");
                 ui.label(self.root.join("config/config.json").display().to_string());
-                ui.label("修改后点击侧边栏 ↻ 重新加载。");
-            });
+                ui.button("重新加载资源与配置").clicked()
+            })
+            .is_some_and(|response| response.inner == Some(true));
+        if reload {
+            self.refresh(ctx);
+        }
     }
 }

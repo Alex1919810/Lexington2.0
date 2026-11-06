@@ -18,6 +18,8 @@ pub struct Illustration {
     pub path: PathBuf,
     pub character: String,
     pub format: String,
+    pub outfit: String,
+    pub damaged: bool,
 }
 pub fn illustrations(root: &Path) -> Vec<Illustration> {
     let mut result = Vec::new();
@@ -33,10 +35,23 @@ pub fn illustrations(root: &Path) -> Vec<Illustration> {
                         .extension()
                         .is_some_and(|ext| ext.eq_ignore_ascii_case(format))
                 {
+                    let stem = path.file_stem().unwrap().to_string_lossy();
+                    // Only the final state suffix belongs to the pairing key.
+                    // In particular, Normal_Normal is the normal state of outfit Normal.
+                    let variant = stem.rsplit_once('_').filter(|(_, state)| {
+                        state.eq_ignore_ascii_case("normal") || state.eq_ignore_ascii_case("damage")
+                    });
+                    let outfit = variant
+                        .map_or(stem.as_ref(), |(outfit, _)| outfit)
+                        .to_owned();
+                    let damaged =
+                        variant.is_some_and(|(_, state)| state.eq_ignore_ascii_case("damage"));
                     result.push(Illustration {
                         path,
                         character: character.clone(),
                         format: format.into(),
+                        outfit,
+                        damaged,
                     });
                 }
             }

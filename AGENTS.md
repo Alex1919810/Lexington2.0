@@ -5,6 +5,7 @@
 - **后续任何代码文件改动，都必须同步检查并更新 `docs/MODULES.md` 中对应模块的职责、主要接口、依赖与约束；新增、删除、移动或重命名文件时同步更新目录结构。** 实现内部调整而职责不变时，也须同步补充或修正相关行为/约束说明，不能只修改代码而遗漏模块文档。README 的结构概览发生变化时也要同步。
 - 后端不依赖 egui/UI：`CharacterState` 管理资源选择与格式回退，`ClockState` 管理打卡状态；UI 根据后端选中的路径加载纹理。`llm::request` 用完成回调唤醒 UI，通过标准库通道返回结果。`tools::gif::Decoder` 只产生 RGBA 像素并控制帧时序，`ui::assets::Picture` 持有并复用 GPU 纹理；平台适配是工具层中允许依赖 eframe 的边界。
 - 保持 `resource/` 目录结构和 `config/config.json` 的 camelCase 字段兼容。资源根目录按 `LEXINGTON_HOME`、可执行文件旁、当前目录依次寻找。安装升级须保留用户配置/API key；日志和测试结果不得泄露密钥。
+- 立绘仅按文件名最后的 `_Normal` / `_Damage` 后缀识别状态（ASCII 大小写不敏感），前面的完整服装名用于同角色、同格式配对；`Normal_Normal` 的服装名是 `Normal`，无后缀文件视为正常。侧栏 ↻ 切换对应正常/战损图，缺少配对时禁用；▶ 仅循环当前状态队列，默认正常。格式切换尽量保留服装和状态，资源回退优先保留状态。现有 GIF 为 7 对，PNG 为 8 对；原重载入口已移到“设置 → 重新加载资源与配置”。
 - 原版立绘组件为 450×450，侧栏按钮为 40×40、间隔 10；发布窗口 500×500，`--dev` 为 800×600。气泡按全文测高、21px 行高、最大高度限制；输入框沿用组件局部坐标边界检查后再平移到窗口中心。
 - GIF 需要逐帧解码，不能常驻全部 RGBA 帧（现有文件 1024×1024、67 帧，曾触发系统杀进程）。现有 14 个立绘 GIF 均没有循环扩展，`gif` 解码器将其报告为 `Repeat::Finite(0)`；桌宠播放策略将其视为无限循环，避免播一轮后定格，显式有限循环次数仍保留。Chromium 对不足 20ms 的帧延迟使用 100ms。回归测试需验证跨轮次的实际帧内容及现有立绘完整一轮后重回首帧，且复用纹理。
 - 图片启用线性 mipmap 过滤，避免高分辨率背景缩小后产生锯齿。字体采用 Noto Sans CJK TTC 的简体中文 face（index 2）、Liberation 和 Noto Sans Math；不要额外用 `FontTweak.scale` 按 ascent/descent 放大，14px 中文字宽应接近 14px。输入占位文字需显式指定 #999，避免系统主题改变颜色。
@@ -18,4 +19,5 @@
 - 验证：`cargo fmt --check`、`cargo test --locked`、`cargo clippy --locked --all-targets -- -D warnings`。测试包含现有 30 张立绘、UI 指针/键盘事件、模拟 HTTP、计时、GIF 元数据。`cargo run -- --dev --screenshot /tmp/lexington.png` 验证真实渲染。
 - `python3 scripts/native-smoke.py target/release/lexington /tmp/lexington.png drag` 验证置顶/隐藏任务栏和精确拖动；模式还包括 `clock`、`input`、`pin`、`idle`，`--production` 验证普通尺寸。脚本需 libX11/libXtst，会移动鼠标并恢复位置，宜用 Xephyr + 窗口管理器隔离测试。拖动验收需核对阈值、精确位移、反向移动和尺寸。侧栏跨启动验证使用独立 `XDG_DATA_HOME`，检查两次退出后 `lexington/app.ron` 中的固定模式。
 - 打包：`bash scripts/package.sh`；用户级安装：`bash scripts/install-linux.sh`，菜单和桌面快捷方式显示名固定为 `Lexington`，桌面文件固定为 `Lexington.desktop`。安装时迁移旧 `lexington.desktop`，避免重复；菜单 ID 保持 `lexington.desktop`。使用 `xdg-user-dir DESKTOP`，设置可执行权限并尝试标记可信。
+- **每次完成项目修改后，必须构建最新 release 版本并同步更新桌面安装版，不能只修改源码或生成构建产物。** 运行 `bash scripts/install-linux.sh` 完成 `cargo build --release --locked` 和用户级安装，保留已有配置/API key；核对安装二进制与 `target/release/lexington` 一致，桌面 `Lexington` 快捷方式指向该安装版。若旧实例仍在运行，需安全重启为新版本并验证。该构建/安装流程已获用户持续授权，无需每次再询问；Git 提交和推送仍须单独明确授权。
 - 未经用户明确授权，不执行 git commit 或 git push。代码任务结束前将新增且验证过的项目知识合并进本文件，避免记录临时进度。
