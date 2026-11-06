@@ -44,7 +44,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary")
     parser.add_argument("screenshot")
-    parser.add_argument("mode", choices=["drag", "clock", "input", "pin", "idle"], default="clock", nargs="?")
+    parser.add_argument("mode", choices=["drag", "drag-edges", "clock", "input", "pin", "idle"], default="clock", nargs="?")
     parser.add_argument("--production", action="store_true", help="check the default 500x500 window")
     args = parser.parse_args()
     display = X.XOpenDisplay(None)
@@ -110,7 +110,8 @@ def main():
     process = None
     saved_pointer = pointer()
     try:
-        command = [args.binary, "--screenshot", args.screenshot, "--screenshot-delay", "7"]
+        command = [args.binary, "--screenshot", args.screenshot, "--screenshot-delay",
+                   "20" if args.mode == "drag-edges" else "7"]
         if not args.production:
             command.append("--dev")
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -135,7 +136,36 @@ def main():
         X.XSetInputFocus(display, window, 2, 0)
         X.XSync(display, 0)
         time.sleep(0.2)
-        if args.mode == "drag":
+        if args.mode == "drag-edges":
+            width, height = size(root)
+            start = (original[0] + original_size[0] // 2,
+                     original[1] + original_size[1] // 2)
+            warp(*start)
+            button(True)
+            # Pet center follows the pointer while transparent margins cross screen edges.
+            for target in [(width - 2, height - 2), (2, height - 2), (2, 2), (width - 2, 2), start]:
+                current = pointer()
+                steps = max(abs(target[0] - current[0]), abs(target[1] - current[1])) // 120 + 1
+                for step in range(1, steps + 1):
+                    warp(round(current[0] + (target[0] - current[0]) * step / steps),
+                         round(current[1] + (target[1] - current[1]) * step / steps))
+                expected = (original[0] + target[0] - start[0],
+                            original[1] + target[1] - start[1])
+                deadline = time.monotonic() + 0.6
+                while position(window) != expected and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                assert position(window) == expected, ("screen edge clamped", position(window), expected)
+                assert size(window) == original_size, "edge drag changed window dimensions"
+                if target != start:
+                    button(False)
+                    time.sleep(0.3)
+                    assert position(window) == expected, "window snapped back after releasing at screen edge"
+                    button(True)
+            button(False)
+            time.sleep(0.3)
+            assert position(window) == original, "window moved back after releasing drag"
+            print("Pet center reaches all screen corners; transparent margins can leave screen: passed")
+        elif args.mode == "drag":
             start = (original[0] + original_size[0] // 2 - 60,
                      original[1] + original_size[1] // 2 - 20)
             warp(*start)
@@ -165,8 +195,10 @@ def main():
             warp(original[0] + original_size[0] // 2, original[1] + original_size[1] - 40)
         if args.mode != "input":
             warp(0, 0)
-        assert process.wait(timeout=15) == 0, process.stderr.read().decode()
+        assert process.wait(timeout=25 if args.mode == "drag-edges" else 15) == 0, process.stderr.read().decode()
     finally:
+        T.XTestFakeButtonEvent(display, 1, 0, 0)
+        X.XSync(display, 0)
         if process is not None:
             if process.poll() is None:
                 process.terminate()

@@ -10,6 +10,7 @@ pub(super) struct PendingPrompt {
 }
 impl Pet {
     pub(super) fn start_codex(&mut self, ctx: &egui::Context) {
+        self.codex_restart_pending = false;
         // Drop the previous process before replacing it, so restarts cannot leave orphan servers.
         self.codex = None;
         self.busy = false;

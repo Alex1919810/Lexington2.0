@@ -35,6 +35,116 @@ fn click(app: &mut Pet, ctx: &egui::Context, point: egui::Pos2) {
     );
 }
 #[test]
+fn settings_approval_checkbox_persists_without_restarting_and_controls_next_turn() {
+    let root =
+        std::env::temp_dir().join(format!("lexington-approval-ui-{}", rand::random::<u64>()));
+    let ctx = egui::Context::default();
+    crate::backend::config::Config::save_no_approval(&root, false).unwrap();
+    let mut app = Pet::from_root(&ctx, false, root.clone());
+    app.codex = Some(crate::backend::codex::Client::mock("normal"));
+    app.settings = true;
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![]);
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0., 0.), vec2(800., 600.))),
+            ..Default::default()
+        },
+        |ctx| app.ui(ctx),
+    );
+    let mut shapes: Vec<_> = output.shapes.iter().map(|s| &s.shape).collect();
+    let mut target = None;
+    while let Some(shape) = shapes.pop() {
+        match shape {
+            egui::Shape::Vec(children) => shapes.extend(children),
+            egui::Shape::Text(text) if text.galley.job.text == "无需审批" => {
+                target = Some(text.pos + vec2(8., text.galley.size().y / 2.));
+                break;
+            }
+            _ => {}
+        }
+    }
+    let target = target.expect("settings approval checkbox");
+    for enabled in [true, false] {
+        click(&mut app, &ctx, target);
+        assert_eq!(app.config.codex.no_approval, enabled);
+        assert_eq!(
+            crate::backend::config::Config::load(&root)
+                .codex
+                .no_approval,
+            enabled
+        );
+        app.input = if enabled { "no-approval" } else { "restore" }.into();
+        app.submit(&ctx);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.busy && Instant::now() < deadline {
+            frame(&mut app, &ctx, vec![]);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!app.busy);
+        assert!(app.error.is_empty(), "{}", app.error);
+    }
+    assert!(
+        app.text.starts_with("第2轮："),
+        "must keep the same conversation"
+    );
+    drop(app);
+    std::fs::remove_dir_all(root).unwrap();
+}
+#[test]
+fn config_hot_reload_keeps_valid_settings_and_defers_connection_changes_until_idle() {
+    let root = std::env::temp_dir().join(format!("lexington-hot-config-{}", rand::random::<u64>()));
+    crate::backend::config::Config::save_no_approval(&root, false).unwrap();
+    let path = root.join("config/config.json");
+    let ctx = egui::Context::default();
+    let mut app = Pet::from_root(&ctx, false, root.clone());
+    app.codex = Some(crate::backend::codex::Client::mock("normal"));
+    app.input = "interrupt".into();
+    app.submit(&ctx);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.text.is_empty() && Instant::now() < deadline {
+        frame(&mut app, &ctx, vec![]);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(app.busy && !app.text.is_empty());
+    let mut document = serde_json::json!({"dialog":{"width":314},"clockIn":{"workReminderHours":2},"codex":{"noApproval":true}});
+    std::fs::write(&path, document.to_string()).unwrap();
+    app.last_config_check = Instant::now() - Duration::from_secs(1);
+    frame(&mut app, &ctx, vec![]);
+    assert_eq!(app.config.dialog.width, 314.);
+    assert_eq!(app.config.clock_in.work_reminder_hours, 2.);
+    assert!(app.config.codex.no_approval && app.busy);
+    assert!(
+        !app.codex_restart_pending,
+        "ordinary settings must preserve the conversation"
+    );
+    std::fs::write(&path, "{").unwrap();
+    app.last_config_check = Instant::now() - Duration::from_secs(1);
+    frame(&mut app, &ctx, vec![]);
+    assert_eq!(app.config.dialog.width, 314.);
+    assert!(!app.config_error.is_empty());
+    document["codex"]["executable"] = root.join("missing-codex").to_str().unwrap().into();
+    std::fs::write(&path, document.to_string()).unwrap();
+    app.last_config_check = Instant::now() - Duration::from_secs(1);
+    frame(&mut app, &ctx, vec![]);
+    assert!(app.codex_restart_pending && app.busy && app.codex.is_some());
+    assert!(app.config_error.is_empty());
+    app.codex.as_ref().unwrap().interrupt();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.codex_restart_pending && Instant::now() < deadline {
+        frame(&mut app, &ctx, vec![]);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!app.busy && !app.codex_restart_pending);
+    assert!(
+        app.codex.is_none(),
+        "the updated executable must be used after the old turn ends"
+    );
+    assert_eq!(app.codex_status, "启动失败");
+    drop(app);
+    std::fs::remove_dir_all(root).unwrap();
+}
+#[test]
 fn real_resources_select_cycle_refresh_and_change_format() {
     let ctx = egui::Context::default();
     let mut app = Pet::from_context(&ctx, true);

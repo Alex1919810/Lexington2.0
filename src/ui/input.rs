@@ -12,7 +12,9 @@ impl Pet {
             .codex
             .as_ref()
             .ok_or_else(|| "Codex 未启动，请在设置中重启会话。".to_owned())
-            .and_then(|codex| codex.submit(self.input.trim().to_owned()));
+            .and_then(|codex| {
+                codex.submit(self.input.trim().to_owned(), self.config.codex.no_approval)
+            });
         match result {
             Ok(()) => {
                 self.busy = true;

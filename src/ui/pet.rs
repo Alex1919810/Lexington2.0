@@ -93,9 +93,8 @@ impl Pet {
                     if inside
                         && response.is_pointer_button_down_on()
                         && let Some(window) = &mut self.drag_window
-                        && let Some(offset) = ctx.input(|i| i.pointer.press_origin())
                     {
-                        window.arm(offset, ctx.pixels_per_point());
+                        window.arm(ctx.pixels_per_point());
                     }
                 }
                 let moved = ctx.input(|i| {

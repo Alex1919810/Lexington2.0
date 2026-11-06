@@ -129,23 +129,42 @@ impl DragWindow {
             eprintln!("设置桌宠窗口属性失败: {error}");
         }
     }
-    pub fn arm(&mut self, offset: eframe::egui::Pos2, pixels_per_point: f32) {
+    pub fn focus(&self) {
+        use x11rb::protocol::xproto::{ConnectionExt, InputFocus};
+        // Desktop overlays are not automatically focused by every window manager.
+        if let Ok(cookie) =
+            self.connection
+                .set_input_focus(InputFocus::PARENT, self.window, x11rb::CURRENT_TIME)
+        {
+            let _ = cookie.check();
+        }
+    }
+    pub fn arm(&mut self, pixels_per_point: f32) {
         use x11rb::protocol::xproto::ConnectionExt;
-        self.drag = self
-            .connection
-            .translate_coordinates(self.window, self.root, 0, 0)
-            .ok()
-            .and_then(|reply| reply.reply().ok())
-            .map(|window| {
-                DragAnchor::new(
-                    (window.dst_x.into(), window.dst_y.into()),
-                    (
-                        (offset.x * pixels_per_point).round() as i32,
-                        (offset.y * pixels_per_point).round() as i32,
-                    ),
-                    pixels_per_point,
-                )
-            });
+        self.drag = (|| {
+            let window = self
+                .connection
+                .translate_coordinates(self.window, self.root, 0, 0)
+                .ok()?
+                .reply()
+                .ok()?;
+            let pointer = self
+                .connection
+                .query_pointer(self.root)
+                .ok()?
+                .reply()
+                .ok()?;
+            // After a move under a stationary pointer, egui's cached local cursor may
+            // predate ConfigureNotify. Capture both coordinates from X11 when pressed.
+            Some(DragAnchor::new(
+                (window.dst_x.into(), window.dst_y.into()),
+                (
+                    i32::from(pointer.root_x) - i32::from(window.dst_x),
+                    i32::from(pointer.root_y) - i32::from(window.dst_y),
+                ),
+                pixels_per_point,
+            ))
+        })();
     }
     pub fn update(&mut self) -> bool {
         use x11rb::{

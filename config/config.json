@@ -14,6 +14,7 @@
   },
   "codex": {
     "executable": "codex",
-    "workingDirectory": null
+    "workingDirectory": null,
+    "noApproval": false
   }
 }

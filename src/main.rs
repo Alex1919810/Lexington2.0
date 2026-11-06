@@ -39,7 +39,9 @@ fn main() -> eframe::Result {
     if std::env::var_os("DISPLAY").is_some() && !std::env::args().any(|a| a == "--wayland") {
         use winit::platform::x11::EventLoopBuilderExtX11;
         options.window_builder = Some(Box::new(|attributes| {
-            attributes.with_window_type(egui::X11WindowType::Utility)
+            // Mutter constrains Utility windows by their full transparent rectangle.
+            // A desktop overlay can cross monitor edges; omit struts so it reserves no space.
+            attributes.with_window_type(egui::X11WindowType::Dock)
         }));
         options.event_loop_builder = Some(Box::new(|builder| {
             builder.with_x11();

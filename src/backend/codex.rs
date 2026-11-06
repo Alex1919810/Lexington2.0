@@ -43,7 +43,7 @@ pub struct Question {
 }
 
 enum Input {
-    Submit(String),
+    Submit(String, bool),
     Interrupt,
     Reply(Value, Value),
     Incoming(Value),
@@ -202,9 +202,9 @@ impl Client {
             worker: Some(worker),
         })
     }
-    pub fn submit(&self, text: String) -> Result<(), String> {
+    pub fn submit(&self, text: String, no_approval: bool) -> Result<(), String> {
         self.input
-            .send(Input::Submit(text))
+            .send(Input::Submit(text, no_approval))
             .map_err(|_| "Codex 已停止，请在设置中重启会话。".into())
     }
     pub fn interrupt(&self) {
@@ -263,6 +263,7 @@ fn communicate(
         json!({"clientInfo":{"name":"lexington","title":"Lexington","version":env!("CARGO_PKG_VERSION")}}),
     )?;
     let mut thread_id: Option<String> = None;
+    let mut original_approval_policy = Value::Null;
     let mut turn_id: Option<String> = None;
     let mut active_request = None;
     let mut approval_items = HashMap::<String, Value>::new();
@@ -277,7 +278,7 @@ fn communicate(
             return Err("Codex 连接超时，请检查登录状态并在设置中重启会话。".into());
         }
         if let Some(thread) = &thread_id {
-            if !active && let Some(text) = queued.take() {
+            if !active && let Some((text, no_approval)) = queued.take() {
                 if interrupt {
                     interrupt = false;
                     emit(Event::Finished { interrupted: true });
@@ -289,7 +290,8 @@ fn communicate(
                         &mut pending,
                         &mut next,
                         "turn/start",
-                        json!({"threadId":thread,"input":[{"type":"text","text":text}]}),
+                        json!({"threadId":thread,"input":[{"type":"text","text":text}],
+                            "approvalPolicy": if no_approval { json!("never") } else { original_approval_policy.clone() }}),
                     )?;
                     active = true;
                 }
@@ -313,11 +315,11 @@ fn communicate(
         match input {
             Input::Shutdown => return Ok(()),
             Input::End(error) => return Err(error),
-            Input::Submit(text) => {
+            Input::Submit(text, no_approval) => {
                 if active || queued.is_some() {
                     emit(Event::Notice("Lexington正在思考，请稍候。".into()));
                 } else {
-                    queued = Some(text);
+                    queued = Some((text, no_approval));
                 }
             }
             Input::Interrupt => {
@@ -544,6 +546,12 @@ fn communicate(
                             )?;
                         }
                         "thread/start" => {
+                            // turn/start overrides persist, so retain the local baseline to restore it.
+                            original_approval_policy = message["result"]
+                                .get("approvalPolicy")
+                                .filter(|p| !p.is_null())
+                                .cloned()
+                                .ok_or("Codex 未返回审批策略，请检查 CLI 版本。")?;
                             thread_id = Some(
                                 message["result"]["thread"]["id"]
                                     .as_str()
@@ -603,10 +611,29 @@ mod tests {
         }
     }
     #[test]
+    fn no_approval_applies_per_turn_and_restores_original_policy_without_restarting() {
+        for mode in ["normal", "granular"] {
+            let client = Client::mock(mode);
+            // The first input can request the mode even before startup completes.
+            for (text, enabled) in [
+                ("no-approval", true),
+                ("restore", false),
+                ("no-approval-again", true),
+            ] {
+                client.submit(text.into(), enabled).unwrap();
+                wait_for(&client, |e| {
+                    matches!(e, Event::Finished { interrupted: false })
+                });
+            }
+        }
+    }
+    #[test]
     fn startup_queues_input_streams_unicode_and_reuses_thread_without_duplicate_final_text() {
         let client = Client::mock("normal");
         // Submit before Ready, as a user can do immediately after launching the app.
-        client.submit("你好 \"提督\"\n第二行".into()).unwrap();
+        client
+            .submit("你好 \"提督\"\n第二行".into(), false)
+            .unwrap();
         wait_for(&client, |e| matches!(e, Event::Ready));
         for (turn, text) in [
             (1, "你好 \"提督\"\n第二行"),
@@ -615,7 +642,7 @@ mod tests {
             (4, "第四次"),
         ] {
             if turn != 1 {
-                client.submit(text.into()).unwrap();
+                client.submit(text.into(), false).unwrap();
             }
             let mut reply = String::new();
             loop {
@@ -645,7 +672,7 @@ mod tests {
     fn exit_cleans_descendants_holding_stdout_without_hanging() {
         let client = Client::mock("normal");
         wait_for(&client, |e| matches!(e, Event::Ready));
-        client.submit("descendant".into()).unwrap();
+        client.submit("descendant".into(), false).unwrap();
         let Event::Text { text, .. } = wait_for(&client, |e| matches!(e, Event::Text { .. }))
         else {
             unreachable!()
@@ -682,7 +709,7 @@ mod tests {
     fn approvals_questions_and_unsupported_requests_do_not_hang_turns() {
         let client = Client::mock("normal");
         wait_for(&client, |e| matches!(e, Event::Ready));
-        client.submit("approve".into()).unwrap();
+        client.submit("approve".into(), false).unwrap();
         let Event::Prompt(prompt) = wait_for(&client, |e| matches!(e, Event::Prompt(_))) else {
             unreachable!()
         };
@@ -692,7 +719,7 @@ mod tests {
         wait_for(&client, |e| {
             matches!(e, Event::Finished { interrupted: false })
         });
-        client.submit("file-approval".into()).unwrap();
+        client.submit("file-approval".into(), false).unwrap();
         let Event::Prompt(prompt) = wait_for(&client, |e| matches!(e, Event::Prompt(_))) else {
             unreachable!()
         };
@@ -702,7 +729,7 @@ mod tests {
         wait_for(&client, |e| {
             matches!(e, Event::Finished { interrupted: false })
         });
-        client.submit("question".into()).unwrap();
+        client.submit("question".into(), false).unwrap();
         let Event::Prompt(prompt) = wait_for(&client, |e| matches!(e, Event::Prompt(_))) else {
             unreachable!()
         };
@@ -712,7 +739,7 @@ mod tests {
         wait_for(&client, |e| {
             matches!(e, Event::Finished { interrupted: false })
         });
-        client.submit("unsupported".into()).unwrap();
+        client.submit("unsupported".into(), false).unwrap();
         wait_for(&client, |e| matches!(e, Event::Notice(_)));
         wait_for(&client, |e| {
             matches!(e, Event::Finished { interrupted: false })
@@ -722,24 +749,24 @@ mod tests {
     fn interrupt_and_turn_error_allow_the_next_message_and_crashes_are_reported() {
         let client = Client::mock("normal");
         wait_for(&client, |e| matches!(e, Event::Ready));
-        client.submit("interrupt".into()).unwrap();
+        client.submit("interrupt".into(), false).unwrap();
         wait_for(&client, |e| matches!(e, Event::Text { .. }));
         client.interrupt();
         wait_for(&client, |e| {
             matches!(e, Event::Finished { interrupted: true })
         });
-        client.submit("fail".into()).unwrap();
+        client.submit("fail".into(), false).unwrap();
         let Event::Failed(error) = wait_for(&client, |e| matches!(e, Event::Failed(_))) else {
             unreachable!()
         };
         assert_eq!(error, "模拟请求失败");
-        client.submit("恢复".into()).unwrap();
+        client.submit("恢复".into(), false).unwrap();
         wait_for(&client, |e| {
             matches!(e, Event::Finished { interrupted: false })
         });
         let crashed = Client::mock("crash");
         wait_for(&crashed, |e| matches!(e, Event::Ready));
-        crashed.submit("hello".into()).unwrap();
+        crashed.submit("hello".into(), false).unwrap();
         wait_for(&crashed, |e| matches!(e, Event::Stopped(_)));
         let rejected = Client::mock("startup-error");
         let Event::Stopped(error) = wait_for(&rejected, |e| matches!(e, Event::Stopped(_))) else {

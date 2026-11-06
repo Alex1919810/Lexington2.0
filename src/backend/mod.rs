@@ -64,8 +64,36 @@ mod tests {
         assert_eq!(config.dialog.max_height, 120.);
         assert_eq!(config.codex.executable, "codex");
         assert!(config.codex.working_directory.is_none());
+        assert!(!config.codex.no_approval);
         assert_eq!(config.clock_in.clock_in_message, "打卡成功！");
         root.write("config/config.json", "bad json");
         assert_eq!(Config::load(&root.0).dialog.width, 200.);
+    }
+    #[test]
+    fn approval_setting_preserves_unknown_config_and_refuses_to_overwrite_invalid_files() {
+        let root = Fixture::new();
+        root.write("config/config.json", r#"{"dialog":{"offsetX":37},"llm":{"apiKey":"fixture-value"},"custom":[1,2],"codex":{"executable":"custom-codex","workingDirectory":"project","future":true}}"#);
+        let path = root.0.join("config/config.json");
+        let before: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        for enabled in [true, false] {
+            Config::save_no_approval(&root.0, enabled).unwrap();
+            assert_eq!(Config::load(&root.0).codex.no_approval, enabled);
+            let mut saved: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            assert_eq!(
+                saved["codex"].as_object_mut().unwrap().remove("noApproval"),
+                Some(enabled.into())
+            );
+            assert_eq!(saved, before);
+        }
+        for invalid in ["not json", "[]", r#"{"codex":null}"#] {
+            fs::write(&path, invalid).unwrap();
+            assert!(Config::save_no_approval(&root.0, true).is_err());
+            assert_eq!(fs::read_to_string(&path).unwrap(), invalid);
+        }
+        assert_eq!(fs::read_dir(root.0.join("config")).unwrap().count(), 1);
+        let missing = Fixture::new();
+        Config::save_no_approval(&missing.0, true).unwrap();
+        assert!(Config::load(&missing.0).codex.no_approval);
     }
 }

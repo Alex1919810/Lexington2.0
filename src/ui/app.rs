@@ -9,7 +9,7 @@ use eframe::egui::{self, Rect, Vec2, pos2, vec2};
 use std::{
     collections::VecDeque,
     path::PathBuf,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 pub struct Pet {
@@ -17,6 +17,10 @@ pub struct Pet {
     pub(super) drag_window: Option<platform::DragWindow>,
     pub(super) root: PathBuf,
     pub(super) config: Config,
+    pub(super) last_config_check: Instant,
+    pub(super) config_stamp: Option<(SystemTime, u64)>,
+    pub(super) config_error: String,
+    pub(super) codex_restart_pending: bool,
     pub(super) library: CharacterState,
     pub(super) picture: Option<Picture>,
     pub(super) icons: Vec<egui::TextureHandle>,
@@ -76,6 +80,10 @@ impl Pet {
             drag_window: None,
             root,
             config,
+            last_config_check: Instant::now(),
+            config_stamp: None,
+            config_error: String::new(),
+            codex_restart_pending: false,
             library: CharacterState::default(),
             picture: None,
             icons: super::assets::icons(ctx),
@@ -130,13 +138,29 @@ impl Pet {
         });
     }
     pub(super) fn refresh(&mut self, ctx: &egui::Context) {
-        self.config = Config::load(&self.root);
+        self.reload_config();
         self.library.refresh(&self.root);
         self.load_picture(ctx);
         self.dialog_bg = resources::background(&self.root, "dialog")
             .and_then(|path| Picture::load(ctx, &path).ok());
         self.input_bg = resources::background(&self.root, "input")
             .and_then(|path| Picture::load(ctx, &path).ok());
+    }
+    pub(super) fn reload_config(&mut self) {
+        self.last_config_check = Instant::now();
+        self.config_stamp = std::fs::metadata(self.root.join("config/config.json"))
+            .ok()
+            .and_then(|m| m.modified().ok().map(|time| (time, m.len())));
+        match Config::read(&self.root) {
+            Ok(config) => {
+                self.codex_restart_pending |= config.codex.executable
+                    != self.config.codex.executable
+                    || config.codex.working_directory != self.config.codex.working_directory;
+                self.config = config;
+                self.config_error.clear();
+            }
+            Err(error) => self.config_error = error,
+        }
     }
     pub(super) fn context_menu(&mut self, ctx: &egui::Context, response: &egui::Response) {
         response.context_menu(|ui| {
@@ -176,6 +200,9 @@ impl Pet {
         ctx.request_repaint_after(Duration::from_millis(16));
         #[cfg(target_os = "linux")]
         if let Some(window) = &mut self.drag_window {
+            if ctx.input(|i| i.pointer.any_pressed()) {
+                window.focus();
+            }
             self.drag_sent |= window.update();
         }
         if !self.raised && self.started.elapsed() > Duration::from_millis(300) {
@@ -244,6 +271,18 @@ impl Pet {
             self.last_activity = Instant::now();
         }
         self.poll_codex();
+        if self.last_config_check.elapsed() >= Duration::from_millis(500) {
+            self.last_config_check = Instant::now();
+            let stamp = std::fs::metadata(self.root.join("config/config.json"))
+                .ok()
+                .and_then(|m| m.modified().ok().map(|time| (time, m.len())));
+            if stamp != self.config_stamp {
+                self.reload_config();
+            }
+        }
+        if self.codex_restart_pending && !self.busy {
+            self.start_codex(ctx);
+        }
         if !self.busy
             && !self.text.is_empty()
             && self.last_activity.elapsed().as_secs_f64() >= self.config.dialog.auto_close_delay
@@ -280,11 +319,17 @@ impl Pet {
                 ui.label("Lexington 2.0\n纯 Rust 桌面宠物\neframe / egui");
             });
         let mut restart_codex = false;
+        let mut no_approval = self.config.codex.no_approval;
+        let mut approval_changed = false;
         let reload = egui::Window::new("设置")
             .open(&mut self.settings)
             .show(ctx, |ui| {
                 ui.label("配置文件：");
                 ui.label(self.root.join("config/config.json").display().to_string());
+                ui.label("配置自动热加载（0.5 秒内生效）。");
+                if !self.config_error.is_empty() {
+                    ui.colored_label(egui::Color32::RED, &self.config_error);
+                }
                 ui.separator();
                 ui.label(format!("Codex：{}", self.codex_status));
                 ui.label(format!("程序：{}", self.config.codex.executable));
@@ -295,16 +340,31 @@ impl Pet {
                     .as_ref()
                     .map_or_else(|| self.root.clone(), |dir| self.root.join(dir));
                 ui.label(format!("工作目录：{}", directory.display()));
-                ui.label("修改 codex 工作目录或程序路径后，请重启会话。");
+                approval_changed = ui.checkbox(&mut no_approval, "无需审批").changed();
+                ui.label("下次发送生效；关闭时沿用本机审批设置。沙箱权限不变。");
+                ui.label(if self.codex_restart_pending {
+                    "任务完成后自动切换 Codex 连接。"
+                } else {
+                    "程序路径或工作目录变更时自动重建会话。"
+                });
                 restart_codex = ui.button("重启 Codex 会话").clicked();
                 ui.button("重新加载资源与配置").clicked()
             })
             .is_some_and(|response| response.inner == Some(true));
+        if approval_changed {
+            match Config::save_no_approval(&self.root, no_approval) {
+                Ok(()) => {
+                    self.config.codex.no_approval = no_approval;
+                    self.config_error.clear();
+                }
+                Err(error) => self.config_error = error,
+            }
+        }
         if reload {
             self.refresh(ctx);
         }
         if restart_codex {
-            self.config = Config::load(&self.root);
+            self.reload_config();
             self.start_codex(ctx);
         }
         self.codex_prompt_ui(ctx);

@@ -6,21 +6,23 @@
 - 后端不依赖 egui/UI：`CharacterState` 管理资源选择与格式回退，`ClockState` 管理打卡状态；UI 根据后端选中的路径加载纹理。`codex::Client` 在后台管理 app-server stdio 与会话，标准库事件通道返回结果，回调仅唤醒 UI。`tools::gif::Decoder` 只产生 RGBA 像素并控制帧时序，`ui::assets::Picture` 持有并复用 GPU 纹理；平台适配是工具层中允许依赖 eframe 的边界。
 - 保持 `resource/` 目录结构和 `config/config.json` 的 camelCase 字段兼容。资源根目录按 `LEXINGTON_HOME`、可执行文件旁、当前目录依次寻找。安装升级须保留用户配置/API key；日志和测试结果不得泄露密钥。
 - Codex 协议兼容基线为 CLI 0.166.0，协议字段以该 CLI 生成的 JSON Schema 为准；升级 CLI 后须回归握手、真实流式回复与进程清理。Lexington 启动即运行 `codex app-server --stdio`，先 initialize/initialized 再 thread/start；同次运行复用一个 thread，退出/重启清理并回收子进程。Unix 必须将启动器放入独立进程组并整组终止（libc），关闭 stdin 后再等待读线程；npm CLI 可能派生真实服务，仅 kill 启动器会因后代持有 stdout 而退出卡住。默认继承本机 Codex 登录、模型和权限；配置 `codex.executable` / `workingDirectory`，相对目录基于资源根目录，默认资源根目录。桌面 PATH 缺少 codex 时查找 `~/.local/bin`、`~/.cargo/bin`；旧 `llm` 配置可加载但不再使用。
+- 配置由 UI 每 500ms 检查修改时间/长度，变化时热加载，使用 `Config::read` 区分错误并保留上次有效值，不能在热加载失败时调用默认回退覆盖现有设置。普通设置/审批模式保持当前 thread；程序路径或工作目录改变需重建连接，忙碌时等当前任务结束，避免中断任务或丢失审批。资源仍手动重载。
+- “设置 → 无需审批”持久化为 `codex.noApproval`（默认 false），切换从下一次发送起生效，不重启会话、不改变当前任务或沙箱。`turn/start.approvalPolicy` 会影响后续轮次，必须缓存 thread/start 返回的原策略，开启显式传 never，关闭显式恢复原值（可能是字符串或 granular 对象），不能靠省略字段恢复。保存开关须保留未知配置/旧密钥，损坏 JSON 拒绝覆盖，同目录临时文件同步后原子替换。
 - Codex 通知可能先于 turn/start ACK 到达；须按 thread/turn 和启动请求 ID 关联，忽略旧 ACK，按 item ID 将流式增量与最终文本去重。连接 ACK 超时 30 秒，生成不限时。命令/文件审批与问题通过 UI 回复；文件改动从 item/started 缓存路径/diff，未知请求明确返回 -32601。测试用 `tests/fixtures/codex-server.py`，运行需 Python 3，不依赖真实模型或凭据。
 - 立绘仅按文件名最后的 `_Normal` / `_Damage` 后缀识别状态（ASCII 大小写不敏感），前面的完整服装名用于同角色、同格式配对；`Normal_Normal` 的服装名是 `Normal`，无后缀文件视为正常。侧栏 ↻ 切换对应正常/战损图，缺少配对时禁用；▶ 仅循环当前状态队列，默认正常。格式切换尽量保留服装和状态，资源回退优先保留状态。现有 GIF 为 7 对，PNG 为 8 对；原重载入口已移到“设置 → 重新加载资源与配置”。
 - 原版立绘组件为 450×450，侧栏按钮为 40×40、间隔 10；发布窗口 500×500，`--dev` 为 800×600。气泡按全文测高、21px 行高、最大高度限制；输入框沿用组件局部坐标边界检查后再平移到窗口中心。
 - GIF 需要逐帧解码，不能常驻全部 RGBA 帧（现有文件 1024×1024、67 帧，曾触发系统杀进程）。现有 14 个立绘 GIF 均没有循环扩展，`gif` 解码器将其报告为 `Repeat::Finite(0)`；桌宠播放策略将其视为无限循环，避免播一轮后定格，显式有限循环次数仍保留。Chromium 对不足 20ms 的帧延迟使用 100ms。回归测试需验证跨轮次的实际帧内容及现有立绘完整一轮后重回首帧，且复用纹理。
 - 图片启用线性 mipmap 过滤，避免高分辨率背景缩小后产生锯齿。字体采用 Noto Sans CJK TTC 的简体中文 face（index 2）、Liberation 和 Noto Sans Math；不要额外用 `FontTweak.scale` 按 ascent/descent 放大，14px 中文字宽应接近 14px。输入占位文字需显式指定 #999，避免系统主题改变颜色。
 - 450×450 容器的悬停缩放与浮动应同时作用于立绘、对话和输入层；侧栏独立。气泡 Area 禁用自动约束，避免 egui 自动移动原版允许溢出的输入框。对话尾尖距左边 28px，输入尾尖居中。
-- Linux 默认优先 X11/XWayland；原生 Wayland 用 `--wayland`，位置/层级由合成器控制。egui 的 taskbar 参数只支持 Windows，Linux 要设置 `_NET_WM_STATE_SKIP_TASKBAR`、`SKIP_PAGER`、`ABOVE`。窗口映射后再次请求 AlwaysOnTop，避免映射时序丢失置顶。Linux 拖动通过屏幕绝对坐标及 `_NET_MOVERESIZE_WINDOW` 实现，保持窗口尺寸。
-- X11 临时连接的属性/消息请求在关闭连接前需 `.check()`，只 flush 可能丢失。拖动锚点在按下时捕获屏幕坐标与窗口偏移，阈值按 DPI 换算；不能等跨过阈值再取初始位置，也不能累加窗口局部指针差值。
+- Linux 默认优先 X11/XWayland；原生 Wayland 用 `--wayland`，位置/层级由合成器控制。egui 的 taskbar 参数只支持 Windows，Linux 要设置 `_NET_WM_STATE_SKIP_TASKBAR`、`SKIP_PAGER`、`ABOVE`。窗口映射后再次请求 AlwaysOnTop，避免映射时序丢失置顶。Linux X11/XWayland 窗口类型必须使用 Dock（不设置 strut、不预留屏幕空间）；GNOME/Mutter 会将 Utility 窗口完整透明矩形约束在屏幕内，导致立绘中心无法到右下角。保留受窗口管理器管理的窗口；Dock 可能不自动聚焦，用户按下鼠标时才通过 X11 set_input_focus 获取键盘焦点，启动/悬停不得抢焦点；拖动仍通过屏幕绝对坐标及 `_NET_MOVERESIZE_WINDOW` 实现，允许透明边距出屏并保持窗口尺寸。
+- X11 临时连接的属性/消息请求在关闭连接前需 `.check()`，只 flush 可能丢失。拖动锚点在按下时查询 X11 原生屏幕指针及窗口位置计算偏移，不能使用移动后可能滞后的 egui 局部指针缓存（贴边释放后重新拖动会跳跃），阈值按 DPI 换算；不能等跨过阈值再取初始位置，也不能累加窗口局部指针差值。
 - 禁止恢复 eframe 的原生窗口尺寸/位置和 egui 区域缓存；只保存侧栏固定模式。窗口初始化要重新应用 800×600 开发尺寸或 500×500 普通尺寸，避免先前拖动/开发运行影响后续启动。
 - 聊天等待提示固定使用“Lexington正在思考”，忙碌提示同样使用 Lexington 名称；底层 Codex 协议命名保持原样。
 - 原生单行 TextEdit 按 Enter 会失焦，提交判断必须同时考虑 `has_focus()` 与 `lost_focus()`。不要启动时主动聚焦输入框。
 - 侧栏点击须阻止本帧对话的“外部点击关闭”，否则已打开对话时取消打卡会立即清掉新消息。Codex 交互测试使用临时配置/Python 3 模拟子进程，不能依赖用户真实登录或调用模型。
 - eframe 截图事件在 context input 读锁之外发 viewport 命令；锁内发送 Close 会导致退出卡住。截图的 Color32 是预乘 alpha，导出 PNG 需 `to_srgba_unmultiplied()`。
 - 验证：`cargo fmt --check`、`cargo test --locked`、`cargo clippy --locked --all-targets -- -D warnings`。测试包含现有 30 张立绘、UI 指针/键盘事件、模拟 Codex 协议、计时、GIF 元数据。`cargo run -- --dev --screenshot /tmp/lexington.png` 验证真实渲染。
-- `python3 scripts/native-smoke.py target/release/lexington /tmp/lexington.png drag` 验证置顶/隐藏任务栏和精确拖动；模式还包括 `clock`、`input`、`pin`、`idle`，`--production` 验证普通尺寸。脚本需 libX11/libXtst，会移动鼠标并恢复位置，宜用 Xephyr + 窗口管理器隔离测试。拖动验收需核对阈值、精确位移、反向移动和尺寸。侧栏跨启动验证使用独立 `XDG_DATA_HOME`，检查两次退出后 `lexington/app.ron` 中的固定模式。
+- `python3 scripts/native-smoke.py target/release/lexington /tmp/lexington.png drag` 验证置顶/隐藏任务栏和精确拖动；模式还包括 `drag-edges`、`clock`、`input`、`pin`、`idle`，`--production` 验证普通尺寸。脚本需 libX11/libXtst，会移动鼠标并恢复位置，宜用 Xephyr + 窗口管理器隔离测试。拖动验收需核对阈值、精确位移、反向移动和尺寸；`drag-edges` 还检查中心到四角、透明窗体部分出屏、贴边释放不回弹和重新拖回，脚本失败也须释放鼠标按钮。侧栏跨启动验证使用独立 `XDG_DATA_HOME`，检查两次退出后 `lexington/app.ron` 中的固定模式。
 - 打包：`bash scripts/package.sh`；用户级安装：`bash scripts/install-linux.sh`，菜单和桌面快捷方式显示名固定为 `Lexington`，桌面文件固定为 `Lexington.desktop`。安装时迁移旧 `lexington.desktop`，避免重复；菜单 ID 保持 `lexington.desktop`。使用 `xdg-user-dir DESKTOP`，设置可执行权限并尝试标记可信。
 - **每次完成项目修改后，必须构建最新 release 版本并同步更新桌面安装版，不能只修改源码或生成构建产物。** 运行 `bash scripts/install-linux.sh` 完成 `cargo build --release --locked` 和用户级安装，保留已有配置/API key；核对安装二进制与 `target/release/lexington` 一致，桌面 `Lexington` 快捷方式指向该安装版。若旧实例仍在运行，需安全重启为新版本并验证。该构建/安装流程已获用户持续授权，无需每次再询问；Git 提交和推送仍须单独明确授权。
 - 未经用户明确授权，不执行 git commit 或 git push。代码任务结束前将新增且验证过的项目知识合并进本文件，避免记录临时进度。

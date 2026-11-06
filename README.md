@@ -46,7 +46,7 @@ Windows 在对应系统使用 `cargo build --release --locked` 构建，将 `tar
 
 ## 使用
 
-- 宠物中心圆形区域：单击显示随机角色台词；第二次点击显示全文；第三次关闭。按住后移动超过 5px 拖动整个窗口。
+- 宠物中心圆形区域：单击显示随机角色台词；第二次点击显示全文；第三次关闭。按住后移动超过 5px 拖动整个窗口。Linux X11/XWayland 允许透明边距移出屏幕，立绘中心可拖至屏幕边缘。
 - 对话：每 50ms 显示一个字符，鼠标活动重置自动关闭计时；点击圆形区域和气泡以外的位置关闭。
 - 输入框：在立绘下方悬停显示，点击后输入；Enter 发送给 Codex，等待时显示“Lexington正在思考”，回复流式显示在气泡中；连接期间发送的第一条消息会等待会话就绪。任务进行中按 Escape 中断，否则清空输入和错误。请求失败显示错误。窗口启动时不自动聚焦输入框。
 - 右键宠物：设置、关于、关闭。
@@ -88,7 +88,7 @@ config/config.json
 ["你好，提督！", "今天也一起加油吧。"]
 ```
 
-修改资源或配置后，右键宠物打开“设置”，点击“重新加载资源与配置”。安装版的资源和配置位于安装目录；源码运行时使用项目目录中的文件。
+配置文件每 0.5 秒自动热加载，无需重启程序；无效或临时写到一半的配置会保留上次有效设置，并在设置窗口提示。资源文件改动后，右键宠物打开“设置”，点击“重新加载资源与配置”。安装版的资源和配置位于安装目录；源码运行时使用项目目录中的文件。
 
 ```json
 {
@@ -101,7 +101,8 @@ config/config.json
   },
   "codex": {
     "executable": "codex",
-    "workingDirectory": null
+    "workingDirectory": null,
+    "noApproval": false
   },
   "clockIn": {
     "workReminderHours": 12,
@@ -118,7 +119,9 @@ config/config.json
 
 `codex.executable` 可设为 CLI 的绝对路径；默认从 PATH 查找，Linux 桌面启动时还会查找 `~/.local/bin/codex` 和 `~/.cargo/bin/codex`。`codex.workingDirectory` 指定 Codex 操作的项目目录：绝对路径直接使用，相对路径以资源根目录为基准；`null` 默认使用资源根目录（安装版通常为 `~/.local/share/lexington`）。需要操作其他项目时应改为该项目的路径。
 
-同一次启动内复用一个 Codex thread，支持连续对话；退出程序会终止所启动的 app-server（Unix 同时清理该进程组的后代），下次启动新建会话。右键 → 设置可查看连接状态、程序路径和工作目录；修改配置后点击“重启 Codex 会话”使其生效并清空会话上下文。命令或文件审批、Codex 提问会显示交互窗口；不支持的请求会明确返回错误。连接请求响应超时为 30 秒，模型生成不设置固定超时。
+右键 → 设置中的“无需审批”开关会自动保存到 `codex.noApproval`，默认关闭。开启后，从下一条消息起使用 `approvalPolicy: never`，关闭后恢复当前会话启动时继承的本机审批策略（包括本机原本就无需审批的情况）。切换不重启服务、不清空对话，也不改变当前任务或沙箱权限；超出沙箱允许范围的操作仍会失败。Codex 的补充信息提问仍需回答。
+
+同一次启动内复用一个 Codex thread，支持连续对话；退出程序会终止所启动的 app-server（Unix 同时清理该进程组的后代），下次启动新建会话。右键 → 设置可查看连接状态、程序路径和工作目录；普通设置热加载时保留对话；程序路径或工作目录改变时自动重建 Codex 会话，正在处理任务则等任务结束后切换，会话上下文随重建清空。也可手动点击“重启 Codex 会话”。命令或文件审批、Codex 提问会显示交互窗口；不支持的请求会明确返回错误。连接请求响应超时为 30 秒，模型生成不设置固定超时。
 
 协议参考：[Codex app-server](https://developers.openai.com/codex/app-server/)。本机集成根据已安装 CLI 的帮助与生成的 JSON Schema 验证。
 
@@ -143,7 +146,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo run --locked -- --dev --screenshot /tmp/lexington.png
 ```
 
-`--screenshot` 默认等待 4 秒后保存透明 PNG 并退出，`--screenshot-delay 7` 可调整等待秒数。测试覆盖正常/战损配对与独立队列、缺失配对和格式回退、资源删除后的刷新恢复、配置、GIF 循环与局部帧还原、Codex 握手、流式回复、审批、提问、中断与进程异常、UI 指针与键盘交互、打卡计时和对话关闭。Codex 测试使用 Python 3 模拟子进程，不连接模型、不读取用户凭据；运行测试需安装 Python 3。真实 CLI 启动和握手需单独验证。
+`--screenshot` 默认等待 4 秒后保存透明 PNG 并退出，`--screenshot-delay 7` 可调整等待秒数。测试覆盖正常/战损配对与独立队列、缺失配对和格式回退、资源删除后的刷新恢复、配置、GIF 循环与局部帧还原、Codex 握手、流式回复、配置热加载/错误保护、审批开关保存及原策略恢复、审批、提问、中断与进程异常、UI 指针与键盘交互、打卡计时和对话关闭。Codex 测试使用 Python 3 模拟子进程，不连接模型、不读取用户凭据；运行测试需安装 Python 3。真实 CLI 启动和握手需单独验证。
 
 内置 Noto Sans CJK SC、Liberation 和 Noto Sans Math 字体，并附带许可证，减少字体缺失造成的字号、换行及按钮符号差异。立绘、气泡和输入框共同缩放与浮动；图片使用线性 mipmap 过滤，保留缩小后的平滑效果。
 
@@ -151,12 +154,13 @@ cargo run --locked -- --dev --screenshot /tmp/lexington.png
 
 ```bash
 python3 scripts/native-smoke.py target/release/lexington /tmp/lexington-drag.png drag
+python3 scripts/native-smoke.py target/release/lexington /tmp/lexington-edges.png drag-edges --production
 python3 scripts/native-smoke.py target/release/lexington /tmp/lexington-clock.png clock
 python3 scripts/native-smoke.py target/release/lexington /tmp/lexington-input.png input
 python3 scripts/native-smoke.py target/release/lexington /tmp/lexington-production.png idle --production
 ```
 
-脚本验证窗口尺寸、置顶、隐藏任务栏和窗口切换器；`drag` 还断言 5px 阈值、精确位移、反向移动、离开初始命中区域和拖动后尺寸。`pin` 模式切换侧栏显示模式，配合独立 `XDG_DATA_HOME` 可验证重启后的保存结果（Linux 状态文件为 `$XDG_DATA_HOME/lexington/app.ron`，默认位于 `~/.local/share/lexington/`）。测试宜使用 Xephyr + 窗口管理器等独立 X11 桌面，避免影响工作桌面。
+脚本验证窗口尺寸、置顶、隐藏任务栏和窗口切换器；`drag` 还断言 5px 阈值、精确位移、反向移动、离开初始命中区域和拖动后尺寸。`drag-edges` 检查四角、贴边释放与拖回，透明窗体允许部分出屏且保持尺寸。`pin` 模式切换侧栏显示模式，配合独立 `XDG_DATA_HOME` 可验证重启后的保存结果（Linux 状态文件为 `$XDG_DATA_HOME/lexington/app.ron`，默认位于 `~/.local/share/lexington/`）。测试宜使用 Xephyr + 窗口管理器等独立 X11 桌面，避免影响工作桌面。
 
 已在 Linux X11 独立桌面验证上述窗口行为、500×500 普通窗口、800×600 开发窗口和侧栏状态保存，并对照原 Vue 渲染检查立绘、气泡、输入框和默认宠物。
 

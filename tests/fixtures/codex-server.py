@@ -41,7 +41,7 @@ for line in sys.stdin:
     elif method == "thread/start":
         assert os.path.isabs(params["cwd"])
         assert params["cwd"] == os.getcwd()
-        send({"id": message["id"], "result": {"thread": {"id": thread}}})
+        send({"id": message["id"], "result": {"thread": {"id": thread}, "approvalPolicy": {"granular": {"sandbox_approval": True, "rules": False, "skill_approval": True, "request_permissions": True, "mcp_elicitations": True}} if mode == "granular" else "on-request"}})
     elif method == "turn/start":
         assert params["threadId"] == thread
         if deferred_ack is not None:
@@ -50,6 +50,9 @@ for line in sys.stdin:
         count += 1
         turn = f"turn-{count}"
         text = params["input"][0]["text"]
+        expected = "never" if text.startswith("no-approval") else ({"granular": {"sandbox_approval": True, "rules": False, "skill_approval": True, "request_permissions": True, "mcp_elicitations": True}} if mode == "granular" else "on-request")
+        assert params["approvalPolicy"] == expected, (params["approvalPolicy"], expected)
+        assert "sandboxPolicy" not in params, "approval toggle must preserve sandbox permissions"
         if mode == "crash":
             sys.exit(3)
         if mode == "error" or text == "fail":
