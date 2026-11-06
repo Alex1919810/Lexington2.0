@@ -367,6 +367,92 @@ fn clock_cancel_expiry_and_dialog_inactivity() {
     assert!(app.text.is_empty());
 }
 #[test]
+fn context_menu_close_receives_input_outside_artwork_and_exits() {
+    let root = std::env::temp_dir().join(format!("lexington-menu-{}", rand::random::<u64>()));
+    crate::backend::config::Config::save_no_approval(&root, false).unwrap();
+    let ctx = egui::Context::default();
+    let mut app = Pet::from_root(&ctx, false, root.clone());
+    for _ in 0..3 {
+        frame(&mut app, &ctx, vec![]);
+    }
+    let point = pos2(445., 325.);
+    frame(&mut app, &ctx, vec![egui::Event::PointerMoved(point)]);
+    for pressed in [true, false] {
+        frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: Default::default(),
+            }],
+        );
+    }
+    for _ in 0..3 {
+        frame(&mut app, &ctx, vec![]);
+    }
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0., 0.), vec2(800., 600.))),
+            ..Default::default()
+        },
+        |ctx| app.ui(ctx),
+    );
+    let mut shapes: Vec<_> = output.shapes.iter().map(|s| &s.shape).collect();
+    let mut target = None;
+    while let Some(shape) = shapes.pop() {
+        match shape {
+            egui::Shape::Vec(children) => shapes.extend(children),
+            egui::Shape::Text(text) if text.galley.job.text == "关闭" => {
+                target = Some(Rect::from_min_size(text.pos, text.galley.size()));
+                break;
+            }
+            _ => {}
+        }
+    }
+    let close = target.expect("context menu close button");
+    assert!(close.top() > 370., "close must be outside fallback artwork");
+    for _ in 0..3 {
+        assert!(
+            app.input_regions.iter().any(|r| r.contains_rect(close)),
+            "the visible close button must receive native input on every frame"
+        );
+        frame(&mut app, &ctx, vec![]);
+    }
+    let point = close.center();
+    frame(&mut app, &ctx, vec![egui::Event::PointerMoved(point)]);
+    frame(
+        &mut app,
+        &ctx,
+        vec![egui::Event::PointerButton {
+            pos: point,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        }],
+    );
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0., 0.), vec2(800., 600.))),
+            events: vec![egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+            ..Default::default()
+        },
+        |ctx| app.ui(ctx),
+    );
+    assert!(
+        output.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .contains(&egui::ViewportCommand::Close)
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+#[test]
 fn right_click_in_drag_circle_opens_context_menu() {
     let ctx = egui::Context::default();
     let mut app = Pet::from_context(&ctx, true);

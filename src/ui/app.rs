@@ -188,7 +188,8 @@ impl Pet {
         }
     }
     pub(super) fn context_menu(&mut self, ctx: &egui::Context, response: &egui::Response) {
-        if let Some(menu) = response.context_menu(|ui| {
+        let mut menu_rect = None;
+        response.context_menu(|ui| {
             if ui.button("设置").clicked() {
                 self.settings = true;
                 ui.close_menu();
@@ -202,9 +203,14 @@ impl Pet {
             if ui.button("关闭").clicked() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-        }) && response.context_menu_opened()
+            // egui 0.31 returns no InnerResponse while a context menu stays open.
+            // Capture its current contents and frame here for the native input mask.
+            menu_rect = Some(ui.min_rect() + egui::Frame::menu(ui.style()).total_margin());
+        });
+        if response.context_menu_opened()
+            && let Some(rect) = menu_rect
         {
-            self.input_regions.push(menu.response.rect);
+            self.input_regions.push(rect);
         }
     }
 }
