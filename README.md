@@ -38,7 +38,7 @@ bash scripts/install-linux.sh
 
 以上打包和安装脚本用于 Linux。打包生成 `dist/lexington/` 和 `dist/lexington-linux-<架构>.tar.gz`，包含可执行文件、资源和配置。解压后运行其中的 `lexington` 即可。
 
-安装脚本默认安装到 `~/.local/share/lexington/`（遵循 `XDG_DATA_HOME`），创建应用菜单和桌面快捷方式，升级时保留已安装版本的配置。发布前请确保配置中的 `llm.apiKey` 为空。
+安装脚本默认安装到 `~/.local/share/lexington/`（遵循 `XDG_DATA_HOME`），创建名称固定为 `Lexington` 的应用菜单和桌面快捷方式（桌面文件为 `Lexington.desktop`），升级时迁移旧快捷方式并保留已安装版本的配置。发布前请确保配置中的 `llm.apiKey` 为空。
 
 Windows 在对应系统使用 `cargo build --release --locked` 构建，将 `target/release/lexington.exe` 与 `resource/`、`config/` 一起分发；macOS 对应的可执行文件为 `target/release/lexington`。
 
@@ -58,7 +58,7 @@ Windows 在对应系统使用 `cargo build --release --locked` 构建，将 `tar
 | 👤 | 切换角色 |
 | ⏰ | 上班打卡 / 取消；到时显示下班提醒 |
 
-GIF 逐帧解码并保留循环次数，避免把全部 1024×1024 帧保留在内存；不足 20ms 的帧延迟按浏览器行为使用 100ms。未配置图片或图片解码失败时显示粉色动画宠物。
+GIF 逐帧解码，缺少循环信息时默认持续循环；显式设置了循环次数的文件按该次数播放。播放器不会把全部 1024×1024 帧保留在内存；不足 20ms 的帧延迟按浏览器行为使用 100ms。未配置图片或图片解码失败时显示粉色动画宠物。
 
 ## 资源与配置
 

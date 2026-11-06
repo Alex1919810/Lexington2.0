@@ -13,7 +13,7 @@ launcher="${XDG_DATA_HOME:-$HOME/.local/share}/applications/lexington.desktop"
 cat > "$launcher" <<DESKTOP
 [Desktop Entry]
 Type=Application
-Name=Lexington 桌面宠物
+Name=Lexington
 Comment=Rust 桌面宠物
 Exec="$install_dir/lexington"
 Path=$install_dir
@@ -25,8 +25,11 @@ DESKTOP
 chmod +x "$launcher"
 desktop_dir="$(xdg-user-dir DESKTOP)"
 mkdir -p "$desktop_dir"
-cp "$launcher" "$desktop_dir/lexington.desktop"
-chmod +x "$desktop_dir/lexington.desktop"
-if command -v gio >/dev/null; then gio set "$desktop_dir/lexington.desktop" metadata::trusted true 2>/dev/null || true; fi
+desktop_launcher="$desktop_dir/Lexington.desktop"
+# Migrate the previous filename so upgrades do not leave duplicate shortcuts.
+if [[ -f "$desktop_dir/lexington.desktop" ]]; then mv -f "$desktop_dir/lexington.desktop" "$desktop_launcher"; fi
+cp "$launcher" "$desktop_launcher"
+chmod +x "$desktop_launcher"
+if command -v gio >/dev/null; then gio set "$desktop_launcher" metadata::trusted true 2>/dev/null || true; fi
 if command -v update-desktop-database >/dev/null; then update-desktop-database "$(dirname "$launcher")"; fi
-printf 'Installed: %s\nDesktop shortcut: %s\n' "$install_dir/lexington" "$desktop_dir/lexington.desktop"
+printf 'Installed: %s\nDesktop shortcut: %s\n' "$install_dir/lexington" "$desktop_launcher"

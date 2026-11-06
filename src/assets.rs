@@ -33,7 +33,9 @@ impl Picture {
                 .map_err(|e| e.to_string())?
                 .repeat()
             {
-                gif::Repeat::Infinite => None,
+                // Existing pet GIFs omit the loop extension. The decoder reports
+                // Finite(0) for those files; keep desktop animations running.
+                gif::Repeat::Infinite | gif::Repeat::Finite(0) => None,
                 gif::Repeat::Finite(n) => Some(n),
             }
         } else {
@@ -124,6 +126,62 @@ fn color_image(image: &image::RgbaImage) -> ColorImage {
 mod tests {
     use super::*;
     #[test]
+    fn bundled_pet_gif_restarts_at_first_frame_after_a_full_cycle() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resource/illustration/lexington/gif/BiKiNi_Damage.gif");
+        let mut options = gif::DecodeOptions::new();
+        options.skip_frame_decoding(true);
+        let decoder = options
+            .read_info(BufReader::new(File::open(&path).unwrap()))
+            .unwrap();
+        assert_eq!(
+            decoder.repeat(),
+            gif::Repeat::Finite(0),
+            "fixture has no loop extension"
+        );
+        let frame_count = decoder.into_iter().map(Result::unwrap).count();
+        assert!(frame_count > 1);
+        let ctx = egui::Context::default();
+        let mut pic = Picture::load(&ctx, &path).unwrap();
+        let texture_id = pic.texture.id();
+        let (_, first) = ctx
+            .tex_manager()
+            .write()
+            .take_delta()
+            .set
+            .into_iter()
+            .find(|(id, _)| *id == texture_id)
+            .unwrap();
+        let egui::ImageData::Color(first) = first.image else {
+            panic!("RGBA texture expected")
+        };
+        for frame_index in 1..=frame_count {
+            pic.next_frame = Instant::now() - Duration::from_millis(1);
+            pic.texture();
+            assert!(pic.animation.is_some(), "stopped after frame {frame_index}");
+            assert_eq!(pic.texture.id(), texture_id);
+            // Drain each upload so the test also keeps memory bounded.
+            let (_, frame) = ctx
+                .tex_manager()
+                .write()
+                .take_delta()
+                .set
+                .into_iter()
+                .find(|(id, _)| *id == texture_id)
+                .expect("next frame upload");
+            if frame_index == frame_count {
+                let egui::ImageData::Color(frame) = frame.image else {
+                    panic!("RGBA texture expected")
+                };
+                assert_eq!(frame.size, first.size);
+                assert_eq!(
+                    frame.pixels, first.pixels,
+                    "second cycle must start at frame zero"
+                );
+            }
+        }
+    }
+    #[test]
     fn streamed_gif_composites_partial_frames_and_restores_disposal() {
         let path =
             std::env::temp_dir().join(format!("lexington-disposal-{}.gif", rand::random::<u64>()));
@@ -190,11 +248,11 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
     #[test]
-    fn gif_repeat_metadata_and_frame_delays_match_browser_behavior() {
+    fn gifs_default_to_looping_and_honor_explicit_limits_and_frame_delays() {
         let path =
             std::env::temp_dir().join(format!("lexington-gif-{}.gif", rand::random::<u64>()));
         for (repeat, expected) in [
-            (None, Some(0)),
+            (None, None),
             (Some(gif::Repeat::Infinite), None),
             (Some(gif::Repeat::Finite(2)), Some(2)),
         ] {
@@ -219,11 +277,34 @@ mod tests {
             let ctx = egui::Context::default();
             let mut pic = Picture::load(&ctx, &path).unwrap();
             assert_eq!(pic.repeats_left, expected);
-            pic.next_frame = Instant::now() - Duration::from_secs(1);
-            pic.texture();
-            pic.next_frame = Instant::now() - Duration::from_secs(1);
-            pic.texture();
-            assert_eq!(pic.animation.is_none(), expected == Some(0));
+            let texture_id = pic.texture.id();
+            // Check frame contents across four cycles, including the transition
+            // back to frame zero and exhaustion of an explicit repeat count.
+            for frame_index in 0..8 {
+                if frame_index > 0 {
+                    pic.next_frame = Instant::now() - Duration::from_millis(1);
+                    pic.texture();
+                }
+                let playing = expected.is_none_or(|n| frame_index < (usize::from(n) + 1) * 2);
+                assert_eq!(pic.animation.is_some(), playing, "frame {frame_index}");
+                assert_eq!(pic.texture.id(), texture_id, "reuse the streaming texture");
+                let delta = ctx.tex_manager().write().take_delta();
+                let update = delta.set.iter().find(|(id, _)| *id == texture_id);
+                if playing {
+                    let egui::ImageData::Color(image) = &update.expect("frame upload").1.image
+                    else {
+                        panic!("RGBA texture expected")
+                    };
+                    let color = if frame_index % 2 == 0 {
+                        egui::Color32::RED
+                    } else {
+                        egui::Color32::GREEN
+                    };
+                    assert_eq!(image.pixels, [color; 4], "frame {frame_index}");
+                } else {
+                    assert!(update.is_none(), "stopped GIF must retain its last frame");
+                }
+            }
         }
         let frame = image::Frame::from_parts(
             image::RgbaImage::new(2, 2),
