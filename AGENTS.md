@@ -1,7 +1,7 @@
 # 项目约定
 
 - 本项目采用纯 Rust 原生 GUI：eframe/egui + glow；禁止引入 Vue、Electron、Node、WebView 或 N-API 作为运行链。`Cargo.lock` 随代码保留。
-- 代码按三类组织：`src/ui/` 负责界面与交互，`src/backend/` 负责配置、资源、角色选择、打卡、闹钟和 Codex 会话，`src/tools/` 负责路径、图片/GIF 解码和平台窗口操作；`src/main.rs` 仅负责启动。具体模块职责、接口和依赖以 `docs/MODULES.md` 为准。
+- 代码按三类组织：`src/ui/` 负责界面与交互，`src/backend/` 负责配置、资源、角色选择、打卡、闹钟、外部上下文和 Codex 会话，`src/tools/` 负责路径、图片/GIF 解码和平台窗口操作；`src/main.rs` 仅负责启动。具体模块职责、接口和依赖以 `docs/MODULES.md` 为准。
 - **后续任何代码文件改动，都必须同步检查并更新 `docs/MODULES.md` 中对应模块的职责、主要接口、依赖与约束；新增、删除、移动或重命名文件时同步更新目录结构。** 实现内部调整而职责不变时，也须同步补充或修正相关行为/约束说明，不能只修改代码而遗漏模块文档。README 的结构概览发生变化时也要同步。
 - 后端不依赖 egui/UI：`CharacterState` 管理资源选择与格式回退，`ClockState` 管理打卡状态；UI 根据后端选中的路径加载纹理。`codex::Client` 在后台管理 app-server stdio 与会话，标准库事件通道返回结果，回调仅唤醒 UI。`tools::gif::Decoder` 只产生 RGBA 像素并控制帧时序，`ui::assets::Picture` 持有并复用 GPU 纹理；平台适配是工具层中允许依赖 eframe 的边界。
 - 保持 `resource/` 目录结构和 `config/config.json` 的 camelCase 字段兼容。资源根目录按 `LEXINGTON_HOME`、可执行文件旁、当前目录依次寻找。安装升级须保留用户配置/API key；日志和测试结果不得泄露密钥。
@@ -36,3 +36,8 @@
 - 打包：`bash scripts/package.sh`；用户级安装：`bash scripts/install-linux.sh`，菜单和桌面快捷方式显示名固定为 `Lexington`，桌面文件固定为 `Lexington.desktop`。安装时迁移旧 `lexington.desktop`，避免重复；菜单 ID 保持 `lexington.desktop`。使用 `xdg-user-dir DESKTOP`，设置可执行权限并尝试标记可信。
 - **每次完成项目修改后，必须构建最新 release 版本并同步更新桌面安装版，不能只修改源码或生成构建产物。** 运行 `bash scripts/install-linux.sh` 完成 `cargo build --release --locked` 和用户级安装，保留已有配置/API key；核对安装二进制与 `target/release/lexington` 一致，桌面 `Lexington` 快捷方式指向该安装版。若旧实例仍在运行，需安全重启为新版本并验证。该构建/安装流程已获用户持续授权，无需每次再询问；Git 提交和推送仍须单独明确授权。
 - 未经用户明确授权，不执行 git commit 或 git push。代码任务结束前将新增且验证过的项目知识合并进本文件，避免记录临时进度。
+
+- 外部右键统一命名“看看Lexington怎么说”：文件管理器发送本地绝对路径，VS Code 发送选区/路径/起始行，浏览器发送选区/page 或 frame URL，file URL 才转真实路径；未保存与远程文档明确来源，不伪造本机路径。各应用内部菜单需各自扩展，Nautilus 脚本为默认可用入口，顶层菜单需系统 python3-nautilus（Nautilus 4.0）；Firefox 正式持久安装需签名，Snap/Flatpak Native Messaging 须单独实测，不能宣称任意软件全局菜单或默认浏览器已端到端可用。
+- `backend/handoff.rs` 提供 Linux 单实例与 Unix socket Inbox（普通/开发隔离），0700 当前用户非软链接目录、0600 socket、flock 独占、SO_PEERCRED 当前用户验证；4 字节小端长度加 JSON，最多 1 MiB、32 个本地路径、16 条待处理，超时读写。`--ask-json` 从 stdin 接收，`--ask-files` 接收路径，`--native-messaging` stdout 只能输出浏览器帧；外部交付自动启动桌宠、ACK 仅表示入队，发出后不重试以避免重复任务。无 HTTP/TCP、URL scheme 或剪贴板监听。UI 空闲时直接 submit，复用审批和 thread，不填输入框、不清已有草稿；外部任务错误须通过气泡展示。
+- 右键集成客户端位于 integrations/，脚本 `scripts/integrations.py` 用 Python 标准库生成 VSIX/XPI 并安装桥接清单，VS Code/浏览器 JS 只在各自宿主内运行，不能给 Rust 主程序引入 Node 依赖。Chromium manifest 的公开 key 固定扩展 ID，宿主白名单由 key 推导；Firefox 固定 ID，禁止为了免签修改用户浏览器安全策略。`node scripts/test-integrations.js` 与 `python3 scripts/context-smoke.py target/release/lexington` 验证客户端边界和真实 CLI，均不调用模型。
+- 安装升级运行中的二进制必须先复制到安装目录临时文件再原子替换，不能直接 cp 截断旧文件（ETXTBSY）；配置仍保留。安装扩展不强制关闭文件管理器/浏览器/编辑器。

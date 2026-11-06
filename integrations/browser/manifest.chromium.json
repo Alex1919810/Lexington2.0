@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "看看Lexington怎么说",
+  "version": "1.0.0",
+  "description": "将选中文字及来源地址直接发送给本机 Lexington。",
+  "permissions": [
+    "contextMenus",
+    "nativeMessaging"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "看看Lexington怎么说"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8U1V4h3gBWVYWEXhoMbw6II9thhK0IYjUS19I9aLQeDp03c0uUBnkVHf9xtUVFK3NMMMBDWXNH5/lTHR1idmtugoIRET0s8k2aC3xvzulIrb++4Ssw4MTdudRHhcXfCO75leO6cV397xSzwlRWhx7dM6frf5G8yYlVjsiyKXW0LHiyy1IH+G7GKFmG2HvqouLVEZfkm4zxYzs8v4fcmQxDrB8NS3nf3mfPyr2Fm1RIYYs5Kh3mrkonTA+fHWcn+aR69ErGd97s7SgmJM/ekdhCWNasK6Edwbl/LbohS75uV491h8sRsyNQd3cknHfRokjG7HuHXxCBLzqRjwXVjX+wIDAQAB"
+}

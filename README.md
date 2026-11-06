@@ -2,7 +2,7 @@
 
 一个使用 Rust 编写界面和业务逻辑的桌面宠物。eframe/egui + glow 直接绘制透明原生窗口，运行时无需 Node.js、Electron、WebView 或 N-API。
 
-支持 GIF/PNG 立绘、多角色切换、随机台词、打字机对话、Codex 会话与流式回复、打卡提醒、自定义闹钟、自定义气泡背景和窗口拖动。沿用原有 `resource/` 目录和 `config/config.json` 格式。
+支持 GIF/PNG 立绘、多角色切换、随机台词、打字机对话、Codex 会话与流式回复、外部右键直接发送、打卡提醒、自定义闹钟、自定义气泡背景和窗口拖动。沿用原有 `resource/` 目录和 `config/config.json` 格式。
 
 ## 快速开始
 
@@ -73,6 +73,21 @@ Linux 通过 loginctl 判断本地活动会话和锁定状态，优先读取 GNO
 闹钟保存在 `$XDG_DATA_HOME/lexington/alarms.json`，开发模式为 `alarms-dev.json`，保存后即时生效。重启保留闹钟与未确认提醒；程序关闭或电脑休眠期间无法弹窗，恢复运行后会合并补提醒，每个错过的闹钟补一次。损坏或不可写记录会显示错误并保留原文件。
 
 GIF 逐帧解码，缺少循环信息时默认持续循环；显式设置了循环次数的文件按该次数播放。播放器不会把全部 1024×1024 帧保留在内存；不足 20ms 的帧延迟按浏览器行为使用 100ms。未配置图片或图片解码失败时显示粉色动画宠物。
+
+## 看看Lexington怎么说
+
+安装后可从其他软件直接发送内容，复用当前 Lexington 会话并开始处理，回复显示在气泡中；不需要再按 Enter，不占用输入框草稿，忙碌时顺序排队，程序未运行时自动启动。
+
+| 来源 | 操作与附带信息 |
+|---|---|
+| GNOME 文件管理器 | 文件右键 → 脚本 → **看看Lexington怎么说**，发送绝对路径；顶层菜单另需 python3-nautilus/nautilus-python |
+| VS Code | 安装器自动安装扩展；选中文字右键同名菜单，发送选区、文件路径和行号；文件资源管理器也支持；已有窗口可能需 Reload Window |
+| Chrome / Chromium / Edge / Brave | 从安装目录 `integrations/artifacts/chromium/` 加载已解压扩展，网页选区右键同名菜单，附带来源 URL |
+| Firefox | 已生成扩展；未签名包可临时加载，正式持久安装需要 Mozilla 签名；Snap/Flatpak 的本机通信需相应平台支持 |
+
+各软件的内部菜单需要对应扩展，不能给所有应用统一注入。网页附带真实 URL，本地文档附带路径；未保存/远程文档明确标记来源。单次限制 1 MiB、32 个本地文件，不修改剪贴板，不改变 Codex 工作目录与沙箱。
+
+浏览器加载步骤、文件管理器顶层菜单依赖及命令行接口见 [右键集成说明](integrations/README.md)。安装器同时提供浏览器扩展与通信桥，不自动关闭用户软件或改变浏览器签名策略。
 
 ## 资源与配置
 
@@ -147,7 +162,8 @@ config/config.json
 | `src/ui/` | 应用编排、宠物、侧栏、对话、Codex 状态与审批、独立设置窗口、闹钟设置及原生弹窗、输入、纹理与样式 |
 | `src/backend/` | 配置、资源扫描、角色/立绘选择、打卡、闹钟调度与记录和 Codex 子进程/协议 |
 | `src/tools/` | 资源根目录定位、图片/GIF 流式解码、平台窗口适配 |
-| `scripts/` | Linux 安装、打包和 X11 窗口验证 |
+| `integrations/` | VS Code、浏览器和 Nautilus 右键客户端 |
+| `scripts/` | Linux 安装、打包、右键集成生成/安装及原生验证 |
 
 完整目录、每个文件的职责、主要接口及依赖方向见 [模块职责说明](docs/MODULES.md)。后续代码变更须同步维护该文档，具体要求见 [AGENTS.md](AGENTS.md)。
 
@@ -157,6 +173,8 @@ config/config.json
 cargo fmt --check
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
+python3 scripts/context-smoke.py target/release/lexington
+node scripts/test-integrations.js  # 仅开发验证，主程序不依赖 Node
 cargo run --locked -- --dev --screenshot /tmp/lexington.png
 ```
 

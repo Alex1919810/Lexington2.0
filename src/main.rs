@@ -5,8 +5,49 @@ mod ui;
 
 use eframe::egui;
 
-fn main() -> eframe::Result {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    use backend::handoff::{self, Request};
+    let args: Vec<_> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|arg| arg == "--native-messaging") {
+        handoff::native_host()?;
+        return Ok(());
+    }
+    if args.get(1).is_some_and(|arg| arg == "--ask-json") {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        std::io::stdin()
+            .take((handoff::MAX_MESSAGE + 1) as u64)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > handoff::MAX_MESSAGE {
+            return Err("选中内容超过 1 MiB，请缩小选区".into());
+        }
+        handoff::deliver(serde_json::from_slice(&bytes)?)?;
+        return Ok(());
+    }
+    if args.get(1).is_some_and(|arg| arg == "--ask-files") {
+        let files = args
+            .iter()
+            .skip(2)
+            .map(|arg| {
+                std::fs::canonicalize(arg)?
+                    .into_os_string()
+                    .into_string()
+                    .map_err(|_| std::io::Error::other("文件路径不是有效 UTF-8"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        handoff::deliver(Request {
+            files,
+            source: "文件管理器".into(),
+            ..Default::default()
+        })?;
+        return Ok(());
+    }
     let dev = std::env::args().any(|arg| arg == "--dev");
+    #[cfg(target_os = "linux")]
+    let Some(endpoint) = handoff::Endpoint::bind(dev)? else {
+        // Context-menu requests are forwarded to this existing instance.
+        return Ok(());
+    };
     let size = if dev { [800., 600.] } else { [500., 500.] };
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size(size)
@@ -50,6 +91,13 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "Lexington",
         options,
-        Box::new(|cc| Ok(Box::new(ui::Pet::new(cc)))),
-    )
+        Box::new(move |cc| {
+            Ok(Box::new(ui::Pet::new(
+                cc,
+                #[cfg(target_os = "linux")]
+                endpoint,
+            )))
+        }),
+    )?;
+    Ok(())
 }

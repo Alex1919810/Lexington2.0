@@ -1,0 +1,12 @@
+{
+  "manifest_version": 2,
+  "name": "看看Lexington怎么说",
+  "version": "1.0.0",
+  "description": "将选中文字及来源地址直接发送给本机 Lexington。",
+  "permissions": ["contextMenus", "nativeMessaging"],
+  "background": { "scripts": ["background.js"] },
+  "browser_action": { "default_title": "看看Lexington怎么说" },
+  "browser_specific_settings": {
+    "gecko": { "id": "lexington-context@lexington.local", "strict_min_version": "109.0" }
+  }
+}

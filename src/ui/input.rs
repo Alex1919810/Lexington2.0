@@ -8,16 +8,31 @@ impl Pet {
         if self.input.trim().is_empty() || self.busy {
             return;
         }
+        self.send_message(ctx, self.input.trim().to_owned(), false);
+    }
+    #[cfg(target_os = "linux")]
+    pub(super) fn poll_handoff(&mut self, ctx: &egui::Context) {
+        if !self.busy
+            && let Some(request) = self.inbox.as_ref().and_then(|inbox| inbox.poll())
+        {
+            self.last_activity = std::time::Instant::now();
+            self.send_message(ctx, request.prompt(), true);
+            if !self.error.is_empty() {
+                self.text = self.error.clone();
+                self.full_text = true;
+            }
+        }
+    }
+    fn send_message(&mut self, ctx: &egui::Context, text: String, external: bool) {
         let result = self
             .codex
             .as_ref()
             .ok_or_else(|| "Codex 未启动，请在设置中重启会话。".to_owned())
-            .and_then(|codex| {
-                codex.submit(self.input.trim().to_owned(), self.config.codex.no_approval)
-            });
+            .and_then(|codex| codex.submit(text, self.config.codex.no_approval));
         match result {
             Ok(()) => {
                 self.busy = true;
+                self.external_turn = external;
                 self.codex_status = "Lexington正在思考".into();
                 self.error.clear();
                 self.codex_messages.clear();

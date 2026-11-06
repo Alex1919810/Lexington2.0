@@ -18,6 +18,9 @@ use std::{
 
 pub struct Pet {
     #[cfg(target_os = "linux")]
+    pub(super) inbox: Option<crate::backend::handoff::Inbox>,
+    pub(super) external_turn: bool,
+    #[cfg(target_os = "linux")]
     pub(super) drag_window: Option<platform::DragWindow>,
     pub(super) root: PathBuf,
     pub(super) config: Config,
@@ -77,7 +80,10 @@ pub struct Pet {
     pub(super) settings_drag: Option<(egui::Pos2, egui::Pos2)>,
 }
 impl Pet {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        #[cfg(target_os = "linux")] endpoint: crate::backend::handoff::Endpoint,
+    ) -> Self {
         platform::configure(cc);
         let mut app = Self::from_context(&cc.egui_ctx, true);
         if let Some(storage) = cc.storage {
@@ -98,6 +104,11 @@ impl Pet {
         app.load_alarms();
         app.activity_monitor = Some(activity::Monitor::start(move || ctx.request_repaint()));
         app.start_codex(&cc.egui_ctx);
+        #[cfg(target_os = "linux")]
+        {
+            let ctx = cc.egui_ctx.clone();
+            app.inbox = Some(endpoint.start(move || ctx.request_repaint()));
+        }
         app
     }
     pub(super) fn restore_state(&mut self, storage: &dyn eframe::Storage) {
@@ -121,6 +132,9 @@ impl Pet {
         style::install(ctx);
         let config = Config::load(&root);
         let mut app = Self {
+            #[cfg(target_os = "linux")]
+            inbox: None,
+            external_turn: false,
             #[cfg(target_os = "linux")]
             drag_window: None,
             root,
@@ -436,6 +450,8 @@ impl Pet {
         if self.codex_restart_pending && !self.busy {
             self.start_codex(ctx);
         }
+        #[cfg(target_os = "linux")]
+        self.poll_handoff(ctx);
         if !self.busy
             && !self.text.is_empty()
             && self.last_activity.elapsed().as_secs_f64() >= self.config.dialog.auto_close_delay

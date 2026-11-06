@@ -5,7 +5,11 @@ cd "$project_root"
 cargo build --release --locked
 install_dir="${XDG_DATA_HOME:-$HOME/.local/share}/lexington"
 mkdir -p "$install_dir" "${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-cp target/release/lexington "$install_dir/lexington"
+# Replace atomically: truncating a running executable fails with ETXTBSY.
+binary_tmp="$(mktemp "$install_dir/.lexington-install.XXXXXX")"
+cp target/release/lexington "$binary_tmp"
+chmod +x "$binary_tmp"
+mv -f "$binary_tmp" "$install_dir/lexington"
 cp -R resource "$install_dir/"
 # Preserve a user's API key and custom configuration on subsequent installs.
 if [[ ! -f "$install_dir/config/config.json" ]]; then cp -R config "$install_dir/"; fi
@@ -32,4 +36,6 @@ cp "$launcher" "$desktop_launcher"
 chmod +x "$desktop_launcher"
 if command -v gio >/dev/null; then gio set "$desktop_launcher" metadata::trusted true 2>/dev/null || true; fi
 if command -v update-desktop-database >/dev/null; then update-desktop-database "$(dirname "$launcher")"; fi
+python3 scripts/integrations.py build --output "$project_root/dist/integrations"
+python3 scripts/integrations.py install --output "$project_root/dist/integrations" --directory "$install_dir"
 printf 'Installed: %s\nDesktop shortcut: %s\n' "$install_dir/lexington" "$desktop_launcher"

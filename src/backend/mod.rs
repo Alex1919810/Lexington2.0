@@ -3,6 +3,7 @@ pub mod character;
 pub mod clock;
 pub mod codex;
 pub mod config;
+pub mod handoff;
 pub mod resources;
 
 #[cfg(test)]

@@ -14,6 +14,7 @@ impl Pet {
         // Drop the previous process before replacing it, so restarts cannot leave orphan servers.
         self.codex = None;
         self.busy = false;
+        self.external_turn = false;
         self.codex_prompts.clear();
         self.error.clear();
         let ctx = ctx.clone();
@@ -63,14 +64,21 @@ impl Pet {
                         "已连接"
                     }
                     .into();
-                    if !interrupted {
+                    if !interrupted && !self.external_turn {
                         self.input.clear();
                     }
+                    self.external_turn = false;
                     self.codex_prompts.clear();
                     self.last_activity = Instant::now();
                 }
                 Event::Failed(error) | Event::Stopped(error) => {
                     self.busy = false;
+                    if self.external_turn {
+                        self.text = error.clone();
+                        self.full_text = true;
+                        self.last_activity = Instant::now();
+                    }
+                    self.external_turn = false;
                     self.codex_status = "连接或任务失败".into();
                     self.codex_prompts.clear();
                     self.error = error;
