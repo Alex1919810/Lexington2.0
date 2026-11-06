@@ -1,5 +1,6 @@
 mod app;
 mod assets;
+mod clock;
 mod codex;
 mod dialog;
 mod input;

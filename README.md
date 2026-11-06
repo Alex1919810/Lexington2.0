@@ -62,6 +62,12 @@ Windows 在对应系统使用 `cargo build --release --locked` 构建，将 `tar
 | 👤 | 切换角色 |
 | ⏰ | 上班打卡 / 取消；到时显示下班提醒 |
 
+自动工作计时默认开启：程序运行时，登录、解锁或恢复键鼠操作后持续活跃 3 分钟，自动记录本次首次操作的时间。确认期间连续闲置满 1 分钟、锁屏、会话切换或检测中断会重新确认；短暂打开电脑查看消息不会直接打卡。默认不限工作日和时段，适用于固定工位；记录表示开始使用电脑，不代表实际到达工位，也不会追溯程序启动之前的操作。
+
+自动打卡提示支持“修改时间 / 撤销”；右键 → 设置 → 打卡可关闭自动计时、输入当天 HH:MM、手动打卡或撤销。修改时间不能晚于现在。每天只自动记录一次，午休、重启、取消或撤销后当天不再自动开始，仍可手动开始。当天记录及下班提醒状态立即保存，重启后继续计时，次日本地日期重新开始。
+
+Linux 通过 loginctl 判断本地活动会话和锁定状态，优先读取 GNOME Mutter 的系统空闲时间（需要 gdbus）；原生 X11 可回退到 XScreenSaver。XWayland 的空闲时间不能代表整个 Wayland 桌面，因此其他 Wayland 桌面无法读取时保留手动打卡。只读取空闲时长，不记录键盘内容。状态文件位于 `$XDG_DATA_HOME/lexington/clock.json`（默认 `~/.local/share/lexington/clock.json`），开发模式独立使用 `clock-dev.json`。文件损坏或不可写时显示错误，不覆盖旧记录。
+
 GIF 逐帧解码，缺少循环信息时默认持续循环；显式设置了循环次数的文件按该次数播放。播放器不会把全部 1024×1024 帧保留在内存；不足 20ms 的帧延迟按浏览器行为使用 100ms。未配置图片或图片解码失败时显示粉色动画宠物。
 
 ## 资源与配置
@@ -107,6 +113,8 @@ config/config.json
     "noApproval": false
   },
   "clockIn": {
+    "autoStart": true,
+    "confirmationSeconds": 180,
     "workReminderHours": 12,
     "clockInMessage": "打卡成功！",
     "clockOutMessage": "下班时间到了！",
@@ -115,7 +123,7 @@ config/config.json
 }
 ```
 
-`width/maxHeight/offsetX/offsetY` 为逻辑像素，`autoCloseDelay` 为秒，`workReminderHours` 为小时。输入框水平居中。缺失字段采用默认值，格式错误时回退默认配置。
+`width/maxHeight/offsetX/offsetY` 为逻辑像素，`autoCloseDelay` 为秒，`workReminderHours` 为小时。`clockIn.autoStart` 默认 true；`confirmationSeconds` 默认 180，限制在 30～600 秒，热加载改变这些设置后重新确认。输入框水平居中。缺失字段采用默认值，启动读取失败时回退默认配置，热加载错误保留上次有效配置。
 
 聊天改为连接本机 Codex app-server，通过后台线程处理标准输入输出，不阻塞界面。沿用 Codex CLI 的登录、模型及权限配置，不再使用旧的 `llm` 字段；旧配置仍可加载，安装升级保留原配置。
 

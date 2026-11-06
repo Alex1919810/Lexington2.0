@@ -7,6 +7,8 @@
     "autoCloseDelay": 10
   },
   "clockIn": {
+    "autoStart": true,
+    "confirmationSeconds": 180,
     "workReminderHours": 12,
     "clockInMessage": "打卡成功！",
     "clockOutMessage": "下班时间到了！",

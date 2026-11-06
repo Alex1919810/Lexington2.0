@@ -339,7 +339,7 @@ fn native_pointer_events_drive_sidebar_and_pet_click_cycle() {
     click(&mut app, &ctx, pos2(110., 325.));
     assert_eq!(app.library.format, "png");
     click(&mut app, &ctx, pos2(110., 425.));
-    assert!(app.clock_state.started.is_some());
+    assert!(app.clock_state.running());
     assert_eq!(app.text, "打卡成功！");
     app.text.clear();
     click(&mut app, &ctx, pos2(400., 300.));
@@ -355,12 +355,15 @@ fn clock_cancel_expiry_and_dialog_inactivity() {
     let mut app = Pet::from_context(&ctx, true);
     app.clock();
     app.clock();
-    assert!(app.clock_state.started.is_none());
+    assert!(!app.clock_state.running());
     assert_eq!(app.text, "打卡已终止");
     app.config.clock_in.work_reminder_hours = 0.001;
-    app.clock_state.started = Some(Instant::now() - Duration::from_secs(4));
+    app.clock_state
+        .toggle(&app.config.clock_in, crate::backend::clock::now() - 4)
+        .unwrap();
+    app.last_clock_poll = Instant::now() - Duration::from_secs(2);
     frame(&mut app, &ctx, vec![]);
-    assert!(app.clock_state.started.is_none());
+    assert!(!app.clock_state.running());
     assert_eq!(app.text, "下班时间到了！");
     app.last_activity = Instant::now() - Duration::from_secs(11);
     frame(&mut app, &ctx, vec![]);
@@ -533,7 +536,7 @@ fn sidebar_cancel_keeps_new_message_when_dialog_already_open() {
     assert_eq!(app.text, "打卡成功！");
     click(&mut app, &ctx, pos2(110., 425.));
     assert_eq!(app.text, "打卡已终止");
-    assert!(app.clock_state.started.is_none());
+    assert!(!app.clock_state.running());
     click(&mut app, &ctx, pos2(750., 30.));
     assert!(app.text.is_empty());
 }
@@ -674,4 +677,120 @@ fn browser_sized_cjk_wraps_and_reserves_full_typewriter_height() {
     app.full_text = true;
     frame(&mut app, &ctx, vec![]);
     assert_eq!(app.dialog_bounds.unwrap().height(), rect.height());
+}
+
+#[test]
+fn automatic_clock_notice_undo_settings_and_hot_reload_use_saved_state() {
+    use crate::{
+        backend::{
+            clock::{self, ClockState},
+            config::Config,
+        },
+        tools::activity::{Monitor, Sample},
+    };
+    let root = std::env::temp_dir().join(format!("lexington-clock-ui-{}", rand::random::<u64>()));
+    Config::save_auto_clock(&root, true).unwrap();
+    let path = root.join("clock.json");
+    let ctx = egui::Context::default();
+    let mut app = Pet::from_root(&ctx, false, root.clone());
+    let now = clock::now();
+    let tick = Instant::now();
+    app.clock_state = ClockState::load(path.clone(), now - 180).unwrap();
+    for seconds in (0..180).step_by(2) {
+        assert!(
+            !app.clock_state
+                .observe(
+                    &app.config.clock_in,
+                    now - 180 + seconds,
+                    tick - Duration::from_secs((180 - seconds) as u64),
+                    Some(Duration::ZERO)
+                )
+                .unwrap()
+        );
+    }
+    app.activity_monitor = Some(Monitor::mock(Sample {
+        idle: Some(Duration::ZERO),
+        status: "正在检测工作活动".into(),
+        sampled: tick,
+    }));
+    frame(&mut app, &ctx, vec![]);
+    assert!(app.clock_notice);
+    assert_eq!(app.clock_state.started(), Some(now - 180));
+    assert_eq!(
+        ClockState::load(path.clone(), now).unwrap().started(),
+        Some(now - 180)
+    );
+    for _ in 0..3 {
+        frame(&mut app, &ctx, vec![]);
+    }
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0., 0.), vec2(800., 600.))),
+            ..Default::default()
+        },
+        |ctx| app.ui(ctx),
+    );
+    let mut shapes: Vec<_> = output.shapes.iter().map(|s| &s.shape).collect();
+    let mut undo = None;
+    while let Some(shape) = shapes.pop() {
+        match shape {
+            egui::Shape::Vec(children) => shapes.extend(children),
+            egui::Shape::Text(text) if text.galley.job.text == "撤销" => {
+                undo = Some(text.pos + text.galley.size() / 2.);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let undo = undo.expect("automatic clock undo button");
+    assert!(app.input_regions.iter().any(|r| r.contains(undo)));
+    click(&mut app, &ctx, undo);
+    assert!(!app.clock_notice);
+    assert!(app.clock_state.started().is_none());
+    assert!(ClockState::load(path, now).unwrap().started().is_none());
+    app.settings = true;
+    app.settings_page = 2;
+    for _ in 0..3 {
+        frame(&mut app, &ctx, vec![]);
+    }
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0., 0.), vec2(800., 600.))),
+            ..Default::default()
+        },
+        |ctx| app.ui(ctx),
+    );
+    let mut shapes: Vec<_> = output.shapes.iter().map(|s| &s.shape).collect();
+    let mut target = None;
+    while let Some(shape) = shapes.pop() {
+        match shape {
+            egui::Shape::Vec(children) => shapes.extend(children),
+            egui::Shape::Text(text) if text.galley.job.text == "自动开始工作计时" => {
+                target = Some(text.pos + text.galley.size() / 2.);
+                break;
+            }
+            _ => {}
+        }
+    }
+    click(&mut app, &ctx, target.expect("automatic clock setting"));
+    assert!(!app.config.clock_in.auto_start);
+    assert!(!Config::load(&root).clock_in.auto_start);
+    Config::save_auto_clock(&root, true).unwrap();
+    app.reload_config();
+    assert!(app.config.clock_in.auto_start);
+    app.clock_edit = clock::local_time(now - 60).unwrap().label();
+    app.clock_action(super::clock::ClockAction::Edit);
+    assert!(app.clock_error.is_empty(), "{}", app.clock_error);
+    assert_eq!(
+        clock::local_time(app.clock_state.started().unwrap())
+            .unwrap()
+            .label(),
+        app.clock_edit
+    );
+    app.clock_edit = "99:00".into();
+    let original = app.clock_state.started();
+    app.clock_action(super::clock::ClockAction::Edit);
+    assert!(!app.clock_error.is_empty());
+    assert_eq!(app.clock_state.started(), original);
+    std::fs::remove_dir_all(root).unwrap();
 }

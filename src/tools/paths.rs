@@ -12,3 +12,12 @@ pub fn resource_root() -> PathBuf {
     }
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
+
+pub fn clock_state_file(dev: bool) -> PathBuf {
+    let data = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+        .unwrap_or_else(std::env::temp_dir);
+    data.join("lexington")
+        .join(if dev { "clock-dev.json" } else { "clock.json" })
+}

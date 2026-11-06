@@ -53,7 +53,7 @@ impl Pet {
                     },
                     "切换 GIF/PNG 格式",
                     "切换角色",
-                    if self.clock_state.started.is_some() {
+                    if self.clock_state.running() {
                         "点击终止计时"
                     } else {
                         "上班打卡"
@@ -70,7 +70,7 @@ impl Pet {
                         Color32::from_rgba_unmultiplied(150, 100, 255, 204)
                     } else if n == 1 && self.library.damaged {
                         Color32::from_rgba_unmultiplied(255, 152, 0, 204)
-                    } else if n == 5 && self.clock_state.started.is_some() {
+                    } else if n == 5 && self.clock_state.running() {
                         Color32::from_rgba_unmultiplied(76, 175, 80, 204)
                     } else {
                         Color32::from_rgba_unmultiplied(100, 150, 255, 204)
@@ -170,7 +170,25 @@ impl Pet {
         handled
     }
     pub(super) fn clock(&mut self) {
-        let message = self.clock_state.toggle(&self.config.clock_in);
-        self.say(message);
+        if !self.clock_storage_ok {
+            self.settings = true;
+            self.settings_page = 2;
+            return;
+        }
+        match self
+            .clock_state
+            .toggle(&self.config.clock_in, crate::backend::clock::now())
+        {
+            Ok(message) => {
+                self.clock_error.clear();
+                self.clock_notice = false;
+                self.say(message);
+            }
+            Err(error) => {
+                self.clock_error = error;
+                self.settings = true;
+                self.settings_page = 2;
+            }
+        }
     }
 }

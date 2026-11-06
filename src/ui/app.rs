@@ -1,9 +1,13 @@
 use super::{assets::Picture, style};
 use crate::{
     backend::{
-        character::CharacterState, clock::ClockState, codex::Client, config::Config, resources,
+        character::CharacterState,
+        clock::{self, ClockState},
+        codex::Client,
+        config::Config,
+        resources,
     },
-    tools::{paths, platform},
+    tools::{activity, paths, platform},
 };
 use eframe::egui::{self, Rect, Vec2, vec2};
 use std::{
@@ -38,6 +42,13 @@ pub struct Pet {
     pub(super) drag_sent: bool,
     pub(super) last_activity: Instant,
     pub(super) clock_state: ClockState,
+    pub(super) activity_monitor: Option<activity::Monitor>,
+    pub(super) activity_status: String,
+    pub(super) clock_error: String,
+    pub(super) clock_storage_ok: bool,
+    pub(super) clock_edit: String,
+    pub(super) clock_notice: bool,
+    pub(super) last_clock_poll: Instant,
     pub(super) input: String,
     pub(super) error: String,
     pub(super) codex: Option<Client>,
@@ -58,7 +69,7 @@ pub struct Pet {
     pub(super) hints_applied: bool,
     pub(super) about: bool,
     pub(super) settings: bool,
-    pub(super) settings_connection: bool,
+    pub(super) settings_page: u8,
 }
 impl Pet {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -71,6 +82,15 @@ impl Pet {
         {
             app.drag_window = platform::DragWindow::new(cc);
         }
+        match ClockState::load(paths::clock_state_file(app.dev), clock::now()) {
+            Ok(state) => app.clock_state = state,
+            Err(error) => {
+                app.clock_error = error;
+                app.clock_storage_ok = false;
+            }
+        }
+        let ctx = cc.egui_ctx.clone();
+        app.activity_monitor = Some(activity::Monitor::start(move || ctx.request_repaint()));
         app.start_codex(&cc.egui_ctx);
         app
     }
@@ -120,6 +140,13 @@ impl Pet {
             drag_sent: false,
             last_activity: Instant::now(),
             clock_state: ClockState::default(),
+            activity_monitor: None,
+            activity_status: "等待系统活动".into(),
+            clock_error: String::new(),
+            clock_storage_ok: true,
+            clock_edit: String::new(),
+            clock_notice: false,
+            last_clock_poll: Instant::now() - Duration::from_secs(2),
             input: String::new(),
             error: String::new(),
             codex: None,
@@ -150,7 +177,7 @@ impl Pet {
             hints_applied: false,
             about: false,
             settings: false,
-            settings_connection: false,
+            settings_page: 0,
         };
         app.refresh(ctx);
         app
@@ -178,6 +205,12 @@ impl Pet {
             .and_then(|m| m.modified().ok().map(|time| (time, m.len())));
         match Config::read(&self.root) {
             Ok(config) => {
+                if config.clock_in.auto_start != self.config.clock_in.auto_start
+                    || config.clock_in.confirmation_seconds
+                        != self.config.clock_in.confirmation_seconds
+                {
+                    self.clock_state.reset_candidate();
+                }
                 self.codex_restart_pending |= config.codex.executable
                     != self.config.codex.executable
                     || config.codex.working_directory != self.config.codex.working_directory;
@@ -398,9 +431,7 @@ impl Pet {
         {
             self.text.clear();
         }
-        if let Some(message) = self.clock_state.poll(&self.config.clock_in) {
-            self.say(message);
-        }
+        self.poll_clock();
         let screen = ctx.screen_rect();
         let (size, transform, clicked) = self.pet_ui(ctx, screen);
         let center = screen.center();
@@ -435,8 +466,11 @@ impl Pet {
         let mut reload = false;
         let mut no_approval = self.config.codex.no_approval;
         let mut approval_changed = false;
+        let mut clock_auto_changed = false;
+        let mut clock_action = None;
+        let mut settings_open = self.settings;
         if let Some(window) = egui::Window::new("设置")
-            .open(&mut self.settings)
+            .open(&mut settings_open)
             .order(egui::Order::Foreground)
             .collapsible(false)
             .resizable(false)
@@ -465,16 +499,16 @@ impl Pet {
                         vec2(76., 326.),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
-                            for (connection, title) in [(false, "常规"), (true, "连接")] {
+                            for (page, title) in [(0, "常规"), (1, "连接"), (2, "打卡")] {
                                 if ui
                                     .add_sized(
                                         [76., 34.],
                                         egui::Button::new(title)
-                                            .selected(self.settings_connection == connection),
+                                            .selected(self.settings_page == page),
                                     )
                                     .clicked()
                                 {
-                                    self.settings_connection = connection;
+                                    self.settings_page = page;
                                 }
                             }
                         },
@@ -491,16 +525,14 @@ impl Pet {
                                     ui.set_width(ui.available_width());
                                     ui.add_space(2.);
                                     ui.label(
-                                        egui::RichText::new(if self.settings_connection {
-                                            "连接"
-                                        } else {
-                                            "常规"
-                                        })
+                                        egui::RichText::new(match self.settings_page { 1 => "连接", 2 => "打卡", _ => "常规" })
                                         .size(20.)
                                         .strong(),
                                     );
                                     ui.add_space(6.);
-                                    if self.settings_connection {
+                                    if self.settings_page == 2 {
+                                        (clock_auto_changed, clock_action) = self.clock_settings_ui(ui);
+                                    } else if self.settings_page == 1 {
                                         egui::Frame::group(ui.style())
                                             .fill(egui::Color32::WHITE)
                                             .inner_margin(12)
@@ -597,10 +629,11 @@ impl Pet {
                     );
                 });
             })
-            && self.settings
+            && settings_open
         {
             self.input_regions.push(window.response.rect);
         }
+        self.settings = settings_open;
         if approval_changed {
             match Config::save_no_approval(&self.root, no_approval) {
                 Ok(()) => {
@@ -610,6 +643,20 @@ impl Pet {
                 Err(error) => self.config_error = error,
             }
         }
+        if clock_auto_changed {
+            let enabled = !self.config.clock_in.auto_start;
+            match Config::save_auto_clock(&self.root, enabled) {
+                Ok(()) => {
+                    self.config.clock_in.auto_start = enabled;
+                    self.clock_state.reset_candidate();
+                    self.clock_error.clear();
+                }
+                Err(error) => self.clock_error = error,
+            }
+        }
+        if let Some(action) = clock_action {
+            self.clock_action(action);
+        }
         if reload {
             self.refresh(ctx);
         }
@@ -618,6 +665,7 @@ impl Pet {
             self.start_codex(ctx);
         }
         self.codex_prompt_ui(ctx);
+        self.clock_notice_ui(ctx);
         #[cfg(target_os = "linux")]
         if let Some(window) = &mut self.drag_window {
             window.set_input_regions(&self.input_regions, screen, ctx.pixels_per_point());

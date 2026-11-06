@@ -66,6 +66,8 @@ mod tests {
         assert!(config.codex.working_directory.is_none());
         assert!(!config.codex.no_approval);
         assert_eq!(config.clock_in.clock_in_message, "打卡成功！");
+        assert!(config.clock_in.auto_start);
+        assert_eq!(config.clock_in.confirmation_seconds, 180);
         root.write("config/config.json", "bad json");
         assert_eq!(Config::load(&root.0).dialog.width, 200.);
     }
@@ -95,5 +97,41 @@ mod tests {
         let missing = Fixture::new();
         Config::save_no_approval(&missing.0, true).unwrap();
         assert!(Config::load(&missing.0).codex.no_approval);
+    }
+    #[test]
+    fn automatic_clock_setting_preserves_config_and_clamps_confirmation_time() {
+        let root = Fixture::new();
+        root.write("config/config.json", r#"{"clockIn":{"workReminderHours":9,"confirmationSeconds":1,"future":true},"codex":{"noApproval":true},"unknown":[1,2]}"#);
+        let path = root.0.join("config/config.json");
+        let before: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        for enabled in [false, true] {
+            Config::save_auto_clock(&root.0, enabled).unwrap();
+            let config = Config::read(&root.0).unwrap();
+            assert_eq!(config.clock_in.auto_start, enabled);
+            assert_eq!(config.clock_in.confirmation_seconds, 30);
+            let mut saved: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            assert_eq!(
+                saved["clockIn"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("autoStart"),
+                Some(enabled.into())
+            );
+            assert_eq!(saved, before);
+        }
+        root.write(
+            "config/config.json",
+            r#"{"clockIn":{"confirmationSeconds":99999}}"#,
+        );
+        assert_eq!(
+            Config::read(&root.0).unwrap().clock_in.confirmation_seconds,
+            600
+        );
+        for invalid in ["bad json", "[]", r#"{"clockIn":null}"#] {
+            fs::write(&path, invalid).unwrap();
+            assert!(Config::save_auto_clock(&root.0, false).is_err());
+            assert_eq!(fs::read_to_string(&path).unwrap(), invalid);
+        }
     }
 }

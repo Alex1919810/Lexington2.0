@@ -43,6 +43,8 @@ impl Default for CodexConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ClockConfig {
+    pub auto_start: bool,
+    pub confirmation_seconds: u64,
     pub work_reminder_hours: f64,
     pub clock_in_message: String,
     pub clock_out_message: String,
@@ -51,6 +53,8 @@ pub struct ClockConfig {
 impl Default for ClockConfig {
     fn default() -> Self {
         Self {
+            auto_start: true,
+            confirmation_seconds: 180,
             work_reminder_hours: 12.,
             clock_in_message: "打卡成功！".into(),
             clock_out_message: "下班时间到了！".into(),
@@ -67,23 +71,34 @@ pub struct Config {
 }
 impl Config {
     pub fn save_no_approval(root: &Path, enabled: bool) -> Result<(), String> {
+        Self::save_setting(root, "codex", "noApproval", enabled.into())
+    }
+    pub fn save_auto_clock(root: &Path, enabled: bool) -> Result<(), String> {
+        Self::save_setting(root, "clockIn", "autoStart", enabled.into())
+    }
+    fn save_setting(
+        root: &Path,
+        section: &str,
+        key: &str,
+        value: serde_json::Value,
+    ) -> Result<(), String> {
         use std::io::Write;
 
         let path = root.join("config/config.json");
         let mut document: serde_json::Value = match fs::read(&path) {
             Ok(bytes) => serde_json::from_slice(&bytes)
-                .map_err(|_| "配置格式错误，未保存审批设置。".to_owned())?,
+                .map_err(|_| "配置格式错误，未保存设置。".to_owned())?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
             Err(e) => return Err(format!("读取配置失败：{e}")),
         };
-        let codex = document
+        let group = document
             .as_object_mut()
-            .ok_or("配置必须为 JSON 对象，未保存审批设置。")?
-            .entry("codex")
+            .ok_or("配置必须为 JSON 对象，未保存设置。")?
+            .entry(section)
             .or_insert_with(|| serde_json::json!({}))
             .as_object_mut()
-            .ok_or("codex 配置必须为对象，未保存审批设置。")?;
-        codex.insert("noApproval".into(), enabled.into());
+            .ok_or("设置分组必须为对象，未保存设置。")?;
+        group.insert(key.into(), value);
         let mut contents = serde_json::to_vec_pretty(&document).map_err(|e| e.to_string())?;
         contents.push(b'\n');
         fs::create_dir_all(root.join("config")).map_err(|e| format!("创建配置目录失败：{e}"))?;
@@ -119,6 +134,7 @@ impl Config {
         config.dialog.max_height = config.dialog.max_height.clamp(24., 2000.);
         config.dialog.auto_close_delay = config.dialog.auto_close_delay.clamp(0., 86400.);
         config.clock_in.work_reminder_hours = config.clock_in.work_reminder_hours.clamp(0., 87600.);
+        config.clock_in.confirmation_seconds = config.clock_in.confirmation_seconds.clamp(30, 600);
         Ok(config)
     }
 }
