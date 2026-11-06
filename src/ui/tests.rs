@@ -253,6 +253,16 @@ fn config_hot_reload_keeps_valid_settings_and_defers_connection_changes_until_id
     frame(&mut app, &ctx, vec![]);
     assert_eq!(app.config.dialog.width, 314.);
     assert!(!app.config_error.is_empty());
+    // A model/API edit must wait for the current generation, just like executable changes.
+    document["codex"]["model"] = "fixture-new-model".into();
+    document["codex"]["useCustomApi"] = true.into();
+    document["codex"]["baseUrl"] = "https://example.invalid/v1".into();
+    document["codex"]["apiKey"] = "fixture-hot-key".into();
+    std::fs::write(&path, document.to_string()).unwrap();
+    app.last_config_check = Instant::now() - Duration::from_secs(1);
+    frame(&mut app, &ctx, vec![]);
+    assert!(app.codex_restart_pending && app.busy && app.codex.is_some());
+    assert_eq!(app.config.codex.model, "fixture-new-model");
     document["codex"]["executable"] = root.join("missing-codex").to_str().unwrap().into();
     std::fs::write(&path, document.to_string()).unwrap();
     app.last_config_check = Instant::now() - Duration::from_secs(1);
@@ -271,6 +281,101 @@ fn config_hot_reload_keeps_valid_settings_and_defers_connection_changes_until_id
         "the updated executable must be used after the old turn ends"
     );
     assert_eq!(app.codex_status, "启动失败");
+    drop(app);
+    std::fs::remove_dir_all(root).unwrap();
+}
+#[test]
+fn connection_form_masks_key_validates_save_and_defers_restart_while_busy() {
+    let root = std::env::temp_dir().join(format!("lexington-api-ui-{}", rand::random::<u64>()));
+    crate::backend::config::Config::save_no_approval(&root, false).unwrap();
+    let ctx = egui::Context::default();
+    let mut app = Pet::from_root(&ctx, false, root.clone());
+    app.codex = Some(crate::backend::codex::Client::mock("normal"));
+    app.input = "interrupt".into();
+    app.submit(&ctx);
+    app.settings = true;
+    app.settings_page = 1;
+    frame(&mut app, &ctx, vec![]);
+    for valid in [false, true] {
+        let draft = app.connection_draft.as_mut().unwrap();
+        draft.use_custom_api = true;
+        draft.model = "fixture-ui-model".into();
+        draft.base_url = if valid {
+            "http://127.0.0.1:9999/v1"
+        } else {
+            "not-a-url"
+        }
+        .into();
+        draft.api_key = "fixture-hidden-ui-key".into();
+        let mut save = None;
+        for _ in 0..12 {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(pos2(0., 0.), vec2(800., 600.))),
+                    events: vec![egui::Event::PointerMoved(pos2(530., 330.))],
+                    ..Default::default()
+                },
+                |ctx| app.ui(ctx),
+            );
+            let mut shapes: Vec<_> = output
+                .shapes
+                .iter()
+                .map(|s| (s.clip_rect, &s.shape))
+                .collect();
+            while let Some((clip, shape)) = shapes.pop() {
+                match shape {
+                    egui::Shape::Vec(children) => shapes.extend(children.iter().map(|s| (clip, s))),
+                    egui::Shape::Text(text) => {
+                        assert!(
+                            !text.galley.job.text.contains("fixture-hidden-ui-key"),
+                            "key must be masked"
+                        );
+                        if text.galley.job.text == "保存" {
+                            let point = text.pos + text.galley.size() / 2.;
+                            if clip.contains(point) {
+                                save = Some(point);
+                            }
+                        }
+                    }
+                    _ => (),
+                }
+            }
+            if save.is_some() {
+                break;
+            }
+            frame(
+                &mut app,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(pos2(530., 330.)),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: vec2(0., -90.),
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+        }
+        click(
+            &mut app,
+            &ctx,
+            save.expect("visible connection save button"),
+        );
+        let saved = crate::backend::config::Config::read(&root).unwrap();
+        if valid {
+            assert!(app.connection_error.is_empty(), "{}", app.connection_error);
+            assert_eq!(saved.codex.model, "fixture-ui-model");
+            assert_eq!(saved.codex.api_key, "fixture-hidden-ui-key");
+            assert!(app.busy && app.codex_restart_pending);
+        } else {
+            assert!(!app.connection_error.is_empty());
+            assert!(!saved.codex.use_custom_api);
+            assert!(!app.codex_restart_pending);
+        }
+    }
+    app.settings = false;
+    frame(&mut app, &ctx, vec![]);
+    assert!(app.connection_draft.is_none());
     drop(app);
     std::fs::remove_dir_all(root).unwrap();
 }

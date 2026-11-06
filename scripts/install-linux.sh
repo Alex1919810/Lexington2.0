@@ -2,12 +2,20 @@
 set -euo pipefail
 project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_root"
-cargo build --release --locked
+export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+binary_source="target/release/lexington"
+if [[ -f Cargo.toml ]]; then
+    bash scripts/install-dependencies.sh "$@"
+    cargo build --release --locked
+else
+    bash scripts/install-dependencies.sh --runtime-only "$@"
+    binary_source="lexington"
+fi
 install_dir="${XDG_DATA_HOME:-$HOME/.local/share}/lexington"
 mkdir -p "$install_dir" "${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 # Replace atomically: truncating a running executable fails with ETXTBSY.
 binary_tmp="$(mktemp "$install_dir/.lexington-install.XXXXXX")"
-cp target/release/lexington "$binary_tmp"
+cp "$binary_source" "$binary_tmp"
 chmod +x "$binary_tmp"
 mv -f "$binary_tmp" "$install_dir/lexington"
 cp -R resource "$install_dir/"

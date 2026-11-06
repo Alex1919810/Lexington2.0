@@ -18,7 +18,7 @@ cargo run --release --locked
 cargo run --locked -- --dev
 ```
 
-Codex 输入输出需要预先安装并登录 Codex CLI（本机验证版本为 0.166.0）。Lexington 启动时自动运行 `codex app-server --stdio`，缺少 CLI 或连接失败会在输入区显示错误，宠物的其他功能仍可使用。
+Codex 输入输出需要 Codex CLI（本机验证版本为 0.166.0）；安装器可自动安装，使用本机服务前需登录，或在设置中配置自定义模型 API。Lexington 启动时自动运行 `codex app-server --stdio`，通过安装脚本可自动补齐 CLI；直接运行时缺少 CLI 或连接失败会在输入区显示错误，宠物的其他功能仍可使用。
 
 Linux 需要桌面 OpenGL/EGL 驱动及 X11/XWayland。存在 `DISPLAY` 时默认选 X11/XWayland；可通过 `cargo run --release --locked -- --wayland` 选择原生 Wayland。
 
@@ -38,9 +38,9 @@ bash scripts/package.sh
 bash scripts/install-linux.sh
 ```
 
-以上打包和安装脚本用于 Linux。打包生成 `dist/lexington/` 和 `dist/lexington-linux-<架构>.tar.gz`，包含可执行文件、资源和配置。解压后运行其中的 `lexington` 即可。
+以上打包和安装脚本用于 Linux。打包生成 `dist/lexington/` 和 `dist/lexington-linux-<架构>.tar.gz`，包含可执行文件、资源和配置。解压后可运行 `bash install.sh` 安装依赖、桌宠与菜单；发布包安装不要求 Rust。依赖已就绪时也可直接运行 `lexington`。首次安装缺失依赖需要联网，系统包安装可能弹出管理员认证。`--skip-optional` 可跳过顶层右键菜单等可选系统依赖。
 
-安装脚本默认安装到 `~/.local/share/lexington/`（遵循 `XDG_DATA_HOME`），创建名称固定为 `Lexington` 的应用菜单和桌面快捷方式（桌面文件为 `Lexington.desktop`），升级时迁移旧快捷方式并保留已安装版本的配置。分发前请检查配置中没有遗留的密钥；新配置不再保存聊天 API key。Codex CLI 需单独安装，程序不会自动下载。
+安装脚本默认安装到 `~/.local/share/lexington/`（遵循 `XDG_DATA_HOME`），创建名称固定为 `Lexington` 的应用菜单和桌面快捷方式（桌面文件为 `Lexington.desktop`），升级时迁移旧快捷方式并保留已安装版本的配置。分发前请检查配置中没有遗留的密钥；默认配置的 API Key 为空，用户填写后仅保存到自己的配置文件。安装器自动检查依赖：缺少 Codex 时下载并校验官方原生包，保留已有版本和登录配置；缺少 Rust 时安装最小稳定工具链（仅源码安装），Ubuntu/Debian 缺失的系统库与桌面集成依赖通过系统授权安装。安装器本身不执行 Codex 登录；可运行 `codex login`，也可在设置中配置模型 API。
 
 Windows 在对应系统使用 `cargo build --release --locked` 构建，将 `target/release/lexington.exe` 与 `resource/`、`config/` 一起分发；macOS 对应的可执行文件为 `target/release/lexington`。
 
@@ -129,7 +129,11 @@ config/config.json
   "codex": {
     "executable": "codex",
     "workingDirectory": null,
-    "noApproval": false
+    "noApproval": false,
+    "model": "",
+    "useCustomApi": false,
+    "baseUrl": "",
+    "apiKey": ""
   },
   "clockIn": {
     "autoStart": true,
@@ -146,11 +150,15 @@ config/config.json
 
 聊天改为连接本机 Codex app-server，通过后台线程处理标准输入输出，不阻塞界面。沿用 Codex CLI 的登录、模型及权限配置，不再使用旧的 `llm` 字段；旧配置仍可加载，安装升级保留原配置。
 
+设置 → 连接 → **模型与 API**：可填写模型名称，开启“自定义 API”后填写基础地址（如 `https://api.openai.com/v1`）及 API Key，点击“保存”。当前支持兼容 **OpenAI Responses API** 的服务；只支持 Chat Completions 的接口不能直接使用。模型留空且关闭自定义 API 时沿用本机 Codex 配置；只填写模型也可覆盖本机默认模型。更改连接参数会自动重建会话，正在处理任务时等任务结束后切换；编辑表单过程中不会逐字保存，外部配置文件仍每 0.5 秒热加载。
+
+Key 默认以密码形式显示，保存到当前安装目录 `config/config.json`，不是加密存储；Unix 保存后文件权限为 0600。启动自定义提供方时仅通过子进程环境变量传 Key，不写入命令行或用户的 `~/.codex/config.toml`，关闭自定义 API 后恢复使用本机提供方。切换不改变审批/沙箱权限；自定义模型仍需支持 Codex 使用的 Responses 工具调用。错误与回复中的完整 Key 会遮蔽。
+
 `codex.executable` 可设为 CLI 的绝对路径；默认从 PATH 查找，Linux 桌面启动时还会查找 `~/.local/bin/codex` 和 `~/.cargo/bin/codex`。`codex.workingDirectory` 指定 Codex 操作的项目目录：绝对路径直接使用，相对路径以资源根目录为基准；`null` 默认使用资源根目录（安装版通常为 `~/.local/share/lexington`）。需要操作其他项目时应改为该项目的路径。
 
 右键 → 设置 → 常规中的“无需审批”开关会自动保存到 `codex.noApproval`，默认关闭。开启后，从下一条消息起使用 `approvalPolicy: never`，关闭后恢复当前会话启动时继承的本机审批策略（包括本机原本就无需审批的情况）。切换不重启服务、不清空对话，也不改变当前任务或沙箱权限；超出沙箱允许范围的操作仍会失败。Codex 的补充信息提问仍需回答。
 
-同一次启动内复用一个 Codex thread，支持连续对话；退出程序会终止所启动的 app-server（Unix 同时清理该进程组的后代），下次启动新建会话。右键 → 设置 → 连接可查看连接状态、程序路径和工作目录，路径支持悬停查看及复制；普通设置热加载时保留对话；程序路径或工作目录改变时自动重建 Codex 会话，正在处理任务则等任务结束后切换，会话上下文随重建清空。也可空闲时手动点击“重启会话”。命令或文件审批、Codex 提问会显示交互窗口；不支持的请求会明确返回错误。连接请求响应超时为 30 秒，模型生成不设置固定超时。
+同一次启动内复用一个 Codex thread，支持连续对话；退出程序会终止所启动的 app-server（Unix 同时清理该进程组的后代），下次启动新建会话。右键 → 设置 → 连接可查看连接状态、程序路径和工作目录，路径支持悬停查看及复制；普通设置热加载时保留对话；程序路径、工作目录、模型或启用中的 API 地址/Key 改变时自动重建 Codex 会话，正在处理任务则等任务结束后切换，会话上下文随重建清空。也可空闲时手动点击“重启会话”。命令或文件审批、Codex 提问会显示交互窗口；不支持的请求会明确返回错误。连接请求响应超时为 30 秒，模型生成不设置固定超时。
 
 协议参考：[Codex app-server](https://developers.openai.com/codex/app-server/)。本机集成根据已安装 CLI 的帮助与生成的 JSON Schema 验证。
 
@@ -175,6 +183,7 @@ cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
 python3 scripts/context-smoke.py target/release/lexington
 node scripts/test-integrations.js  # 仅开发验证，主程序不依赖 Node
+python3 scripts/test-dependencies.py
 cargo run --locked -- --dev --screenshot /tmp/lexington.png
 ```
 

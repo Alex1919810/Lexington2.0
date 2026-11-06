@@ -84,6 +84,7 @@ impl Client {
         root: &Path,
         wake: impl Fn() + Send + 'static,
     ) -> Result<Self, String> {
+        config.validate_connection()?;
         let directory = config.working_directory.as_ref().map_or_else(
             || root.to_path_buf(),
             |dir| {
@@ -123,9 +124,42 @@ impl Client {
         command
             .args(["app-server", "--stdio"])
             .current_dir(directory);
+        if !config.model.is_empty() {
+            command.args(["-c", &format!("model={}", json!(config.model))]);
+        }
+        if config.use_custom_api {
+            for (name, value) in [
+                ("model_provider", json!("lexington_api")),
+                ("model_providers.lexington_api.name", json!("Lexington API")),
+                (
+                    "model_providers.lexington_api.base_url",
+                    json!(config.base_url),
+                ),
+                (
+                    "model_providers.lexington_api.env_key",
+                    json!("LEXINGTON_MODEL_API_KEY"),
+                ),
+                ("model_providers.lexington_api.wire_api", json!("responses")),
+                (
+                    "model_providers.lexington_api.requires_openai_auth",
+                    json!(false),
+                ),
+            ] {
+                command.args(["-c", &format!("{name}={value}")]);
+            }
+            command.env("LEXINGTON_MODEL_API_KEY", &config.api_key);
+        } else {
+            command.env_remove("LEXINGTON_MODEL_API_KEY");
+        }
         Self::launch(command, wake)
     }
     fn launch(mut command: Command, wake: impl Fn() + Send + 'static) -> Result<Self, String> {
+        let secret = command
+            .get_envs()
+            .find(|(key, _)| *key == "LEXINGTON_MODEL_API_KEY")
+            .and_then(|(_, value)| value)
+            .map(|value| value.to_string_lossy().into_owned())
+            .filter(|value| !value.is_empty());
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -182,7 +216,21 @@ impl Client {
                 let _ =
                     reader_input.send(Input::End("Codex 进程已断开，请在设置中重启会话。".into()));
             });
-            let emit = |event| {
+            let emit = |mut event| {
+                // Provider errors can echo request details. Keep credentials out of UI/logs.
+                if let Some(secret) = &secret {
+                    match &mut event {
+                        Event::Failed(text)
+                        | Event::Stopped(text)
+                        | Event::Notice(text)
+                        | Event::Text { text, .. } => *text = text.replace(secret, "[hidden]"),
+                        Event::Prompt(prompt) => {
+                            prompt.title = prompt.title.replace(secret, "[hidden]");
+                            prompt.details = prompt.details.replace(secret, "[hidden]");
+                        }
+                        _ => (),
+                    }
+                }
                 let _ = events.send(event);
                 wake();
             };
@@ -609,6 +657,46 @@ mod tests {
                 "unexpected disconnect: {event:?}"
             );
         }
+    }
+    #[test]
+    #[cfg(unix)]
+    fn custom_api_overrides_are_process_local_and_keys_never_enter_arguments() {
+        use std::os::unix::fs::PermissionsExt;
+        let root =
+            std::env::temp_dir().join(format!("lexington-provider-{}", rand::random::<u64>()));
+        std::fs::create_dir(&root).unwrap();
+        let executable = root.join("mock-codex");
+        for (custom, mode) in [(true, "api-config"), (false, "inherit-config")] {
+            let source = format!(
+                "#!/usr/bin/env python3\nimport sys\nsys.argv.insert(1, {mode:?})\n{}",
+                include_str!("../../tests/fixtures/codex-server.py")
+            );
+            std::fs::write(&executable, source).unwrap();
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let config = CodexConfig {
+                executable: executable.to_string_lossy().into_owned(),
+                model: "fixture-model\"with-quote".into(),
+                use_custom_api: custom,
+                base_url: "http://127.0.0.1:9999/v1".into(),
+                api_key: "fixture-key-not-a-real-secret".into(),
+                ..Default::default()
+            };
+            let client = Client::start(&config, &root, || {}).unwrap();
+            client.submit("确认配置".into(), false).unwrap();
+            wait_for(&client, |event| {
+                matches!(event, Event::Finished { interrupted: false })
+            });
+            if custom {
+                client.submit("echo-secret".into(), false).unwrap();
+                let event = wait_for(&client, |event| matches!(event, Event::Text { .. }));
+                assert!(matches!(event, Event::Text { text, .. } if text == "[hidden]"));
+                wait_for(&client, |event| {
+                    matches!(event, Event::Finished { interrupted: false })
+                });
+            }
+            drop(client);
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn no_approval_applies_per_turn_and_restores_original_policy_without_restarting() {

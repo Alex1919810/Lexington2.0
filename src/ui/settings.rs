@@ -1,5 +1,5 @@
 use super::{app::Pet, clock::ClockAction};
-use crate::backend::config::Config;
+use crate::backend::config::{CodexConfig, Config};
 use eframe::egui::{self, vec2};
 use std::time::{Duration, Instant};
 
@@ -10,11 +10,14 @@ struct SettingsActions {
     no_approval: Option<bool>,
     clock_auto_changed: bool,
     clock_action: Option<ClockAction>,
+    connection: Option<CodexConfig>,
 }
 
 impl Pet {
     pub(super) fn settings_ui(&mut self, ctx: &egui::Context) {
         if !self.settings {
+            self.connection_draft = None;
+            self.connection_error.clear();
             self.settings_viewport_open = false;
             self.settings_drag = None;
             return;
@@ -162,6 +165,8 @@ impl Pet {
         });
         self.settings = open;
         if !open {
+            self.connection_draft = None;
+            self.connection_error.clear();
             self.settings_viewport_open = false;
             self.settings_drag = None;
             ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Close);
@@ -189,6 +194,16 @@ impl Pet {
         if let Some(action) = actions.clock_action {
             self.clock_action(action);
         }
+        if let Some(connection) = actions.connection {
+            match Config::save_connection(&self.root, &connection) {
+                Ok(()) => {
+                    self.reload_config();
+                    self.connection_draft = Some(self.config.codex.clone());
+                    self.connection_error.clear();
+                }
+                Err(error) => self.connection_error = error,
+            }
+        }
         if actions.reload {
             self.refresh(ctx);
         }
@@ -205,6 +220,7 @@ impl Pet {
         let mut approval_changed = false;
         let mut clock_auto_changed = false;
         let mut clock_action = None;
+        let mut connection = None;
         for (text_style, size) in [
             (egui::TextStyle::Body, 14.),
             (egui::TextStyle::Button, 14.),
@@ -257,6 +273,50 @@ impl Pet {
                             } else if self.settings_page == 2 {
                                 (clock_auto_changed, clock_action) = self.clock_settings_ui(ui);
                             } else if self.settings_page == 1 {
+                                let draft = self.connection_draft
+                                    .get_or_insert_with(|| self.config.codex.clone());
+                                egui::Frame::group(ui.style())
+                                    .fill(egui::Color32::WHITE)
+                                    .inner_margin(12)
+                                    .corner_radius(8)
+                                    .show(ui, |ui| {
+                                        ui.set_width(ui.available_width());
+                                        ui.strong("模型与 API");
+                                        ui.label("模型");
+                                        ui.add(egui::TextEdit::singleline(&mut draft.model)
+                                            .id(egui::Id::new("connection-model"))
+                                            .desired_width(f32::INFINITY)
+                                            .hint_text("留空沿用本机配置"));
+                                        ui.checkbox(&mut draft.use_custom_api, "自定义 API")
+                                            .on_hover_text("兼容 OpenAI Responses API；关闭时使用本机 Codex 服务。更改后点击保存。");
+                                        ui.add_enabled_ui(draft.use_custom_api, |ui| {
+                                            ui.label("API 地址");
+                                            ui.add(egui::TextEdit::singleline(&mut draft.base_url)
+                                                .id(egui::Id::new("connection-url"))
+                                                .desired_width(f32::INFINITY)
+                                                .hint_text("https://api.openai.com/v1"))
+                                                .on_hover_text("填写基础地址（通常以 /v1 结尾），不要填写 /responses。");
+                                            ui.label("API Key");
+                                            ui.add(egui::TextEdit::singleline(&mut draft.api_key)
+                                                .id(egui::Id::new("connection-key"))
+                                                .password(true)
+                                                .desired_width(f32::INFINITY))
+                                                .on_hover_text("仅用于 Lexington；保存在当前用户配置文件中。");
+                                        });
+                                        ui.horizontal(|ui| {
+                                            if ui.button("保存").clicked() {
+                                                connection = Some(draft.clone());
+                                            }
+                                            if ui.button("取消修改").clicked() {
+                                                *draft = self.config.codex.clone();
+                                                self.connection_error.clear();
+                                            }
+                                        });
+                                        if !self.connection_error.is_empty() {
+                                            ui.colored_label(egui::Color32::from_rgb(180, 45, 45), &self.connection_error);
+                                        }
+                                    });
+                                ui.add_space(4.);
                                 egui::Frame::group(ui.style())
                                     .fill(egui::Color32::WHITE)
                                     .inner_margin(12)
@@ -358,6 +418,7 @@ impl Pet {
             no_approval: approval_changed.then_some(no_approval),
             clock_auto_changed,
             clock_action,
+            connection,
         }
     }
 }

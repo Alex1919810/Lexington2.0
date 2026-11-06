@@ -78,6 +78,8 @@ pub struct Pet {
     pub(super) settings_started: Instant,
     pub(super) settings_raised: bool,
     pub(super) settings_drag: Option<(egui::Pos2, egui::Pos2)>,
+    pub(super) connection_draft: Option<crate::backend::config::CodexConfig>,
+    pub(super) connection_error: String,
 }
 impl Pet {
     pub fn new(
@@ -203,6 +205,8 @@ impl Pet {
             settings_started: Instant::now(),
             settings_raised: false,
             settings_drag: None,
+            connection_draft: None,
+            connection_error: String::new(),
         };
         app.refresh(ctx);
         app
@@ -236,9 +240,7 @@ impl Pet {
                 {
                     self.clock_state.reset_candidate();
                 }
-                self.codex_restart_pending |= config.codex.executable
-                    != self.config.codex.executable
-                    || config.codex.working_directory != self.config.codex.working_directory;
+                self.codex_restart_pending |= config.codex.connection_changed(&self.config.codex);
                 self.config = config;
                 self.config_error.clear();
             }

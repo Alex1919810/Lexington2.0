@@ -5,6 +5,26 @@ import subprocess
 import sys
 
 mode = sys.argv[1]
+if mode in ('api-config', 'inherit-config'):
+    args = sys.argv[2:]
+    assert args[:2] == ['app-server', '--stdio']
+    overrides = {}
+    for index in range(2, len(args), 2):
+        assert args[index] == '-c'
+        key, value = args[index + 1].split('=', 1)
+        overrides[key] = json.loads(value)
+    assert overrides['model'] == 'fixture-model"with-quote'
+    if mode == 'api-config':
+        assert overrides['model_provider'] == 'lexington_api'
+        assert overrides['model_providers.lexington_api.base_url'] == 'http://127.0.0.1:9999/v1'
+        assert overrides['model_providers.lexington_api.wire_api'] == 'responses'
+        assert overrides['model_providers.lexington_api.env_key'] == 'LEXINGTON_MODEL_API_KEY'
+        assert overrides['model_providers.lexington_api.requires_openai_auth'] is False
+        assert os.environ.get('LEXINGTON_MODEL_API_KEY') == 'fixture-key-not-a-real-secret'
+        assert not any('fixture-key-not-a-real-secret' in arg for arg in args)
+    else:
+        assert list(overrides) == ['model']
+        assert 'LEXINGTON_MODEL_API_KEY' not in os.environ
 thread = "fixture-thread"
 count = 0
 pending = None
@@ -66,6 +86,8 @@ for line in sys.stdin:
         elif text == "approve":
             pending = "approve"
             send({"id": "approval-1", "method": "item/commandExecution/requestApproval", "params": {"threadId": thread, "turnId": turn, "reason": "运行项目检查", "command": "cargo test", "cwd": os.getcwd()}})
+        elif text == "echo-secret":
+            complete(os.environ.get('LEXINGTON_MODEL_API_KEY', ''))
         elif text == "file-approval":
             pending = "file-approval"
             notify("item/started", {"item": {"type": "fileChange", "id": "patch-1", "changes": [{"path": "example.txt", "kind": {"type": "update"}, "diff": "-before\n+after"}]}})

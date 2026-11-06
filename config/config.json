@@ -17,6 +17,10 @@
   "codex": {
     "executable": "codex",
     "workingDirectory": null,
-    "noApproval": false
+    "noApproval": false,
+    "model": "",
+    "useCustomApi": false,
+    "baseUrl": "",
+    "apiKey": ""
   }
 }

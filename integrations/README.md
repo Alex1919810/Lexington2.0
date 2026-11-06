@@ -10,7 +10,7 @@
 
 选择本地文件或文件夹，右键 → **脚本 → 看看Lexington怎么说**。安装器已创建此脚本；发送绝对路径，让 Lexington 自行查看内容。支持多个文件，路径中的空格、引号和换行不会被当成命令执行。
 
-顶层菜单提供器位于 `nautilus/lexington_menu.py`，安装时复制到 `~/.local/share/nautilus-python/extensions/`（遵循 XDG_DATA_HOME）。需要系统安装 `python3-nautilus` / `nautilus-python`，以及 Nautilus 4.0 typelib。Ubuntu 可由管理员执行 `sudo apt install python3-nautilus`，之后退出并重新打开文件管理器以加载顶层菜单；缺少依赖时仍可使用“脚本”子菜单。安装器不强制关闭用户的文件管理器。
+顶层菜单提供器位于 `nautilus/lexington_menu.py`，安装时复制到 `~/.local/share/nautilus-python/extensions/`（遵循 XDG_DATA_HOME）。安装器会在 Ubuntu/Debian 自动检查并通过系统授权安装 `python3-nautilus` 与 Nautilus 4.0 typelib；使用 `--skip-optional` 跳过时需自行安装。其他发行版需要系统安装 `nautilus-python`。Ubuntu 可由管理员执行 `sudo apt install python3-nautilus`，之后退出并重新打开文件管理器以加载顶层菜单；缺少依赖时仍可使用“脚本”子菜单。安装器不强制关闭用户的文件管理器。
 
 ### VS Code
 
