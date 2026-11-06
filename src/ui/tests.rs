@@ -490,7 +490,7 @@ fn right_click_in_drag_circle_opens_context_menu() {
     );
 }
 #[test]
-fn hovering_artwork_reveals_input_and_keeps_draft_visible_in_both_window_sizes() {
+fn input_hides_after_blur_and_restores_draft_and_error_on_hover_in_both_window_sizes() {
     for size in [vec2(500., 500.), vec2(800., 600.)] {
         let ctx = egui::Context::default();
         let mut app = Pet::from_context(&ctx, true);
@@ -549,7 +549,26 @@ fn hovering_artwork_reveals_input_and_keeps_draft_visible_in_both_window_sizes()
             |ctx| app.ui(ctx),
         );
         assert_eq!(app.input, "草稿");
-        ctx.memory_mut(|m| m.surrender_focus("message-input".into()));
+        // A native focus loss must clear the retained egui TextEdit focus.
+        for _ in 0..30 {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    focused: false,
+                    events: vec![egui::Event::PointerGone, egui::Event::WindowFocused(false)],
+                    ..Default::default()
+                },
+                |ctx| app.ui(ctx),
+            );
+        }
+        assert!(!ctx.memory(|m| m.has_focus("message-input".into())));
+        let bounds = app.input_bounds.unwrap();
+        assert!(
+            !app.input_regions.iter().any(|r| r.contains_rect(bounds)),
+            "unfocused draft must hide and stop intercepting clicks"
+        );
+        assert_eq!(app.input, "草稿");
+        app.error = "模拟错误".into();
         for _ in 0..30 {
             let _ = ctx.run(
                 egui::RawInput {
@@ -560,10 +579,45 @@ fn hovering_artwork_reveals_input_and_keeps_draft_visible_in_both_window_sizes()
                 |ctx| app.ui(ctx),
             );
         }
-        let bounds = app.input_bounds.unwrap();
         assert!(
-            app.input_regions.iter().any(|r| r.contains_rect(bounds)),
-            "draft must remain visible after leaving artwork and losing focus"
+            !app.input_regions
+                .iter()
+                .any(|r| r.contains_rect(app.input_bounds.unwrap()))
+        );
+        for _ in 0..30 {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events: vec![egui::Event::PointerMoved((size / 2.).to_pos2())],
+                    ..Default::default()
+                },
+                |ctx| app.ui(ctx),
+            );
+        }
+        assert!(
+            app.input_regions
+                .iter()
+                .any(|r| r.contains_rect(app.input_bounds.unwrap()))
+        );
+        assert_eq!(app.input, "草稿");
+        assert_eq!(app.error, "模拟错误");
+        app.busy = true;
+        for _ in 0..30 {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    focused: false,
+                    events: vec![egui::Event::PointerGone],
+                    ..Default::default()
+                },
+                |ctx| app.ui(ctx),
+            );
+        }
+        assert!(
+            app.input_regions
+                .iter()
+                .any(|r| r.contains_rect(app.input_bounds.unwrap())),
+            "thinking indicator remains visible"
         );
     }
 }
@@ -870,5 +924,130 @@ fn automatic_clock_notice_undo_settings_and_hot_reload_use_saved_state() {
     app.clock_action(super::clock::ClockAction::Edit);
     assert!(!app.clock_error.is_empty());
     assert_eq!(app.clock_state.started(), original);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn alarm_settings_save_edit_toggle_delete_and_reminder_requires_acknowledgement() {
+    let root = std::env::temp_dir().join(format!("lexington-alarm-ui-{}", rand::random::<u64>()));
+    crate::backend::config::Config::save_no_approval(&root, false).unwrap();
+    let ctx = egui::Context::default();
+    let mut app = Pet::from_root(&ctx, false, root.clone());
+    let path = root.join("alarms.json");
+    app.alarm.state = crate::backend::alarm::AlarmState::load(path.clone()).unwrap();
+    app.settings = true;
+    app.settings_page = 3;
+    // Render the full production settings page and locate actual control text.
+    let render = |app: &mut Pet| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0., 0.), vec2(500., 500.))),
+                ..Default::default()
+            },
+            |ctx| app.ui(ctx),
+        )
+    };
+    let find = |output: &egui::FullOutput, label: &str| {
+        let mut shapes: Vec<_> = output.shapes.iter().map(|s| &s.shape).collect();
+        while let Some(shape) = shapes.pop() {
+            match shape {
+                egui::Shape::Vec(children) => shapes.extend(children),
+                egui::Shape::Text(t) if t.galley.job.text == label => {
+                    return t.pos + t.galley.size() / 2.;
+                }
+                _ => {}
+            }
+        }
+        panic!("missing control: {label}");
+    };
+    render(&mut app);
+    let output = render(&mut app);
+    let add = find(&output, "添加闹钟");
+    let pointer = |app: &mut Pet, position, pressed| {
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0., 0.), vec2(500., 500.))),
+                events: vec![
+                    egui::Event::PointerMoved(position),
+                    egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+                ..Default::default()
+            },
+            |ctx| app.ui(ctx),
+        );
+    };
+    // Empty prompt is rejected without creating a record.
+    pointer(&mut app, add, true);
+    pointer(&mut app, add, false);
+    assert!(app.alarm.state.alarms().is_empty());
+    assert!(!app.alarm.error.is_empty());
+    let now = crate::backend::clock::now();
+    let time = crate::backend::clock::local_time(now + 120)
+        .unwrap()
+        .label();
+    app.alarm
+        .state
+        .save(None, &time, "喝水提醒", false, now)
+        .unwrap();
+    render(&mut app);
+    let output = render(&mut app);
+    let edit = find(&output, "编辑");
+    pointer(&mut app, edit, true);
+    pointer(&mut app, edit, false);
+    let output = render(&mut app);
+    let save = find(&output, "保存闹钟");
+    pointer(&mut app, save, true);
+    pointer(&mut app, save, false);
+    assert_eq!(
+        crate::backend::alarm::AlarmState::load(path.clone())
+            .unwrap()
+            .alarms()[0]
+            .message,
+        "喝水提醒"
+    );
+    let due = app.alarm.state.alarms()[0].next_due;
+    app.alarm.state.poll(due).unwrap();
+    app.settings = false;
+    render(&mut app);
+    let output = render(&mut app);
+    let ok = find(&output, "知道了");
+    assert!(app.alarm.state.pending().len() == 1);
+    // Outside clicks do not dismiss it, and the popup participates in hit testing.
+    pointer(&mut app, pos2(1., 1.), true);
+    pointer(&mut app, pos2(1., 1.), false);
+    assert_eq!(app.alarm.state.pending().len(), 1);
+    assert!(app.input_regions.iter().any(|r| r.contains(ok)));
+    pointer(&mut app, ok, true);
+    pointer(&mut app, ok, false);
+    assert!(app.alarm.state.pending().is_empty());
+    assert!(
+        crate::backend::alarm::AlarmState::load(path.clone())
+            .unwrap()
+            .pending()
+            .is_empty()
+    );
+    app.settings = true;
+    render(&mut app);
+    let output = render(&mut app);
+    let toggle = find(&output, &time);
+    pointer(&mut app, toggle, true);
+    pointer(&mut app, toggle, false);
+    assert!(app.alarm.state.alarms()[0].enabled);
+    let output = render(&mut app);
+    let delete = find(&output, "删除");
+    pointer(&mut app, delete, true);
+    pointer(&mut app, delete, false);
+    assert!(app.alarm.state.alarms().is_empty());
+    assert!(
+        crate::backend::alarm::AlarmState::load(path)
+            .unwrap()
+            .alarms()
+            .is_empty()
+    );
     std::fs::remove_dir_all(root).unwrap();
 }

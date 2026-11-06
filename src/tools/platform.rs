@@ -149,6 +149,24 @@ impl DragWindow {
             )
         })
     }
+    pub fn screen_pointer(&self, pixels_per_point: f32) -> Option<(eframe::egui::Pos2, bool)> {
+        use x11rb::protocol::xproto::{ConnectionExt, KeyButMask};
+        let pointer = self
+            .connection
+            .query_pointer(self.root)
+            .ok()?
+            .reply()
+            .ok()?;
+        pointer.same_screen.then(|| {
+            (
+                eframe::egui::pos2(
+                    f32::from(pointer.root_x) / pixels_per_point,
+                    f32::from(pointer.root_y) / pixels_per_point,
+                ),
+                pointer.mask.contains(KeyButMask::BUTTON1),
+            )
+        })
+    }
     pub fn position(&self, pixels_per_point: f32) -> Option<eframe::egui::Pos2> {
         use x11rb::protocol::xproto::ConnectionExt;
         let position = self

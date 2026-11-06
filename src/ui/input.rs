@@ -73,10 +73,15 @@ impl Pet {
                 || (input_transform * Rect::from_center_size(center, vec2(450., 450.))).contains(p)
         });
         self.input_bounds = Some(input_transform * rect);
+        // egui can retain a TextEdit focus ID after another native window gains
+        // focus. It must not keep the pet's input visible (or consume keys).
+        if !ctx.input(|i| i.focused) {
+            ctx.memory_mut(|m| m.surrender_focus(id));
+        }
         let focused = ctx.memory(|m| m.has_focus(id));
         let alpha = ctx.animate_value_with_time(
             egui::Id::new("input-alpha"),
-            if hovered || focused || self.busy || !self.input.is_empty() || !self.error.is_empty() {
+            if hovered || focused || self.busy {
                 1.
             } else {
                 0.

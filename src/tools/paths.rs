@@ -21,3 +21,11 @@ pub fn clock_state_file(dev: bool) -> PathBuf {
     data.join("lexington")
         .join(if dev { "clock-dev.json" } else { "clock.json" })
 }
+
+pub fn alarm_state_file(dev: bool) -> PathBuf {
+    clock_state_file(dev).with_file_name(if dev {
+        "alarms-dev.json"
+    } else {
+        "alarms.json"
+    })
+}

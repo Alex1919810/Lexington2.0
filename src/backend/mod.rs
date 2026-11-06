@@ -1,3 +1,4 @@
+pub mod alarm;
 pub mod character;
 pub mod clock;
 pub mod codex;

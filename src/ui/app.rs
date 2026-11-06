@@ -42,6 +42,7 @@ pub struct Pet {
     pub(super) drag_sent: bool,
     pub(super) last_activity: Instant,
     pub(super) clock_state: ClockState,
+    pub(super) alarm: super::alarm::AlarmUi,
     pub(super) activity_monitor: Option<activity::Monitor>,
     pub(super) activity_status: String,
     pub(super) clock_error: String,
@@ -70,6 +71,10 @@ pub struct Pet {
     pub(super) about: bool,
     pub(super) settings: bool,
     pub(super) settings_page: u8,
+    pub(super) settings_viewport_open: bool,
+    pub(super) settings_started: Instant,
+    pub(super) settings_raised: bool,
+    pub(super) settings_drag: Option<(egui::Pos2, egui::Pos2)>,
 }
 impl Pet {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -90,6 +95,7 @@ impl Pet {
             }
         }
         let ctx = cc.egui_ctx.clone();
+        app.load_alarms();
         app.activity_monitor = Some(activity::Monitor::start(move || ctx.request_repaint()));
         app.start_codex(&cc.egui_ctx);
         app
@@ -140,6 +146,7 @@ impl Pet {
             drag_sent: false,
             last_activity: Instant::now(),
             clock_state: ClockState::default(),
+            alarm: super::alarm::AlarmUi::default(),
             activity_monitor: None,
             activity_status: "等待系统活动".into(),
             clock_error: String::new(),
@@ -178,6 +185,10 @@ impl Pet {
             about: false,
             settings: false,
             settings_page: 0,
+            settings_viewport_open: false,
+            settings_started: Instant::now(),
+            settings_raised: false,
+            settings_drag: None,
         };
         app.refresh(ctx);
         app
@@ -462,210 +473,10 @@ impl Pet {
         {
             self.input_regions.push(window.response.rect);
         }
-        let mut restart_codex = false;
-        let mut reload = false;
-        let mut no_approval = self.config.codex.no_approval;
-        let mut approval_changed = false;
-        let mut clock_auto_changed = false;
-        let mut clock_action = None;
-        let mut settings_open = self.settings;
-        if let Some(window) = egui::Window::new("设置")
-            .open(&mut settings_open)
-            .order(egui::Order::Foreground)
-            .collapsible(false)
-            .resizable(false)
-            .fixed_size(vec2(440., 326.))
-            .default_pos(screen.center() - vec2(232., 190.))
-            .frame(
-                egui::Frame::window(&ctx.style())
-                    .fill(egui::Color32::from_rgb(247, 248, 250))
-                    .inner_margin(12)
-                    .corner_radius(10),
-            )
-            .show(ctx, |ui| {
-                for (text_style, size) in [
-                    (egui::TextStyle::Body, 14.),
-                    (egui::TextStyle::Button, 14.),
-                    (egui::TextStyle::Small, 12.),
-                ] {
-                    ui.style_mut()
-                        .text_styles
-                        .insert(text_style, egui::FontId::proportional(size));
-                }
-                ui.spacing_mut().item_spacing = vec2(10., 10.);
-                ui.spacing_mut().button_padding = vec2(10., 6.);
-                ui.horizontal_top(|ui| {
-                    ui.allocate_ui_with_layout(
-                        vec2(76., 326.),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            for (page, title) in [(0, "常规"), (1, "连接"), (2, "打卡")] {
-                                if ui
-                                    .add_sized(
-                                        [76., 34.],
-                                        egui::Button::new(title)
-                                            .selected(self.settings_page == page),
-                                    )
-                                    .clicked()
-                                {
-                                    self.settings_page = page;
-                                }
-                            }
-                        },
-                    );
-                    ui.separator();
-                    ui.allocate_ui_with_layout(
-                        vec2(ui.available_width(), 326.),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            egui::ScrollArea::vertical()
-                                .id_salt("settings-content")
-                                .max_height(326.)
-                                .show(ui, |ui| {
-                                    ui.set_width(ui.available_width());
-                                    ui.add_space(2.);
-                                    ui.label(
-                                        egui::RichText::new(match self.settings_page { 1 => "连接", 2 => "打卡", _ => "常规" })
-                                        .size(20.)
-                                        .strong(),
-                                    );
-                                    ui.add_space(6.);
-                                    if self.settings_page == 2 {
-                                        (clock_auto_changed, clock_action) = self.clock_settings_ui(ui);
-                                    } else if self.settings_page == 1 {
-                                        egui::Frame::group(ui.style())
-                                            .fill(egui::Color32::WHITE)
-                                            .inner_margin(12)
-                                            .corner_radius(8)
-                                            .show(ui, |ui| {
-                                                ui.set_width(ui.available_width());
-                                                ui.horizontal(|ui| {
-                                                    ui.strong("Codex");
-                                                    ui.with_layout(
-                                                        egui::Layout::right_to_left(egui::Align::Center),
-                                                        |ui| {
-                                                            ui.add(
-                                                                egui::Label::new(&self.codex_status)
-                                                                    .truncate(),
-                                                            )
-                                                            .on_hover_text(&self.codex_status);
-                                                        },
-                                                    );
-                                                });
-                                                ui.separator();
-                                                let directory = self
-                                                    .config
-                                                    .codex
-                                                    .working_directory
-                                                    .as_ref()
-                                                    .map_or_else(|| self.root.clone(), |dir| self.root.join(dir));
-                                                for (title, value) in [
-                                                    ("程序", self.config.codex.executable.clone()),
-                                                    ("工作目录", directory.display().to_string()),
-                                                ] {
-                                                    ui.weak(title);
-                                                    ui.horizontal(|ui| {
-                                                        if ui.small_button("复制").clicked() {
-                                                            ctx.copy_text(value.clone());
-                                                        }
-                                                        ui.add(egui::Label::new(&value).truncate())
-                                                            .on_hover_text(&value);
-                                                    });
-                                                }
-                                            });
-                                        if self.codex_restart_pending {
-                                            ui.weak("任务结束后重新连接");
-                                        }
-                                        restart_codex = ui
-                                            .add_enabled(!self.busy, egui::Button::new("重启会话"))
-                                            .on_hover_text(if self.busy {
-                                                "当前任务结束后可重启"
-                                            } else {
-                                                "重新连接 Codex，清空会话上下文"
-                                            })
-                                            .clicked();
-                                    } else {
-                                        egui::Frame::group(ui.style())
-                                            .fill(egui::Color32::WHITE)
-                                            .inner_margin(12)
-                                            .corner_radius(8)
-                                            .show(ui, |ui| {
-                                                ui.set_width(ui.available_width());
-                                                ui.strong("审批");
-                                                approval_changed = ui
-                                                    .checkbox(&mut no_approval, "无需审批")
-                                                    .on_hover_text("下次发送生效；关闭时恢复本机审批策略。沙箱权限不变。")
-                                                    .changed();
-                                            });
-                                        egui::Frame::group(ui.style())
-                                            .fill(egui::Color32::WHITE)
-                                            .inner_margin(12)
-                                            .corner_radius(8)
-                                            .show(ui, |ui| {
-                                                ui.set_width(ui.available_width());
-                                                ui.strong("资源与配置");
-                                                let path = self.root.join("config/config.json").display().to_string();
-                                                ui.horizontal(|ui| {
-                                                    if ui.small_button("复制路径").clicked() {
-                                                        ctx.copy_text(path.clone());
-                                                    }
-                                                    ui.add(egui::Label::new("config.json").sense(egui::Sense::hover()))
-                                                        .on_hover_text(&path);
-                                                });
-                                                ui.separator();
-                                                reload = ui.button("重新加载")
-                                                    .on_hover_text("重新加载资源与配置；配置文件更改也会自动生效")
-                                                    .clicked();
-                                            });
-                                    }
-                                    if !self.config_error.is_empty() {
-                                        ui.colored_label(
-                                            egui::Color32::from_rgb(180, 45, 45),
-                                            &self.config_error,
-                                        );
-                                    }
-                                });
-                        },
-                    );
-                });
-            })
-            && settings_open
-        {
-            self.input_regions.push(window.response.rect);
-        }
-        self.settings = settings_open;
-        if approval_changed {
-            match Config::save_no_approval(&self.root, no_approval) {
-                Ok(()) => {
-                    self.config.codex.no_approval = no_approval;
-                    self.config_error.clear();
-                }
-                Err(error) => self.config_error = error,
-            }
-        }
-        if clock_auto_changed {
-            let enabled = !self.config.clock_in.auto_start;
-            match Config::save_auto_clock(&self.root, enabled) {
-                Ok(()) => {
-                    self.config.clock_in.auto_start = enabled;
-                    self.clock_state.reset_candidate();
-                    self.clock_error.clear();
-                }
-                Err(error) => self.clock_error = error,
-            }
-        }
-        if let Some(action) = clock_action {
-            self.clock_action(action);
-        }
-        if reload {
-            self.refresh(ctx);
-        }
-        if restart_codex {
-            self.reload_config();
-            self.start_codex(ctx);
-        }
+        self.settings_ui(ctx);
         self.codex_prompt_ui(ctx);
         self.clock_notice_ui(ctx);
+        self.alarm_popup_ui(ctx);
         #[cfg(target_os = "linux")]
         if let Some(window) = &mut self.drag_window {
             window.set_input_regions(&self.input_regions, screen, ctx.pixels_per_point());

@@ -1,7 +1,7 @@
 # 项目约定
 
 - 本项目采用纯 Rust 原生 GUI：eframe/egui + glow；禁止引入 Vue、Electron、Node、WebView 或 N-API 作为运行链。`Cargo.lock` 随代码保留。
-- 代码按三类组织：`src/ui/` 负责界面与交互，`src/backend/` 负责配置、资源、角色选择、打卡和 Codex 会话，`src/tools/` 负责路径、图片/GIF 解码和平台窗口操作；`src/main.rs` 仅负责启动。具体模块职责、接口和依赖以 `docs/MODULES.md` 为准。
+- 代码按三类组织：`src/ui/` 负责界面与交互，`src/backend/` 负责配置、资源、角色选择、打卡、闹钟和 Codex 会话，`src/tools/` 负责路径、图片/GIF 解码和平台窗口操作；`src/main.rs` 仅负责启动。具体模块职责、接口和依赖以 `docs/MODULES.md` 为准。
 - **后续任何代码文件改动，都必须同步检查并更新 `docs/MODULES.md` 中对应模块的职责、主要接口、依赖与约束；新增、删除、移动或重命名文件时同步更新目录结构。** 实现内部调整而职责不变时，也须同步补充或修正相关行为/约束说明，不能只修改代码而遗漏模块文档。README 的结构概览发生变化时也要同步。
 - 后端不依赖 egui/UI：`CharacterState` 管理资源选择与格式回退，`ClockState` 管理打卡状态；UI 根据后端选中的路径加载纹理。`codex::Client` 在后台管理 app-server stdio 与会话，标准库事件通道返回结果，回调仅唤醒 UI。`tools::gif::Decoder` 只产生 RGBA 像素并控制帧时序，`ui::assets::Picture` 持有并复用 GPU 纹理；平台适配是工具层中允许依赖 eframe 的边界。
 - 保持 `resource/` 目录结构和 `config/config.json` 的 camelCase 字段兼容。资源根目录按 `LEXINGTON_HOME`、可执行文件旁、当前目录依次寻找。安装升级须保留用户配置/API key；日志和测试结果不得泄露密钥。
@@ -10,10 +10,12 @@
 - “设置 → 常规 → 无需审批”持久化为 `codex.noApproval`（默认 false），切换从下一次发送起生效，不重启会话、不改变当前任务或沙箱。`turn/start.approvalPolicy` 会影响后续轮次，必须缓存 thread/start 返回的原策略，开启显式传 never，关闭显式恢复原值（可能是字符串或 granular 对象），不能靠省略字段恢复。保存开关须保留未知配置/旧密钥，损坏 JSON 拒绝覆盖，同目录临时文件同步后原子替换。
 - Codex 通知可能先于 turn/start ACK 到达；须按 thread/turn 和启动请求 ID 关联，忽略旧 ACK，按 item ID 将流式增量与最终文本去重。连接 ACK 超时 30 秒，生成不限时。命令/文件审批与问题通过 UI 回复；文件改动从 item/started 缓存路径/diff，未知请求明确返回 -32601。测试用 `tests/fixtures/codex-server.py`，运行需 Python 3，不依赖真实模型或凭据。
 - 立绘仅按文件名最后的 `_Normal` / `_Damage` 后缀识别状态（ASCII 大小写不敏感），前面的完整服装名用于同角色、同格式配对；`Normal_Normal` 的服装名是 `Normal`，无后缀文件视为正常。侧栏 ↻ 切换对应正常/战损图，缺少配对时禁用；▶ 仅循环当前状态队列，默认正常。格式切换尽量保留服装和状态，资源回退优先保留状态。现有 GIF 为 7 对，PNG 为 8 对；原重载入口已移到“设置 → 常规 → 重新加载”。
-- 设置页采用适配普通 500×500 窗口的固定尺寸两栏布局，左侧“常规 / 连接 / 打卡”导航，右侧分组卡片与独立滚动区；保持简短标签，说明使用悬停提示，长路径截断并支持悬停查看及复制。设置窗口须使用 Foreground 层，否则同层之前的侧栏会盖住导航；14px 正文/按钮字号仅局部应用。重启会话按钮忙碌时禁用，避免丢失任务和审批；设置操作仍在窗口回调结束后执行。
+- 设置页使用独立原生 viewport（464×390、无边框、Dock/置顶），不能使用主窗内 egui::Window 限制拖动；两栏布局，左侧“常规 / 连接 / 打卡 / 闹钟”导航，右侧分组卡片与独立滚动区；保持简短标签，说明使用悬停提示，长路径截断并支持悬停查看及复制。原生设置通过自绘标题栏拖动和关闭，不复用桌宠 XShape；仅 Embedded 后端使用 Foreground egui::Window，否则侧栏会盖住导航；14px 正文/按钮字号仅局部应用。重启会话按钮忙碌时禁用，避免丢失任务和审批；设置操作仍在窗口回调结束后执行。
 - 自动计时按本地日期每天一次：默认活跃确认 180 秒（clockIn.confirmationSeconds 限制 30～600），起点回溯首次新操作；闲置满 60 秒、锁屏/非活动/远程会话、检测失败、采样断档超过 10 秒或时钟跳变均重置确认，确认终点须有新操作。clockIn.autoStart 默认 true，热加载改变开关/确认时长后重置候选；不追溯启动前的工作时间。
 - 系统活动采样在 tools/activity.rs 后台线程每 2 秒进行：loginctl 校验本地活动会话和 LockedHint，优先 gdbus 读取 Mutter IdleMonitor；原生 X11 可回退 XScreenSaver，Wayland 不得以 XWayland 空闲时钟替代全桌面活动。不读取键盘内容；不可用时保留手动入口，命令超时清理，退出回收线程。
 - 打卡记录独立保存在 $XDG_DATA_HOME/lexington/clock.json（默认 ~/.local/share），开发模式为 clock-dev.json；起点、当天已处理、已提醒状态立即原子保存，失败不提交内存状态，损坏文件不得覆盖。测试用临时路径；Pet::from_root 不启动监测、不加载用户打卡记录。取消、撤销、午休及重启不再自动开始，仍可手动打卡；次日本地日期重置。Unix 用 libc 转换本地时间，编辑当天 HH:MM 拒绝未来或 DST 不存在时间。提醒后保留起点并保存已提醒状态，重启不重复提醒。
+- 闹钟由 backend/alarm.rs 管理，ui/alarm.rs 提供设置和独立原生 viewport；状态位于 XDG 数据目录 alarms.json / alarms-dev.json，含 alarms 与 pending。到期先原子保存 pending 和下次时间/一次性停用状态；确认成功保存后才关闭，重启不丢未确认提醒或重复触发。每天按本地日历 mktime 计算，不能固定加 86400 秒跨 DST；停机/休眠错过每个补一次并推进到未来。提示语 1～500 字符，HH:MM 严格校验；损坏记录禁用操作且保留原文件。
+- 屏幕中央提醒必须使用独立 viewport，不能用主窗内 egui::Window（桌宠可能贴边/出屏）；X11 按 RandR 逻辑显示器居中，弹窗需 Dock 层加 AlwaysOnTop，普通 Normal 层即使置顶仍可能被桌宠 Dock 遮挡。弹窗创建后需等待映射并晚于桌宠启动置顶（当前 800ms）再一次性 Focus/AlwaysOnTop，否则桌宠会盖住提醒；弹窗不套用桌宠 XShape，确认按钮固定且长内容可滚动；show_viewport_immediate 仅主线程使用，测试/不支持多窗口的后端需提供 Embedded 分支。
 - 原版立绘组件为 450×450，侧栏按钮为 40×40、间隔 10；发布窗口 500×500，`--dev` 为 800×600。气泡按全文测高、21px 行高、最大高度限制；输入框沿用组件局部坐标边界检查后再平移到窗口中心。
 - GIF 需要逐帧解码，不能常驻全部 RGBA 帧（现有文件 1024×1024、67 帧，曾触发系统杀进程）。现有 14 个立绘 GIF 均没有循环扩展，`gif` 解码器将其报告为 `Repeat::Finite(0)`；桌宠播放策略将其视为无限循环，避免播一轮后定格，显式有限循环次数仍保留。Chromium 对不足 20ms 的帧延迟使用 100ms。回归测试需验证跨轮次的实际帧内容及现有立绘完整一轮后重回首帧，且复用纹理。
 - 图片启用线性 mipmap 过滤，避免高分辨率背景缩小后产生锯齿。字体采用 Noto Sans CJK TTC 的简体中文 face（index 2）、Liberation 和 Noto Sans Math；不要额外用 `FontTweak.scale` 按 ascent/descent 放大，14px 中文字宽应接近 14px。输入占位文字需显式指定 #999，避免系统主题改变颜色。
@@ -21,10 +23,11 @@
 - Linux 默认优先 X11/XWayland；原生 Wayland 用 `--wayland`，位置/层级由合成器控制。egui 的 taskbar 参数只支持 Windows，Linux 要设置 `_NET_WM_STATE_SKIP_TASKBAR`、`SKIP_PAGER`、`ABOVE`。窗口映射后再次请求 AlwaysOnTop，避免映射时序丢失置顶。Linux X11/XWayland 窗口类型必须使用 Dock（不设置 strut、不预留屏幕空间）；GNOME/Mutter 会将 Utility 窗口完整透明矩形约束在屏幕内，导致立绘中心无法到右下角。保留受窗口管理器管理的窗口；Dock 可能不自动聚焦，用户按下鼠标时才通过 X11 set_input_focus 获取键盘焦点，启动/悬停不得抢焦点；拖动仍通过屏幕绝对坐标及 `_NET_MOVERESIZE_WINDOW` 实现，允许透明边距出屏并保持窗口尺寸。
 - X11/XWayland 透明渲染不会自动鼠标穿透，须启用 x11rb `shape` 并设置 XShape Input（≥1.1），不能改变 Bounding/绘制区域或全窗 CursorPassthrough。每帧由 UI 收集当前立绘 alpha 轮廓与可见控件/菜单/窗口范围，DPI 换算、裁到 viewport 后提交，缓存相同遮罩；不能将全屏 pet Area/egui 历史区域加入。GIF 只保留当前帧的 ≤256×256 格最大 alpha 覆盖条带，不额外常驻 RGBA 帧。隐藏输入框不拦截，使用原生局部指针轮询发现悬停（透明处无 motion 事件），显示后加入输入区域；关闭设置/关于时立即清除范围，不保留 egui 淡出期的输入区域。原生 Wayland 尚无对应局部输入区域实现。
 - egui 0.31 的 `Response::context_menu` 在菜单保持打开时返回 `None`，不能用返回值收集原生输入区域；须在菜单绘制闭包内取当前 `ui.min_rect()` 并加 `Frame::menu(...).total_margin()`，仅在 `context_menu_opened()` 时提交，保证透明背景上的菜单项及边框可点击。回归须将“关闭”放在立绘之外，检查连续帧的输入覆盖及退出命令，单纯注入 egui 点击不足以验证原生穿透。
+- X11 独立设置的 Dock 窗口不能依赖 ViewportCommand::StartDrag（窗口管理器可能拒绝）；从标题栏按下时捕获原生屏幕指针和 viewport 初始位置，通过 screen_pointer 查询屏幕绝对坐标/左键状态，发 OuterPosition，松开即清除锚点。不能累加窗口局部位移，也不能在每帧重置初始位置；其他平台/Wayland 使用 StartDrag。设置位置只在打开时初始化，不得持续 with_position 拉回；首次映射后一次性激活，关闭设置只关闭子 viewport。
 - X11 临时连接的属性/消息请求在关闭连接前需 `.check()`，只 flush 可能丢失。拖动锚点在按下时查询 X11 原生屏幕指针及窗口位置计算偏移，不能使用移动后可能滞后的 egui 局部指针缓存（贴边释放后重新拖动会跳跃），阈值按 DPI 换算；不能等跨过阈值再取初始位置，也不能累加窗口局部指针差值。
 - 保持 eframe `persist_window=false` 和禁用 egui 区域缓存，`window` 旧字段置空；用 eframe Storage 独立保存 `windowPosition` / `devWindowPosition`（JSON `[x,y]`、逻辑屏幕坐标），普通/开发模式互不覆盖，只恢复位置，尺寸仍固定 500×500 / 800×600。X11 保存时查询原生窗口屏幕位置，避免拖动后缓存滞后；按当前 DPI 换算。启动用 RandR 活动显示器（含负坐标，失败回退根窗口尺寸）校验当前可见立绘范围至少 24×24 在任一屏内，透明边距出屏保留；损坏/非有限值或旧屏幕已不可见时回到主屏默认位置。Wayland 位置仍由合成器管理。
 - 聊天等待提示固定使用“Lexington正在思考”，忙碌提示同样使用 Lexington 名称；底层 Codex 协议命名保持原样。
-- 输入框在鼠标进入共同变换后的 450×450 立绘容器或输入区域时显示，已有草稿、错误、焦点或生成中保持可见，避免只能悬停不可见输入框才显示。X11 继续原生指针轮询，失败回退 egui 指针；只将可见输入框加入输入区域，不因悬停容器阻拦透明空白点击。回归覆盖普通/开发窗口、点击聚焦及失焦草稿保留。
+- 输入框在鼠标进入共同变换后的 450×450 立绘容器或输入区域时显示，输入焦点或生成中保持可见；鼠标移开且失焦后淡出，草稿和错误保留在内存，不能作为强制显示条件，避免只能悬停不可见输入框才显示。X11 继续原生指针轮询，失败回退 egui 指针；只将可见输入框加入输入区域，不因悬停容器阻拦透明空白点击。原生窗口失焦时显式 surrender_focus，避免 egui 残留 TextEdit ID 导致常显；回归覆盖普通/开发窗口、点击聚焦、草稿/错误隐藏后再悬停恢复及生成中可见。
 - 原生单行 TextEdit 按 Enter 会失焦，提交判断必须同时考虑 `has_focus()` 与 `lost_focus()`。不要启动时主动聚焦输入框。
 - 侧栏点击须阻止本帧对话的“外部点击关闭”，否则已打开对话时取消打卡会立即清掉新消息。Codex 交互测试使用临时配置/Python 3 模拟子进程，不能依赖用户真实登录或调用模型。
 - eframe 截图事件在 context input 读锁之外发 viewport 命令；锁内发送 Close 会导致退出卡住。截图的 Color32 是预乘 alpha，导出 PNG 需 `to_srgba_unmultiplied()`。
