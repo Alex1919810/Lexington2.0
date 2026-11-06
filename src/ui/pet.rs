@@ -58,8 +58,28 @@ impl Pet {
                         Rect::from_min_max(pos2(0., 0.), pos2(1., 1.)),
                         Color32::WHITE,
                     );
+                    self.input_regions
+                        .extend(pic.opaque_regions.iter().map(|region| {
+                            transform
+                                * Rect::from_min_max(
+                                    pet_rect.min + region.min.to_vec2() * size,
+                                    pet_rect.min + region.max.to_vec2() * size,
+                                )
+                        }));
                 } else {
                     fallback(ui.painter(), center, time);
+                    let offset = -5. + 5. * (time as f32 * std::f32::consts::PI).cos();
+                    for y in -60..60 {
+                        let radius = if y < 12 { 72. } else { 48. };
+                        let half_width = 60. * (1. - ((y as f32 - 12.) / radius).powi(2)).sqrt();
+                        self.input_regions.push(
+                            transform
+                                * Rect::from_min_max(
+                                    center + vec2(-half_width, y as f32 + offset),
+                                    center + vec2(half_width, y as f32 + 1. + offset),
+                                ),
+                        );
+                    }
                 }
                 let shadow_phase = (1. - (time * std::f64::consts::PI).cos()) as f32 / 2.;
                 ui.painter().add(egui::Shape::ellipse_filled(

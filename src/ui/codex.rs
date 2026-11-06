@@ -100,7 +100,7 @@ impl Pet {
             return;
         };
         let mut answer = None;
-        egui::Window::new(&prompt.request.title)
+        if let Some(window) = egui::Window::new(&prompt.request.title)
             .id("codex-prompt".into())
             .collapsible(false)
             .resizable(true)
@@ -159,7 +159,10 @@ impl Pet {
                         }
                     }
                 });
-            });
+            })
+        {
+            self.input_regions.push(window.response.rect);
+        }
         if let Some(answer) = answer
             && let Some(prompt) = self.codex_prompts.pop_front()
             && let Some(codex) = &self.codex

@@ -98,6 +98,7 @@ impl Pet {
                     );
                     let rect =
                         Rect::from_center_size(response.rect.center(), vec2(40., 40.) * scale);
+                    self.input_regions.push(rect);
                     let painter = ui.painter();
                     let color = if response.hovered() && enabled {
                         Color32::from_rgb(color.r(), color.g(), color.b())

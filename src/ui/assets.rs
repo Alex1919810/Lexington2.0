@@ -10,17 +10,20 @@ pub struct Picture {
     decoder: Decoder,
     texture: TextureHandle,
     size: egui::Vec2,
+    pub(super) opaque_regions: Vec<egui::Rect>,
 }
 impl Picture {
     pub fn load(ctx: &egui::Context, path: &Path) -> Result<Self, String> {
         let (decoder, image) = Decoder::load(path)?;
         let size = egui::vec2(image.width() as f32, image.height() as f32);
+        let opaque_regions = opaque_regions(&image);
         let texture =
             ctx.load_texture(path.to_string_lossy(), color_image(&image), TEXTURE_OPTIONS);
         Ok(Self {
             decoder,
             texture,
             size,
+            opaque_regions,
         })
     }
     pub fn size(&self) -> egui::Vec2 {
@@ -28,10 +31,44 @@ impl Picture {
     }
     pub fn texture(&mut self) -> &TextureHandle {
         if let Some(image) = self.decoder.advance() {
+            self.opaque_regions = opaque_regions(&image);
             self.texture.set(color_image(&image), TEXTURE_OPTIONS);
         }
         &self.texture
     }
+}
+// Retain only compact alpha coverage, not another RGBA frame. A cell is at most
+// two artwork pixels on screen; max alpha preserves thin visible details.
+fn opaque_regions(image: &image::RgbaImage) -> Vec<egui::Rect> {
+    let width = image.width().min(256);
+    let height = image.height().min(256);
+    let mut coverage = vec![false; (width * height) as usize];
+    for (x, y, pixel) in image.enumerate_pixels() {
+        if pixel[3] >= 8 {
+            coverage
+                [((y * height / image.height()) * width + x * width / image.width()) as usize] =
+                true;
+        }
+    }
+    let mut regions = Vec::new();
+    for y in 0..height {
+        let mut x = 0;
+        while x < width {
+            if !coverage[(y * width + x) as usize] {
+                x += 1;
+                continue;
+            }
+            let start = x;
+            while x < width && coverage[(y * width + x) as usize] {
+                x += 1;
+            }
+            regions.push(egui::Rect::from_min_max(
+                egui::pos2(start as f32 / width as f32, y as f32 / height as f32),
+                egui::pos2(x as f32 / width as f32, (y + 1) as f32 / height as f32),
+            ));
+        }
+    }
+    regions
 }
 fn color_image(image: &image::RgbaImage) -> ColorImage {
     ColorImage::from_rgba_unmultiplied(
@@ -196,6 +233,17 @@ mod tests {
                 panic!("RGBA texture expected")
             };
             assert_eq!(image.pixels, expected, "composited frame {index}");
+            for (pixel, expected) in expected.iter().enumerate() {
+                let point = egui::pos2(
+                    (pixel % 2) as f32 / 2. + 0.25,
+                    (pixel / 2) as f32 / 2. + 0.25,
+                );
+                assert_eq!(
+                    pic.opaque_regions.iter().any(|r| r.contains(point)),
+                    expected.a() >= 8,
+                    "input coverage must follow composited transparency at frame {index}"
+                );
+            }
         }
         std::fs::remove_file(path).unwrap();
     }

@@ -97,6 +97,8 @@ pub struct DragWindow {
     root: u32,
     move_atom: u32,
     drag: Option<DragAnchor>,
+    input_shape: Vec<x11rb::protocol::xproto::Rectangle>,
+    shape_available: bool,
 }
 #[cfg(target_os = "linux")]
 impl DragWindow {
@@ -116,13 +118,93 @@ impl DragWindow {
             .reply()
             .ok()?
             .atom;
+        use x11rb::protocol::shape::ConnectionExt as _;
+        let shape_available = connection
+            .shape_query_version()
+            .ok()
+            .and_then(|reply| reply.reply().ok())
+            .is_some_and(|v| (v.major_version, v.minor_version) >= (1, 1));
         Some(Self {
             connection,
             window,
             root,
             move_atom,
             drag: None,
+            input_shape: Vec::new(),
+            shape_available,
         })
+    }
+    pub fn pointer_position(&self, pixels_per_point: f32) -> Option<eframe::egui::Pos2> {
+        use x11rb::protocol::xproto::ConnectionExt;
+        let pointer = self
+            .connection
+            .query_pointer(self.window)
+            .ok()?
+            .reply()
+            .ok()?;
+        pointer.same_screen.then(|| {
+            eframe::egui::pos2(
+                f32::from(pointer.win_x) / pixels_per_point,
+                f32::from(pointer.win_y) / pixels_per_point,
+            )
+        })
+    }
+    pub fn set_input_regions(
+        &mut self,
+        regions: &[eframe::egui::Rect],
+        screen: eframe::egui::Rect,
+        pixels_per_point: f32,
+    ) {
+        use x11rb::protocol::{
+            shape::{ConnectionExt, SK, SO},
+            xproto::{ClipOrdering, Rectangle},
+        };
+        if !self.shape_available {
+            return;
+        }
+        let rectangles: Vec<_> = regions
+            .iter()
+            .filter_map(|rect| {
+                let rect = rect.intersect(screen);
+                if !rect.is_positive() {
+                    return None;
+                }
+                let min = ((rect.min - screen.min) * pixels_per_point).floor();
+                let max = ((rect.max - screen.min) * pixels_per_point).ceil();
+                Some(Rectangle {
+                    x: min.x as i16,
+                    y: min.y as i16,
+                    width: (max.x - min.x) as u16,
+                    height: (max.y - min.y) as u16,
+                })
+            })
+            .collect();
+        if self.input_shape.len() == rectangles.len()
+            && self
+                .input_shape
+                .iter()
+                .zip(&rectangles)
+                .all(|(a, b)| (a.x, a.y, a.width, a.height) == (b.x, b.y, b.width, b.height))
+        {
+            return;
+        }
+        match self
+            .connection
+            .shape_rectangles(
+                SO::SET,
+                SK::INPUT,
+                ClipOrdering::UNSORTED,
+                self.window,
+                0,
+                0,
+                &rectangles,
+            )
+            .map_err(|error| error.to_string())
+            .and_then(|cookie| cookie.check().map_err(|error| error.to_string()))
+        {
+            Ok(()) => self.input_shape = rectangles,
+            Err(error) => eprintln!("更新鼠标输入区域失败: {error}"),
+        }
     }
     pub fn configure(&self) {
         if let Err(error) = x11_hints(self.window) {

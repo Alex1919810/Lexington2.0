@@ -16,6 +16,15 @@ X = C.CDLL(ctypes.util.find_library("X11"))
 T = C.CDLL(ctypes.util.find_library("Xtst"))
 
 
+class WindowAttributes(C.Structure):
+    _fields_ = [("background_pixmap", W), ("background_pixel", W),
+                ("border_pixmap", W), ("border_pixel", W),
+                ("bit_gravity", I), ("win_gravity", I), ("backing_store", I),
+                ("backing_planes", W), ("backing_pixel", W), ("save_under", I),
+                ("event_mask", C.c_long), ("do_not_propagate_mask", C.c_long),
+                ("override_redirect", I), ("colormap", W), ("cursor", W)]
+
+
 def bind(lib, name, args, result=I):
     function = getattr(lib, name)
     function.argtypes, function.restype = args, result
@@ -36,6 +45,13 @@ bind(X, "XSync", [D, I])
 bind(X, "XCloseDisplay", [D])
 bind(X, "XSetInputFocus", [D, W, I, W])
 bind(X, "XRaiseWindow", [D, W])
+bind(X, "XCreateSimpleWindow", [D, W, I, I, U, U, U, W, W], W)
+bind(X, "XChangeWindowAttributes", [D, W, W, C.POINTER(WindowAttributes)])
+bind(X, "XSelectInput", [D, W, C.c_long])
+bind(X, "XMapWindow", [D, W])
+bind(X, "XLowerWindow", [D, W])
+bind(X, "XDestroyWindow", [D, W])
+bind(X, "XCheckWindowEvent", [D, W, C.c_long, D])
 bind(X, "XWarpPointer", [D, W, W, I, I, U, U, I, I])
 bind(T, "XTestFakeButtonEvent", [D, U, I, W])
 
@@ -44,7 +60,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary")
     parser.add_argument("screenshot")
-    parser.add_argument("mode", choices=["drag", "drag-edges", "clock", "input", "pin", "idle"], default="clock", nargs="?")
+    parser.add_argument("mode", choices=["drag", "drag-edges", "click-through", "clock", "input", "pin", "idle"], default="clock", nargs="?")
     parser.add_argument("--production", action="store_true", help="check the default 500x500 window")
     args = parser.parse_args()
     display = X.XOpenDisplay(None)
@@ -108,10 +124,11 @@ def main():
         time.sleep(0.12)
 
     process = None
+    underlying = None
     saved_pointer = pointer()
     try:
         command = [args.binary, "--screenshot", args.screenshot, "--screenshot-delay",
-                   "20" if args.mode == "drag-edges" else "7"]
+                   "20" if args.mode in ("drag-edges", "click-through") else "7"]
         if not args.production:
             command.append("--dev")
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -136,10 +153,37 @@ def main():
         X.XSetInputFocus(display, window, 2, 0)
         X.XSync(display, 0)
         time.sleep(0.2)
-        if args.mode == "drag-edges":
+        if args.mode == "click-through":
+            # A real window below the pet must receive blank-area clicks.
+            underlying = X.XCreateSimpleWindow(display, root, *original, *original_size, 0, 0, 0)
+            X.XChangeWindowAttributes(display, underlying, 1 << 9,
+                                      C.byref(WindowAttributes(override_redirect=1)))
+            X.XSelectInput(display, underlying, 1 << 2)
+            X.XMapWindow(display, underlying)
+            X.XLowerWindow(display, underlying)
+            X.XSync(display, 0)
+            time.sleep(0.3)
+            event = (C.c_long * 24)()
+            for offset in [(5, 5), (original_size[0] - 5, 5), (80, 80)]:
+                warp(original[0] + offset[0], original[1] + offset[1])
+                button(True)
+                button(False)
+                assert X.XCheckWindowEvent(display, underlying, 1 << 2, C.byref(event)), ("blank area blocked click", offset)
+            warp(original[0] + original_size[0] // 2 - 60, original[1] + original_size[1] // 2 - 20)
+            button(True)
+            button(False)
+            assert not X.XCheckWindowEvent(display, underlying, 1 << 2, C.byref(event)), "pet click passed through"
+            sidebar_x = max(10, original_size[0] // 2 - 315) + 25
+            warp(original[0] + sidebar_x, original[1] + original_size[1] // 2 - 125)
+            button(True)
+            button(False)
+            assert not X.XCheckWindowEvent(display, underlying, 1 << 2, C.byref(event)), "sidebar click passed through"
+            print("Blank areas deliver clicks to underlying window; pet and sidebar retain clicks: passed")
+        elif args.mode == "drag-edges":
             width, height = size(root)
-            start = (original[0] + original_size[0] // 2,
-                     original[1] + original_size[1] // 2)
+            # Grab visible artwork; the bundled GIF's canvas center is transparent.
+            start = (original[0] + original_size[0] // 2 - 60,
+                     original[1] + original_size[1] // 2 - 20)
             warp(*start)
             button(True)
             # Pet center follows the pointer while transparent margins cross screen edges.
@@ -164,7 +208,7 @@ def main():
             button(False)
             time.sleep(0.3)
             assert position(window) == original, "window moved back after releasing drag"
-            print("Pet center reaches all screen corners; transparent margins can leave screen: passed")
+            print("Pet drag anchor reaches all screen corners; transparent margins can leave screen: passed")
         elif args.mode == "drag":
             start = (original[0] + original_size[0] // 2 - 60,
                      original[1] + original_size[1] // 2 - 20)
@@ -195,7 +239,7 @@ def main():
             warp(original[0] + original_size[0] // 2, original[1] + original_size[1] - 40)
         if args.mode != "input":
             warp(0, 0)
-        assert process.wait(timeout=25 if args.mode == "drag-edges" else 15) == 0, process.stderr.read().decode()
+        assert process.wait(timeout=25 if args.mode in ("drag-edges", "click-through") else 15) == 0, process.stderr.read().decode()
     finally:
         T.XTestFakeButtonEvent(display, 1, 0, 0)
         X.XSync(display, 0)
@@ -206,6 +250,8 @@ def main():
             error = process.stderr.read().decode()
             if error:
                 print(error)
+        if underlying is not None:
+            X.XDestroyWindow(display, underlying)
         X.XWarpPointer(display, 0, root, 0, 0, 0, 0, *saved_pointer)
         X.XSync(display, 0)
         X.XCloseDisplay(display)

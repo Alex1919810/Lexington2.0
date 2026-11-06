@@ -35,6 +35,55 @@ fn click(app: &mut Pet, ctx: &egui::Context, point: egui::Pos2) {
     );
 }
 #[test]
+fn input_regions_exclude_blank_background_and_clear_closed_windows() {
+    let root =
+        std::env::temp_dir().join(format!("lexington-input-regions-{}", rand::random::<u64>()));
+    crate::backend::config::Config::save_no_approval(&root, false).unwrap();
+    let ctx = egui::Context::default();
+    let mut app = Pet::from_root(&ctx, false, root.clone());
+    for _ in 0..3 {
+        frame(&mut app, &ctx, vec![]);
+    }
+    assert!(!app.input_regions.iter().any(|r| r.contains(pos2(5., 5.))));
+    assert!(
+        !app.input_regions
+            .iter()
+            .any(|r| r.contains(pos2(250., 150.)))
+    );
+    assert!(
+        app.input_regions
+            .iter()
+            .any(|r| r.contains(pos2(400., 300.)))
+    );
+    assert!(
+        app.input_regions
+            .iter()
+            .any(|r| r.contains(pos2(110., 175.)))
+    );
+    assert!(
+        !app.input_regions
+            .iter()
+            .any(|r| r.contains(app.input_bounds.unwrap().center()))
+    );
+    app.settings = true;
+    for _ in 0..3 {
+        frame(&mut app, &ctx, vec![]);
+    }
+    assert!(
+        app.input_regions
+            .iter()
+            .any(|r| r.contains(pos2(250., 150.)))
+    );
+    app.settings = false;
+    frame(&mut app, &ctx, vec![]);
+    assert!(
+        !app.input_regions
+            .iter()
+            .any(|r| r.contains(pos2(250., 150.)))
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+#[test]
 fn settings_approval_checkbox_persists_without_restarting_and_controls_next_turn() {
     let root =
         std::env::temp_dir().join(format!("lexington-approval-ui-{}", rand::random::<u64>()));
@@ -242,7 +291,7 @@ fn right_click_in_drag_circle_opens_context_menu() {
     let mut app = Pet::from_context(&ctx, true);
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![]);
-    let point = pos2(400., 300.);
+    let point = pos2(340., 280.);
     frame(&mut app, &ctx, vec![egui::Event::PointerMoved(point)]);
     for pressed in [true, false] {
         frame(
@@ -261,6 +310,14 @@ fn right_click_in_drag_circle_opens_context_menu() {
             .is_some_and(|r| r.context_menu_opened())
     );
     assert!(app.text.is_empty());
+    for _ in 0..3 {
+        frame(&mut app, &ctx, vec![]);
+    }
+    click(&mut app, &ctx, point + vec2(20., 14.));
+    assert!(
+        app.settings,
+        "context menu must retain native input coverage and open settings"
+    );
 }
 #[test]
 fn input_focus_enter_error_and_escape_use_real_ui_events() {

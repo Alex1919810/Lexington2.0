@@ -83,6 +83,11 @@ impl Pet {
                 );
                 rect
             });
+        self.input_regions.push(
+            ctx.layer_transform_to_global(result.response.layer_id)
+                .unwrap_or_default()
+                * result.inner,
+        );
         Some(result.inner)
     }
 }

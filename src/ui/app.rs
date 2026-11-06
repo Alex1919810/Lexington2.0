@@ -27,6 +27,7 @@ pub struct Pet {
     pub(super) dialog_bg: Option<Picture>,
     pub(super) input_bg: Option<Picture>,
     pub(super) input_bounds: Option<Rect>,
+    pub(super) input_regions: Vec<Rect>,
     pub(super) dialog_bounds: Option<Rect>,
     pub(super) pinned: bool,
     pub(super) text: String,
@@ -91,6 +92,7 @@ impl Pet {
             dialog_bg: None,
             input_bg: None,
             input_bounds: None,
+            input_regions: Vec::new(),
             dialog_bounds: None,
             pinned,
             text: String::new(),
@@ -165,7 +167,7 @@ impl Pet {
         }
     }
     pub(super) fn context_menu(&mut self, ctx: &egui::Context, response: &egui::Response) {
-        response.context_menu(|ui| {
+        if let Some(menu) = response.context_menu(|ui| {
             if ui.button("设置").clicked() {
                 self.settings = true;
                 ui.close_menu();
@@ -179,7 +181,10 @@ impl Pet {
             if ui.button("关闭").clicked() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-        });
+        }) && response.context_menu_opened()
+        {
+            self.input_regions.push(menu.response.rect);
+        }
     }
 }
 impl eframe::App for Pet {
@@ -199,6 +204,7 @@ impl eframe::App for Pet {
 }
 impl Pet {
     pub(super) fn ui(&mut self, ctx: &egui::Context) {
+        self.input_regions.clear();
         ctx.request_repaint_after(Duration::from_millis(16));
         #[cfg(target_os = "linux")]
         if let Some(window) = &mut self.drag_window {
@@ -315,16 +321,20 @@ impl Pet {
                 self.text.clear();
             }
         }
-        egui::Window::new("关于")
+        if let Some(window) = egui::Window::new("关于")
             .open(&mut self.about)
             .show(ctx, |ui| {
                 ui.label("Lexington 2.0\n纯 Rust 桌面宠物\neframe / egui");
-            });
+            })
+            && self.about
+        {
+            self.input_regions.push(window.response.rect);
+        }
         let mut restart_codex = false;
         let mut reload = false;
         let mut no_approval = self.config.codex.no_approval;
         let mut approval_changed = false;
-        egui::Window::new("设置")
+        if let Some(window) = egui::Window::new("设置")
             .open(&mut self.settings)
             .order(egui::Order::Foreground)
             .collapsible(false)
@@ -485,7 +495,11 @@ impl Pet {
                         },
                     );
                 });
-            });
+            })
+            && self.settings
+        {
+            self.input_regions.push(window.response.rect);
+        }
         if approval_changed {
             match Config::save_no_approval(&self.root, no_approval) {
                 Ok(()) => {
@@ -503,5 +517,9 @@ impl Pet {
             self.start_codex(ctx);
         }
         self.codex_prompt_ui(ctx);
+        #[cfg(target_os = "linux")]
+        if let Some(window) = &mut self.drag_window {
+            window.set_input_regions(&self.input_regions, screen, ctx.pixels_per_point());
+        }
     }
 }

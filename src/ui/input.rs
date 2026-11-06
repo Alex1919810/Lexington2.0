@@ -61,11 +61,14 @@ impl Pet {
         let input_transform = ctx
             .layer_transform_to_global(egui::LayerId::new(egui::Order::Foreground, "input".into()))
             .unwrap_or_default();
-        let hovered = ctx.input(|i| {
-            i.pointer
-                .hover_pos()
-                .is_some_and(|p| (input_transform * rect).contains(p))
+        let pointer = ctx.input(|i| i.pointer.hover_pos());
+        #[cfg(target_os = "linux")]
+        // Transparent areas receive no native motion events. Poll for hover
+        // discovery without claiming clicks or stealing another app's focus.
+        let pointer = self.drag_window.as_ref().map_or(pointer, |window| {
+            window.pointer_position(ctx.pixels_per_point())
         });
+        let hovered = pointer.is_some_and(|p| (input_transform * rect).contains(p));
         self.input_bounds = Some(input_transform * rect);
         let focused = ctx.memory(|m| m.has_focus(id));
         let alpha = ctx.animate_value_with_time(
@@ -77,6 +80,9 @@ impl Pet {
             },
             0.3,
         );
+        if alpha > 0.01 {
+            self.input_regions.push(input_transform * rect);
+        }
         egui::Area::new("input".into())
             .constrain(false)
             .order(egui::Order::Foreground)
