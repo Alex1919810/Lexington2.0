@@ -1,116 +1,105 @@
-# 桌面宠物 - Electron + Vue3
+# Lexington — Rust 桌面宠物
 
-一个基于 Electron 和 Vue 3 的桌面宠物应用，支持立绘展示、对话交互、打卡提醒等功能。
+一个使用 Rust 编写界面和业务逻辑的桌面宠物。eframe/egui + glow 直接绘制透明原生窗口，运行时无需 Node.js、Electron、WebView 或 N-API。
 
-## 功能特性
-
-- **立绘展示** - 支持 GIF 和 PNG 格式的立绘图片，按角色分类管理
-- **对话系统** - 点击宠物显示对话框，支持打字机效果，可配置自动关闭
-- **LLM 对话** - 集成大模型 API，支持与宠物进行对话交互
-- **打卡功能** - 上班打卡计时，定时提醒下班
-- **角色切换** - 支持多个角色之间的切换，每个角色有独立的立绘和对话文本
-- **格式切换** - 同一角色支持 GIF/PNG 两种立绘格式切换
-- **自定义背景** - 支持对话框和输入框的自定义背景图片
-- **侧边栏控制** - 刷新立绘、切换立绘、切换格式、切换角色、打卡等功能按钮
-- **可拖拽窗口** - 通过立绘区域拖拽移动窗口位置
-- **始终置顶** - 透明无边框窗口，始终保持在桌面最前
-
-## 技术栈
-
-- **Electron** - 跨平台桌面应用框架
-- **Vue 3** - 渐进式 JavaScript 框架
-- **Vite** - 下一代前端构建工具
+支持 GIF/PNG 立绘、多角色切换、随机台词、打字机对话、大模型聊天、打卡提醒、自定义气泡背景和窗口拖动。沿用原有 `resource/` 目录和 `config/config.json` 格式。
 
 ## 快速开始
 
-### 安装依赖
+安装 Rust 稳定版（支持 edition 2024），在项目目录运行：
 
 ```bash
-npm install
+cargo run --release --locked
 ```
 
-### 开发模式
+默认窗口为 500×500、透明、无边框、置顶。开发窗口与原版相同，为 800×600，位置 (100,100)：
 
 ```bash
-npm run dev
+cargo run --locked -- --dev
 ```
 
-这将同时启动 Vite 开发服务器和 Electron 应用。
+Linux 需要桌面 OpenGL/EGL 驱动及 X11/XWayland。存在 `DISPLAY` 时默认选 X11/XWayland；可通过 `cargo run --release --locked -- --wayland` 选择原生 Wayland。
 
-### 构建应用
+| 平台 | 支持及验证情况 |
+|---|---|
+| Linux X11 / XWayland | 提供窗口定位、置顶、拖动及隐藏任务栏；已在独立 X11 桌面验证 |
+| Linux 原生 Wayland | 提供后端；窗口位置和层级由合成器控制，尚需对应桌面实测 |
+| Windows / macOS | 使用 eframe 原生后端；尚需对应系统构建和运行验证 |
+
+资源查找顺序：`LEXINGTON_HOME` 环境变量指定的目录 → 可执行文件旁的 `resource/` → 当前工作目录。发布时把 `resource/` 与 `config/` 放在可执行文件旁，启动不依赖工作目录。
+
+## 构建和安装
 
 ```bash
-npm run build
+cargo build --release --locked
+bash scripts/package.sh
+bash scripts/install-linux.sh
 ```
 
-### 打包应用
+以上打包和安装脚本用于 Linux。打包生成 `dist/lexington/` 和 `dist/lexington-linux-<架构>.tar.gz`，包含可执行文件、资源和配置。解压后运行其中的 `lexington` 即可。
 
-```bash
-npm run electron:build
+安装脚本默认安装到 `~/.local/share/lexington/`（遵循 `XDG_DATA_HOME`），创建应用菜单和桌面快捷方式，升级时保留已安装版本的配置。发布前请确保配置中的 `llm.apiKey` 为空。
+
+Windows 在对应系统使用 `cargo build --release --locked` 构建，将 `target/release/lexington.exe` 与 `resource/`、`config/` 一起分发；macOS 对应的可执行文件为 `target/release/lexington`。
+
+## 使用
+
+- 宠物中心圆形区域：单击显示随机角色台词；第二次点击显示全文；第三次关闭。按住后移动超过 5px 拖动整个窗口。
+- 对话：每 50ms 显示一个字符，鼠标活动重置自动关闭计时；点击圆形区域和气泡以外的位置关闭。
+- 输入框：在立绘下方悬停显示，点击后输入；Enter 发送，显示“正在思考...”，回复通过气泡展示。请求失败显示错误，Escape 清空输入和错误。窗口启动时不自动聚焦输入框。
+- 右键宠物：设置、关于、关闭。
+
+| 侧栏按钮 | 功能 |
+|---|---|
+| 📌 / 📍 | 固定显示 / 悬停显示（退出后保存，下次启动恢复） |
+| ↻ | 重扫立绘、台词、背景和配置，保留当前图片 |
+| ▶ | 切换当前角色、当前格式的下一张立绘 |
+| G / P | GIF / PNG 切换；格式不存在时回退 |
+| 👤 | 切换角色 |
+| ⏰ | 上班打卡 / 取消；到时显示下班提醒 |
+
+GIF 逐帧解码并保留循环次数，避免把全部 1024×1024 帧保留在内存；不足 20ms 的帧延迟按浏览器行为使用 100ms。未配置图片或图片解码失败时显示粉色动画宠物。
+
+## 资源与配置
+
+```text
+resource/
+  illustration/<角色>/gif/*.gif
+  illustration/<角色>/png/*.png
+  texts/<角色>/text.json
+  background/dialog/*.{png,jpg,jpeg,gif,webp}
+  background/input/*.{png,jpg,jpeg,gif,webp}
+  icon/
+  fonts/                  # 内置中文字体与许可证
+config/config.json
 ```
 
-## 项目结构
+台词格式为 JSON 字符串数组，空台词会过滤。角色从立绘目录发现；各资源按名称排序，背景使用第一张。
 
-```
-├── electron/              # Electron 主进程文件
-│   ├── main.js           # 主进程入口
-│   ├── preload.js        # 预加载脚本
-│   ├── window.js         # 窗口管理
-│   ├── config.js         # 配置管理
-│   ├── fileScanner.js    # 文件扫描
-│   ├── llmApi.js         # LLM API 调用
-│   ├── ipcHandlers.js    # IPC 处理器
-│   └── menu.js           # 右键菜单
-├── src/                  # Vue 3 应用源码
-│   ├── components/       # Vue 组件
-│   │   ├── VisualWifi.vue      # 主立绘组件
-│   │   ├── DialogBubble.vue    # 对话框组件
-│   │   ├── InputDialog.vue     # 输入框组件
-│   │   └── Sidebar.vue         # 侧边栏组件
-│   ├── composables/      # Vue 组合式函数
-│   │   └── useHotReload.ts     # 热加载管理
-│   ├── App.vue           # 根组件
-│   ├── main.js           # 应用入口
-│   └── style.css         # 全局样式
-├── resource/             # 资源文件夹
-│   ├── illustration/     # 立绘图片 (按角色/格式分类)
-│   │   └── 角色名/
-│   │       ├── gif/      # GIF 格式立绘
-│   │       └── png/      # PNG 格式立绘
-│   ├── background/       # 背景图片
-│   │   ├── dialog/       # 对话框背景
-│   │   └── input/        # 输入框背景
-│   ├── texts/            # 角色文本
-│   │   └── 角色名/
-│   │       └── text.json # 角色对话文本 (JSON 数组)
-│   └── icon/             # 应用图标
-├── config/               # 配置文件夹
-│   └── config.json       # 应用配置
-├── index.html            # HTML 模板
-├── vite.config.js        # Vite 配置
-└── package.json          # 项目配置
+添加角色时，在 `resource/illustration/<角色名>/gif/` 或 `png/` 放入立绘，并可在 `resource/texts/<角色名>/text.json` 添加台词：
+
+```json
+["你好，提督！", "今天也一起加油吧。"]
 ```
 
-## 配置说明
-
-在 `config/config.json` 中配置应用：
+修改资源或配置后，点击侧栏 ↻ 重新加载。安装版的资源和配置位于安装目录；源码运行时使用项目目录中的文件。
 
 ```json
 {
   "dialog": {
     "width": 200,
     "maxHeight": 120,
-    "offsetX": 100,
+    "offsetX": 150,
     "offsetY": 50,
     "autoCloseDelay": 10
   },
   "llm": {
-    "apiUrl": "https://api.openai.com/v1/chat/completions",
-    "apiKey": "your-api-key",
-    "model": "gpt-3.5-turbo"
+    "apiUrl": "https://api.deepseek.com/chat/completions",
+    "apiKey": "",
+    "model": "deepseek-chat"
   },
   "clockIn": {
-    "workReminderHours": 8,
+    "workReminderHours": 12,
     "clockInMessage": "打卡成功！",
     "clockOutMessage": "下班时间到了！",
     "clockInCancelMessage": "打卡已终止"
@@ -118,49 +107,47 @@ npm run electron:build
 }
 ```
 
-### 配置项说明
+`width/maxHeight/offsetX/offsetY` 为逻辑像素，`autoCloseDelay` 为秒，`workReminderHours` 为小时。输入框水平居中。缺失字段采用默认值，格式错误时回退默认配置。
 
-| 配置项 | 说明 |
-|--------|------|
-| `dialog.width` | 对话框宽度 (像素) |
-| `dialog.maxHeight` | 对话框最大高度 (像素) |
-| `dialog.offsetX` | 对话框水平偏移 |
-| `dialog.offsetY` | 对话框垂直偏移 |
-| `dialog.autoCloseDelay` | 对话框自动关闭延迟 (秒) |
-| `llm.apiUrl` | 大模型 API 地址 |
-| `llm.apiKey` | API 密钥 |
-| `llm.model` | 模型名称 |
-| `clockIn.workReminderHours` | 工作时长 (小时) |
-| `clockIn.clockInMessage` | 打卡成功消息 |
-| `clockIn.clockOutMessage` | 下班提醒消息 |
-| `clockIn.clockInCancelMessage` | 取消打卡消息 |
+聊天需填写 `llm.apiUrl`、`llm.apiKey` 和 `llm.model`。接口使用 OpenAI Chat Completions 兼容格式，仅发送当前一条用户消息，60 秒超时；网络请求在后台执行，不阻塞界面。
 
-## 添加角色
+## 代码结构
 
-1. 在 `resource/illustration/` 下创建以角色名命名的文件夹
-2. 在角色文件夹中创建 `gif` 和/或 `png` 子文件夹
-3. 将对应格式的立绘图片放入相应文件夹
-4. (可选) 在 `resource/texts/角色名/` 下创建 `text.json` 文件，添加对话文本：
+| 文件 | 职责 |
+|---|---|
+| `src/main.rs` | 应用入口、界面、交互状态和后台请求通道 |
+| `src/visual.rs` | 默认宠物、容器变换与气泡形状 |
+| `src/assets.rs` | 静态图片及 GIF 流式解码 |
+| `src/backend.rs` | 配置读取、资源扫描和 HTTP 请求 |
+| `src/platform.rs` | Linux 窗口属性及拖动 |
+| `scripts/` | Linux 安装、打包和 X11 窗口验证 |
 
-```json
-[
-  "你好！",
-  "今天天气真好！",
-  "有什么可以帮你的吗？"
-]
+## 验证
+
+```bash
+cargo fmt --check
+cargo test --locked
+cargo clippy --locked --all-targets -- -D warnings
+cargo run --locked -- --dev --screenshot /tmp/lexington.png
 ```
 
-## 侧边栏按钮说明
+`--screenshot` 默认等待 4 秒后保存透明 PNG 并退出，`--screenshot-delay 7` 可调整等待秒数。测试覆盖资源删除后的刷新恢复、配置、GIF 循环与局部帧还原、HTTP 协议与失败响应、UI 指针与键盘交互、打卡计时和对话关闭。HTTP 测试使用本地模拟服务，不需要真实 API key。
 
-| 按钮 | 功能 |
-|------|------|
-| 📌/📍 | 切换侧边栏显示模式 (固定显示/鼠标悬停显示) |
-| ↻ | 刷新立绘列表 |
-| ▶ | 切换到下一个立绘 |
-| G/P | 切换 GIF/PNG 格式 |
-| 👤 | 切换角色 |
-| ⏰ | 上班打卡/终止计时 |
+内置 Noto Sans CJK SC、Liberation 和 Noto Sans Math 字体，并附带许可证，减少字体缺失造成的字号、换行及按钮符号差异。立绘、气泡和输入框共同缩放与浮动；图片使用线性 mipmap 过滤，保留缩小后的平滑效果。
+
+活动 Linux 桌面可进一步执行（会移动鼠标，需要 libX11 和 libXtst）：
+
+```bash
+python3 scripts/native-smoke.py target/release/lexington /tmp/lexington-drag.png drag
+python3 scripts/native-smoke.py target/release/lexington /tmp/lexington-clock.png clock
+python3 scripts/native-smoke.py target/release/lexington /tmp/lexington-input.png input
+python3 scripts/native-smoke.py target/release/lexington /tmp/lexington-production.png idle --production
+```
+
+脚本验证窗口尺寸、置顶、隐藏任务栏和窗口切换器；`drag` 还断言 5px 阈值、精确位移、反向移动、离开初始命中区域和拖动后尺寸。`pin` 模式切换侧栏显示模式，配合独立 `XDG_DATA_HOME` 可验证重启后的保存结果（Linux 状态文件为 `$XDG_DATA_HOME/lexington/app.ron`，默认位于 `~/.local/share/lexington/`）。测试宜使用 Xephyr + 窗口管理器等独立 X11 桌面，避免影响工作桌面。
+
+已在 Linux X11 独立桌面验证上述窗口行为、500×500 普通窗口、800×600 开发窗口和侧栏状态保存，并对照原 Vue 渲染检查立绘、气泡、输入框和默认宠物。
 
 ## 许可证
 
-MIT
+项目代码沿用 MIT 许可。内置字体及表情图标的许可说明分别位于 `resource/fonts/LICENSE-*.txt` 和 `resource/icon/LICENSE-emoji.txt`。

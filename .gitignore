@@ -33,3 +33,9 @@ yarn-error.log*
 
 # Electron
 *.asar
+
+# Rust
+/target/
+
+# Native verification helpers
+__pycache__/

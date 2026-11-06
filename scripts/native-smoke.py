@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""Check the native X11 window and drag distance. Requires libX11/libXtst.
+
+Prefer an isolated X11 display (e.g. Xephyr with a window manager). The test
+moves the pointer and restores it after the application exits.
+"""
+import argparse
+import ctypes as C
+import ctypes.util
+import json
+import subprocess
+import time
+
+D, W, I, U = C.c_void_p, C.c_ulong, C.c_int, C.c_uint
+X = C.CDLL(ctypes.util.find_library("X11"))
+T = C.CDLL(ctypes.util.find_library("Xtst"))
+
+
+def bind(lib, name, args, result=I):
+    function = getattr(lib, name)
+    function.argtypes, function.restype = args, result
+    return function
+
+
+bind(X, "XOpenDisplay", [C.c_char_p], D)
+bind(X, "XDefaultRootWindow", [D], W)
+bind(X, "XQueryTree", [D, W, C.POINTER(W), C.POINTER(W), C.POINTER(C.POINTER(W)), C.POINTER(U)])
+bind(X, "XGetWindowProperty", [D, W, W, C.c_long, C.c_long, I, W, C.POINTER(W), C.POINTER(I), C.POINTER(W), C.POINTER(W), C.POINTER(C.POINTER(C.c_ubyte))])
+bind(X, "XInternAtom", [D, C.c_char_p, I], W)
+bind(X, "XGetAtomName", [D, W], D)
+bind(X, "XFree", [D])
+bind(X, "XTranslateCoordinates", [D, W, W, I, I, C.POINTER(I), C.POINTER(I), C.POINTER(W)])
+bind(X, "XGetGeometry", [D, W, C.POINTER(W), C.POINTER(I), C.POINTER(I), C.POINTER(U), C.POINTER(U), C.POINTER(U), C.POINTER(U)])
+bind(X, "XQueryPointer", [D, W, C.POINTER(W), C.POINTER(W), C.POINTER(I), C.POINTER(I), C.POINTER(I), C.POINTER(I), C.POINTER(U)])
+bind(X, "XSync", [D, I])
+bind(X, "XCloseDisplay", [D])
+bind(X, "XSetInputFocus", [D, W, I, W])
+bind(X, "XRaiseWindow", [D, W])
+bind(X, "XWarpPointer", [D, W, W, I, I, U, U, I, I])
+bind(T, "XTestFakeButtonEvent", [D, U, I, W])
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("binary")
+    parser.add_argument("screenshot")
+    parser.add_argument("mode", choices=["drag", "clock", "input", "pin", "idle"], default="clock", nargs="?")
+    parser.add_argument("--production", action="store_true", help="check the default 500x500 window")
+    args = parser.parse_args()
+    display = X.XOpenDisplay(None)
+    assert display, "X11 display is unavailable"
+    root = X.XDefaultRootWindow(display)
+
+    def atom(name):
+        return X.XInternAtom(display, name.encode(), 0)
+
+    def property32(window, name, kind):
+        actual, fmt, count, remaining = W(), I(), W(), W()
+        data = C.POINTER(C.c_ubyte)()
+        X.XGetWindowProperty(display, window, atom(name), 0, 64, 0, kind,
+                             C.byref(actual), C.byref(fmt), C.byref(count),
+                             C.byref(remaining), C.byref(data))
+        values = list(C.cast(data, C.POINTER(W))[:count.value]) if fmt.value == 32 else []
+        X.XFree(data)
+        return values
+
+    def children(window):
+        r, parent, data, count = W(), W(), C.POINTER(W)(), U()
+        X.XQueryTree(display, window, C.byref(r), C.byref(parent), C.byref(data), C.byref(count))
+        values = list(data[:count.value])
+        X.XFree(data)
+        return values
+
+    def find(window, pid, depth=0):
+        if property32(window, "_NET_WM_PID", 6) == [pid]:
+            return window
+        if depth < 3:
+            for child in children(window):
+                found = find(child, pid, depth + 1)
+                if found:
+                    return found
+        return None
+
+    def position(window):
+        x, y, child = I(), I(), W()
+        X.XTranslateCoordinates(display, window, root, 0, 0, C.byref(x), C.byref(y), C.byref(child))
+        return x.value, y.value
+
+    def size(window):
+        r, x, y, width, height, border, depth = W(), I(), I(), U(), U(), U(), U()
+        X.XGetGeometry(display, window, C.byref(r), C.byref(x), C.byref(y), C.byref(width), C.byref(height), C.byref(border), C.byref(depth))
+        return width.value, height.value
+
+    def pointer():
+        r, child, x, y, wx, wy, mask = W(), W(), I(), I(), I(), I(), U()
+        X.XQueryPointer(display, root, C.byref(r), C.byref(child), C.byref(x), C.byref(y), C.byref(wx), C.byref(wy), C.byref(mask))
+        return x.value, y.value
+
+    def warp(x, y):
+        X.XWarpPointer(display, 0, root, 0, 0, 0, 0, x, y)
+        X.XSync(display, 0)
+        time.sleep(0.12)
+        assert pointer() == (x, y), ("pointer warp", pointer(), (x, y))
+
+    def button(pressed):
+        T.XTestFakeButtonEvent(display, 1, int(pressed), 0)
+        X.XSync(display, 0)
+        time.sleep(0.12)
+
+    process = None
+    saved_pointer = pointer()
+    try:
+        command = [args.binary, "--screenshot", args.screenshot, "--screenshot-delay", "7"]
+        if not args.production:
+            command.append("--dev")
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        deadline = time.monotonic() + 10
+        window = None
+        while not window and time.monotonic() < deadline:
+            assert process.poll() is None, process.stderr.read().decode()
+            window = find(root, process.pid)
+            time.sleep(0.05)
+        assert window, "native window did not appear"
+        time.sleep(1)
+        names = []
+        for value in property32(window, "_NET_WM_STATE", 4):
+            name = X.XGetAtomName(display, value)
+            names.append(C.string_at(name).decode())
+            X.XFree(name)
+        assert {"_NET_WM_STATE_ABOVE", "_NET_WM_STATE_SKIP_TASKBAR", "_NET_WM_STATE_SKIP_PAGER"} <= set(names), names
+        original, original_size = position(window), size(window)
+        assert original_size == ((500, 500) if args.production else (800, 600)), original_size
+        print(json.dumps(dict(position=original, size=original_size, states=names)))
+        X.XRaiseWindow(display, window)
+        X.XSetInputFocus(display, window, 2, 0)
+        X.XSync(display, 0)
+        time.sleep(0.2)
+        if args.mode == "drag":
+            start = (original[0] + original_size[0] // 2 - 60,
+                     original[1] + original_size[1] // 2 - 20)
+            warp(*start)
+            button(True)
+            warp(start[0] + 3, start[1] + 2)
+            assert position(window) == original, "movement below 5px moved the window"
+            # Includes reversal and points outside the original circular hit region.
+            for dx, dy in [(10, 5), (80, 40), (350, 50), (40, -20), (80, 40)]:
+                warp(start[0] + dx, start[1] + dy)
+                expected = (original[0] + dx, original[1] + dy)
+                deadline = time.monotonic() + 0.6
+                while position(window) != expected and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                assert position(window) == expected, (position(window), expected)
+                assert size(window) == original_size, "drag changed window dimensions"
+            button(False)
+            print("Drag threshold, distance, reversal, capture and size: passed")
+        elif args.mode in ("clock", "pin"):
+            sidebar_x = original_size[0] / 2 - 315
+            if sidebar_x < 0:
+                sidebar_x = 10
+            warp(int(original[0] + sidebar_x + 25),
+                 original[1] + original_size[1] // 2 - 125 + (250 if args.mode == "clock" else 0))
+            button(True)
+            button(False)
+        elif args.mode == "input":
+            warp(original[0] + original_size[0] // 2, original[1] + original_size[1] - 40)
+        if args.mode != "input":
+            warp(0, 0)
+        assert process.wait(timeout=15) == 0, process.stderr.read().decode()
+    finally:
+        if process is not None:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=5)
+            error = process.stderr.read().decode()
+            if error:
+                print(error)
+        X.XWarpPointer(display, 0, root, 0, 0, 0, 0, *saved_pointer)
+        X.XSync(display, 0)
+        X.XCloseDisplay(display)
+
+
+if __name__ == "__main__":
+    main()
