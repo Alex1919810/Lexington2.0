@@ -1,0 +1,154 @@
+use super::app::Pet;
+use super::style::draw_shadow;
+use eframe::egui::{self, Color32, Rect, pos2, vec2};
+use eframe::egui::{FontId, Sense};
+
+impl Pet {
+    pub(super) fn sidebar(&mut self, ctx: &egui::Context, screen: Rect) -> bool {
+        let mut handled = false;
+        let x = if screen.width() / 2. - 315. < 0. {
+            10.
+        } else {
+            screen.width() / 2. - 315.
+        };
+        let bounds = Rect::from_min_size(pos2(x, screen.center().y - 155.), vec2(50., 310.));
+        let hovered = ctx.input(|i| i.pointer.hover_pos().is_some_and(|p| bounds.contains(p)));
+        let alpha = ctx.animate_value_with_time(
+            egui::Id::new("sidebar-alpha"),
+            if self.pinned || hovered { 1. } else { 0.2 },
+            0.3,
+        );
+        egui::Area::new("sidebar".into())
+            .fixed_pos(bounds.min + vec2(5., 10.))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                ui.spacing_mut().item_spacing = vec2(0., 10.);
+                ui.set_opacity(alpha);
+                let labels = [
+                    if self.pinned { "📌" } else { "📍" },
+                    "↻",
+                    "▶",
+                    if self.library.format == "gif" {
+                        "G"
+                    } else {
+                        "P"
+                    },
+                    "👤",
+                    "⏰",
+                ];
+                let tips = [
+                    "切换侧边栏显示模式",
+                    "刷新列表",
+                    "切换到下一个立绘",
+                    "切换 GIF/PNG 格式",
+                    "切换角色",
+                    if self.clock_state.started.is_some() {
+                        "点击终止计时"
+                    } else {
+                        "上班打卡"
+                    },
+                ];
+                for n in 0..6 {
+                    let enabled = !((n == 2 || n == 4) && self.library.illustrations.is_empty());
+                    let color = if n == 0 {
+                        Color32::from_rgba_unmultiplied(150, 100, 255, 204)
+                    } else if n == 5 && self.clock_state.started.is_some() {
+                        Color32::from_rgba_unmultiplied(76, 175, 80, 204)
+                    } else {
+                        Color32::from_rgba_unmultiplied(100, 150, 255, 204)
+                    };
+                    let response = ui
+                        .allocate_response(
+                            vec2(40., 40.),
+                            if enabled {
+                                Sense::click()
+                            } else {
+                                Sense::hover()
+                            },
+                        )
+                        .on_hover_text(tips[n]);
+                    let scale = ctx.animate_value_with_time(
+                        egui::Id::new(("button-scale", n)),
+                        if response.is_pointer_button_down_on() {
+                            0.95
+                        } else if response.hovered() && enabled {
+                            1.1
+                        } else {
+                            1.
+                        },
+                        0.2,
+                    );
+                    let rect =
+                        Rect::from_center_size(response.rect.center(), vec2(40., 40.) * scale);
+                    let painter = ui.painter();
+                    let color = if response.hovered() && enabled {
+                        Color32::from_rgb(color.r(), color.g(), color.b())
+                    } else {
+                        color
+                    };
+                    let opacity = if enabled { 1. } else { 0.5 };
+                    draw_shadow(painter, rect, 8., 8., (51. * opacity) as u8);
+                    painter.rect_filled(rect, 8, color.gamma_multiply(opacity));
+                    match n {
+                        0 | 4 | 5 => {
+                            let icon = if n == 0 {
+                                usize::from(!self.pinned)
+                            } else if n == 4 {
+                                2
+                            } else {
+                                3
+                            };
+                            painter.image(
+                                self.icons[icon].id(),
+                                Rect::from_center_size(rect.center(), vec2(22.5, 21.25) * scale),
+                                Rect::from_min_max(pos2(0., 0.), pos2(1., 1.)),
+                                Color32::WHITE.gamma_multiply(opacity),
+                            );
+                        }
+                        _ => {
+                            painter.text(
+                                rect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                labels[n],
+                                FontId::new(18. * scale, egui::FontFamily::Name("arial".into())),
+                                Color32::WHITE.gamma_multiply(opacity),
+                            );
+                        }
+                    }
+                    if response.hovered() {
+                        ui.ctx().set_cursor_icon(if enabled {
+                            egui::CursorIcon::PointingHand
+                        } else {
+                            egui::CursorIcon::NotAllowed
+                        });
+                    }
+                    if response.clicked() {
+                        handled = true;
+                        match n {
+                            0 => self.pinned = !self.pinned,
+                            1 => self.refresh(ctx),
+                            2 => {
+                                self.library.next_illustration();
+                                self.load_picture(ctx);
+                            }
+                            3 => {
+                                self.library.toggle_format();
+                                self.load_picture(ctx);
+                            }
+                            4 => {
+                                self.library.next_character(&self.root);
+                                self.load_picture(ctx);
+                            }
+                            5 => self.clock(),
+                            _ => {}
+                        }
+                    }
+                }
+            });
+        handled
+    }
+    pub(super) fn clock(&mut self) {
+        let message = self.clock_state.toggle(&self.config.clock_in);
+        self.say(message);
+    }
+}

@@ -1,7 +1,9 @@
 # 项目约定
 
 - 本项目采用纯 Rust 原生 GUI：eframe/egui + glow；禁止引入 Vue、Electron、Node、WebView 或 N-API 作为运行链。`Cargo.lock` 随代码保留。
-- `src/main.rs` 管理 UI/状态和后台请求通道，`src/backend.rs` 管理配置/扫描/HTTP，`src/assets.rs` 管理图片，`src/platform.rs` 管理 Linux 窗口属性与移动，`src/visual.rs` 管理默认宠物、容器变换和气泡形状。
+- 代码按三类组织：`src/ui/` 负责界面与交互，`src/backend/` 负责配置、资源、角色选择、打卡和 HTTP，`src/tools/` 负责路径、图片/GIF 解码和平台窗口操作；`src/main.rs` 仅负责启动。具体模块职责、接口和依赖以 `docs/MODULES.md` 为准。
+- **后续任何代码文件改动，都必须同步检查并更新 `docs/MODULES.md` 中对应模块的职责、主要接口、依赖与约束；新增、删除、移动或重命名文件时同步更新目录结构。** 实现内部调整而职责不变时，也须同步补充或修正相关行为/约束说明，不能只修改代码而遗漏模块文档。README 的结构概览发生变化时也要同步。
+- 后端不依赖 egui/UI：`CharacterState` 管理资源选择与格式回退，`ClockState` 管理打卡状态；UI 根据后端选中的路径加载纹理。`llm::request` 用完成回调唤醒 UI，通过标准库通道返回结果。`tools::gif::Decoder` 只产生 RGBA 像素并控制帧时序，`ui::assets::Picture` 持有并复用 GPU 纹理；平台适配是工具层中允许依赖 eframe 的边界。
 - 保持 `resource/` 目录结构和 `config/config.json` 的 camelCase 字段兼容。资源根目录按 `LEXINGTON_HOME`、可执行文件旁、当前目录依次寻找。安装升级须保留用户配置/API key；日志和测试结果不得泄露密钥。
 - 原版立绘组件为 450×450，侧栏按钮为 40×40、间隔 10；发布窗口 500×500，`--dev` 为 800×600。气泡按全文测高、21px 行高、最大高度限制；输入框沿用组件局部坐标边界检查后再平移到窗口中心。
 - GIF 需要逐帧解码，不能常驻全部 RGBA 帧（现有文件 1024×1024、67 帧，曾触发系统杀进程）。现有 14 个立绘 GIF 均没有循环扩展，`gif` 解码器将其报告为 `Repeat::Finite(0)`；桌宠播放策略将其视为无限循环，避免播一轮后定格，显式有限循环次数仍保留。Chromium 对不足 20ms 的帧延迟使用 100ms。回归测试需验证跨轮次的实际帧内容及现有立绘完整一轮后重回首帧，且复用纹理。

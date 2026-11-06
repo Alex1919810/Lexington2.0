@@ -1,119 +1,37 @@
+use crate::tools::gif::Decoder;
 use eframe::egui::{self, ColorImage, TextureHandle};
-use image::{AnimationDecoder, Frames};
-use std::{
-    fs::File,
-    io::BufReader,
-    path::{Path, PathBuf},
-    time::{Duration, Instant},
-};
+use std::path::Path;
 
-// Browser image-rendering:auto filters downscaled artwork instead of sampling
-// only four full-resolution texels (especially visible on bubble backgrounds).
+// Linear mipmaps match downscaled browser artwork and bubble backgrounds.
 const TEXTURE_OPTIONS: egui::TextureOptions =
     egui::TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear));
 
-// The GIF decoder composites disposal frames internally. Keep only that decoder and
-// one GPU texture, rather than retaining hundreds of megabytes of RGBA frames.
 pub struct Picture {
-    animation: Option<Frames<'static>>,
-    path: PathBuf,
+    decoder: Decoder,
     texture: TextureHandle,
     size: egui::Vec2,
-    next_frame: Instant,
-    repeats_left: Option<u16>,
 }
 impl Picture {
     pub fn load(ctx: &egui::Context, path: &Path) -> Result<Self, String> {
-        let repeats_left = if path
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("gif"))
-        {
-            match gif::DecodeOptions::new()
-                .read_info(BufReader::new(File::open(path).map_err(|e| e.to_string())?))
-                .map_err(|e| e.to_string())?
-                .repeat()
-            {
-                // Existing pet GIFs omit the loop extension. The decoder reports
-                // Finite(0) for those files; keep desktop animations running.
-                gif::Repeat::Infinite | gif::Repeat::Finite(0) => None,
-                gif::Repeat::Finite(n) => Some(n),
-            }
-        } else {
-            Some(0)
-        };
-        let (animation, image, delay) = if path
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("gif"))
-        {
-            let mut frames = gif_frames(path)?;
-            let frame = frames
-                .next()
-                .ok_or("图片没有帧")?
-                .map_err(|e| e.to_string())?;
-            let delay = delay(&frame);
-            (Some(frames), frame.into_buffer(), delay)
-        } else {
-            (
-                None,
-                image::open(path).map_err(|e| e.to_string())?.into_rgba8(),
-                Duration::from_secs(1),
-            )
-        };
+        let (decoder, image) = Decoder::load(path)?;
         let size = egui::vec2(image.width() as f32, image.height() as f32);
         let texture =
             ctx.load_texture(path.to_string_lossy(), color_image(&image), TEXTURE_OPTIONS);
         Ok(Self {
-            animation,
-            repeats_left,
-            path: path.into(),
+            decoder,
             texture,
             size,
-            next_frame: Instant::now() + delay,
         })
     }
     pub fn size(&self) -> egui::Vec2 {
         self.size
     }
     pub fn texture(&mut self) -> &TextureHandle {
-        if self.animation.is_some() && Instant::now() >= self.next_frame {
-            let mut frame = self.animation.as_mut().and_then(Iterator::next);
-            if frame.is_none() {
-                if self.repeats_left == Some(0) {
-                    self.animation = None;
-                    return &self.texture;
-                }
-                if let Some(left) = &mut self.repeats_left {
-                    *left -= 1;
-                }
-                self.animation = gif_frames(&self.path).ok();
-                frame = self.animation.as_mut().and_then(Iterator::next);
-            }
-            match frame {
-                Some(Ok(frame)) => {
-                    self.next_frame += delay(&frame);
-                    self.texture
-                        .set(color_image(frame.buffer()), TEXTURE_OPTIONS);
-                }
-                _ => self.animation = None,
-            }
+        if let Some(image) = self.decoder.advance() {
+            self.texture.set(color_image(&image), TEXTURE_OPTIONS);
         }
         &self.texture
     }
-}
-fn gif_frames(path: &Path) -> Result<Frames<'static>, String> {
-    Ok(image::codecs::gif::GifDecoder::new(BufReader::new(
-        File::open(path).map_err(|e| e.to_string())?,
-    ))
-    .map_err(|e| e.to_string())?
-    .into_frames())
-}
-fn delay(frame: &image::Frame) -> Duration {
-    let (num, den) = frame.delay().numer_denom_ms();
-    Duration::from_secs_f64(if num as f64 / (den as f64) < 20. {
-        0.1
-    } else {
-        num as f64 / den as f64 / 1000.
-    })
 }
 fn color_image(image: &image::RgbaImage) -> ColorImage {
     ColorImage::from_rgba_unmultiplied(
@@ -122,9 +40,40 @@ fn color_image(image: &image::RgbaImage) -> ColorImage {
     )
 }
 
+pub(super) fn icons(ctx: &egui::Context) -> Vec<TextureHandle> {
+    [
+        include_bytes!("../../resource/icon/pin.png").as_slice(),
+        include_bytes!("../../resource/icon/unpin.png").as_slice(),
+        include_bytes!("../../resource/icon/character.png").as_slice(),
+        include_bytes!("../../resource/icon/clock.png").as_slice(),
+    ]
+    .iter()
+    .enumerate()
+    .map(|(n, bytes)| {
+        let image = image::load_from_memory(bytes)
+            .expect("内置图标")
+            .into_rgba8();
+        ctx.load_texture(
+            format!("icon-{n}"),
+            egui::ColorImage::from_rgba_unmultiplied(
+                [image.width() as usize, image.height() as usize],
+                image.as_raw(),
+            ),
+            egui::TextureOptions::LINEAR,
+        )
+    })
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::gif::delay;
+    use std::{
+        fs::File,
+        io::BufReader,
+        time::{Duration, Instant},
+    };
     #[test]
     fn bundled_pet_gif_restarts_at_first_frame_after_a_full_cycle() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -156,9 +105,12 @@ mod tests {
             panic!("RGBA texture expected")
         };
         for frame_index in 1..=frame_count {
-            pic.next_frame = Instant::now() - Duration::from_millis(1);
+            pic.decoder.next_frame = Instant::now() - Duration::from_millis(1);
             pic.texture();
-            assert!(pic.animation.is_some(), "stopped after frame {frame_index}");
+            assert!(
+                pic.decoder.animation.is_some(),
+                "stopped after frame {frame_index}"
+            );
             assert_eq!(pic.texture.id(), texture_id);
             // Drain each upload so the test also keeps memory bounded.
             let (_, frame) = ctx
@@ -229,7 +181,7 @@ mod tests {
         .enumerate()
         {
             if index > 0 {
-                pic.next_frame = Instant::now() - Duration::from_millis(1);
+                pic.decoder.next_frame = Instant::now() - Duration::from_millis(1);
                 pic.texture();
             }
             let delta = ctx.tex_manager().write().take_delta();
@@ -276,17 +228,21 @@ mod tests {
             }
             let ctx = egui::Context::default();
             let mut pic = Picture::load(&ctx, &path).unwrap();
-            assert_eq!(pic.repeats_left, expected);
+            assert_eq!(pic.decoder.repeats_left, expected);
             let texture_id = pic.texture.id();
             // Check frame contents across four cycles, including the transition
             // back to frame zero and exhaustion of an explicit repeat count.
             for frame_index in 0..8 {
                 if frame_index > 0 {
-                    pic.next_frame = Instant::now() - Duration::from_millis(1);
+                    pic.decoder.next_frame = Instant::now() - Duration::from_millis(1);
                     pic.texture();
                 }
                 let playing = expected.is_none_or(|n| frame_index < (usize::from(n) + 1) * 2);
-                assert_eq!(pic.animation.is_some(), playing, "frame {frame_index}");
+                assert_eq!(
+                    pic.decoder.animation.is_some(),
+                    playing,
+                    "frame {frame_index}"
+                );
                 assert_eq!(pic.texture.id(), texture_id, "reuse the streaming texture");
                 let delta = ctx.tex_manager().write().take_delta();
                 let update = delta.set.iter().find(|(id, _)| *id == texture_id);

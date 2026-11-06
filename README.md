@@ -113,14 +113,15 @@ config/config.json
 
 ## 代码结构
 
-| 文件 | 职责 |
+| 目录 / 文件 | 职责 |
 |---|---|
-| `src/main.rs` | 应用入口、界面、交互状态和后台请求通道 |
-| `src/visual.rs` | 默认宠物、容器变换与气泡形状 |
-| `src/assets.rs` | 静态图片及 GIF 流式解码 |
-| `src/backend.rs` | 配置读取、资源扫描和 HTTP 请求 |
-| `src/platform.rs` | Linux 窗口属性及拖动 |
+| `src/main.rs` | 应用入口与原生窗口启动参数 |
+| `src/ui/` | 应用编排、宠物、侧栏、对话、输入、纹理与样式 |
+| `src/backend/` | 配置、资源扫描、角色/立绘选择、打卡和后台 HTTP |
+| `src/tools/` | 资源根目录定位、图片/GIF 流式解码、平台窗口适配 |
 | `scripts/` | Linux 安装、打包和 X11 窗口验证 |
+
+完整目录、每个文件的职责、主要接口及依赖方向见 [模块职责说明](docs/MODULES.md)。后续代码变更须同步维护该文档，具体要求见 [AGENTS.md](AGENTS.md)。
 
 ## 验证
 

@@ -1,0 +1,157 @@
+use super::app::Pet;
+use super::style::{self, draw_bubble};
+use crate::backend::config::Config;
+use eframe::egui::{self, Color32, Rect, vec2};
+use eframe::egui::{Sense, Stroke};
+
+impl Pet {
+    pub(super) fn submit(&mut self, ctx: &egui::Context) {
+        if self.input.trim().is_empty() || self.response.is_some() {
+            return;
+        }
+        let config = Config::load(&self.root).llm;
+        let input = self.input.clone();
+        let ctx = ctx.clone();
+        self.response = Some(crate::backend::llm::request(config, input, move || {
+            ctx.request_repaint()
+        }));
+        self.error.clear();
+    }
+    pub(super) fn input_ui(
+        &mut self,
+        ctx: &egui::Context,
+        screen: Rect,
+        center: egui::Pos2,
+        image_height: f32,
+    ) {
+        let width = self.config.dialog.width;
+        let error_height = ctx.fonts(|fonts| {
+            let mut job = egui::text::LayoutJob::simple(
+                self.error.clone(),
+                style::font(13.),
+                Color32::from_rgb(231, 76, 60),
+                width - 28.,
+            );
+            job.sections[0].format.line_height = Some(19.5);
+            fonts.layout_job(job).size().y + 20.
+        });
+        let height = 50_f32.max(error_height);
+        // Preserve the old 450px component's local boundary checks before translation.
+        let origin = center - vec2(225., 225.);
+        let position = origin
+            + vec2(
+                (225. - width / 2.).clamp(10., (screen.width() - 10. - width).max(10.)),
+                (225. + image_height / 2. + self.config.dialog.offset_y).clamp(
+                    10.,
+                    (screen.height() - 10. - self.config.dialog.max_height).max(10.),
+                ),
+            );
+        let rect = Rect::from_min_size(position, vec2(width, height));
+        let id = egui::Id::new("message-input");
+        let input_transform = ctx
+            .layer_transform_to_global(egui::LayerId::new(egui::Order::Foreground, "input".into()))
+            .unwrap_or_default();
+        let hovered = ctx.input(|i| {
+            i.pointer
+                .hover_pos()
+                .is_some_and(|p| (input_transform * rect).contains(p))
+        });
+        self.input_bounds = Some(input_transform * rect);
+        let focused = ctx.memory(|m| m.has_focus(id));
+        let alpha = ctx.animate_value_with_time(
+            egui::Id::new("input-alpha"),
+            if hovered || focused || self.response.is_some() {
+                1.
+            } else {
+                0.
+            },
+            0.3,
+        );
+        egui::Area::new("input".into())
+            .constrain(false)
+            .order(egui::Order::Foreground)
+            .fixed_pos(position)
+            .show(ctx, |ui| {
+                ui.set_opacity(alpha);
+                let rect = Rect::from_min_size(ui.min_rect().min, rect.size());
+                draw_bubble(ui, rect, &mut self.input_bg, true);
+                ui.set_min_size(rect.size());
+                ui.scope_builder(
+                    egui::UiBuilder::new().max_rect(rect.shrink2(vec2(14., 10.))),
+                    |ui| {
+                        if self.response.is_some() {
+                            ui.horizontal_centered(|ui| {
+                                ui.spacing_mut().item_spacing.x = 8.;
+                                let (rect, _) =
+                                    ui.allocate_exact_size(vec2(16., 16.), Sense::hover());
+                                let center = rect.center();
+                                let points: Vec<_> = (0..=32)
+                                    .map(|n| {
+                                        let angle = n as f32 / 32. * std::f32::consts::TAU;
+                                        center + vec2(angle.cos(), angle.sin()) * 7.
+                                    })
+                                    .collect();
+                                ui.painter().add(egui::Shape::line(
+                                    points,
+                                    Stroke::new(2_f32, Color32::from_black_alpha(26)),
+                                ));
+                                let angle =
+                                    ui.input(|i| i.time) as f32 * std::f32::consts::TAU / 0.8;
+                                let arc: Vec<_> = (0..=8)
+                                    .map(|n| {
+                                        let a = angle + n as f32 / 8. * std::f32::consts::FRAC_PI_2;
+                                        center + vec2(a.cos(), a.sin()) * 7.
+                                    })
+                                    .collect();
+                                ui.painter().add(egui::Shape::line(
+                                    arc,
+                                    Stroke::new(2_f32, Color32::from_gray(51)),
+                                ));
+                                ui.label(
+                                    egui::RichText::new("正在思考...")
+                                        .font(style::font(13.))
+                                        .color(Color32::from_gray(102)),
+                                );
+                            });
+                        } else if !self.error.is_empty() {
+                            ui.add_sized(
+                                vec2(width - 28., height - 20.),
+                                egui::Label::new(
+                                    egui::RichText::new(&self.error)
+                                        .font(style::font(13.))
+                                        .line_height(Some(19.5))
+                                        .color(Color32::from_rgb(231, 76, 60)),
+                                )
+                                .wrap(),
+                            );
+                        } else {
+                            let edit = ui.add_sized(
+                                vec2(width - 28., 30.),
+                                egui::TextEdit::singleline(&mut self.input)
+                                    .id(id)
+                                    .font(style::font(14.))
+                                    .text_color(Color32::from_gray(51))
+                                    .hint_text(
+                                        egui::RichText::new("输入消息...")
+                                            .color(Color32::from_gray(153)),
+                                    )
+                                    .margin(egui::Margin::ZERO)
+                                    .vertical_align(egui::Align::Center)
+                                    .frame(false),
+                            );
+                            if (edit.has_focus() || edit.lost_focus())
+                                && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                            {
+                                self.submit(ctx);
+                            }
+                        }
+                    },
+                );
+            });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && self.response.is_none() {
+            self.input.clear();
+            self.error.clear();
+            ctx.memory_mut(|m| m.surrender_focus(id));
+        }
+    }
+}
