@@ -53,6 +53,7 @@ pub struct Pet {
     pub(super) hints_applied: bool,
     pub(super) about: bool,
     pub(super) settings: bool,
+    pub(super) settings_connection: bool,
 }
 impl Pet {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -126,6 +127,7 @@ impl Pet {
             hints_applied: false,
             about: false,
             settings: false,
+            settings_connection: false,
         };
         app.refresh(ctx);
         app
@@ -319,38 +321,171 @@ impl Pet {
                 ui.label("Lexington 2.0\n纯 Rust 桌面宠物\neframe / egui");
             });
         let mut restart_codex = false;
+        let mut reload = false;
         let mut no_approval = self.config.codex.no_approval;
         let mut approval_changed = false;
-        let reload = egui::Window::new("设置")
+        egui::Window::new("设置")
             .open(&mut self.settings)
+            .order(egui::Order::Foreground)
+            .collapsible(false)
+            .resizable(false)
+            .fixed_size(vec2(440., 326.))
+            .default_pos(screen.center() - vec2(232., 190.))
+            .frame(
+                egui::Frame::window(&ctx.style())
+                    .fill(egui::Color32::from_rgb(247, 248, 250))
+                    .inner_margin(12)
+                    .corner_radius(10),
+            )
             .show(ctx, |ui| {
-                ui.label("配置文件：");
-                ui.label(self.root.join("config/config.json").display().to_string());
-                ui.label("配置自动热加载（0.5 秒内生效）。");
-                if !self.config_error.is_empty() {
-                    ui.colored_label(egui::Color32::RED, &self.config_error);
+                for (text_style, size) in [
+                    (egui::TextStyle::Body, 14.),
+                    (egui::TextStyle::Button, 14.),
+                    (egui::TextStyle::Small, 12.),
+                ] {
+                    ui.style_mut()
+                        .text_styles
+                        .insert(text_style, egui::FontId::proportional(size));
                 }
-                ui.separator();
-                ui.label(format!("Codex：{}", self.codex_status));
-                ui.label(format!("程序：{}", self.config.codex.executable));
-                let directory = self
-                    .config
-                    .codex
-                    .working_directory
-                    .as_ref()
-                    .map_or_else(|| self.root.clone(), |dir| self.root.join(dir));
-                ui.label(format!("工作目录：{}", directory.display()));
-                approval_changed = ui.checkbox(&mut no_approval, "无需审批").changed();
-                ui.label("下次发送生效；关闭时沿用本机审批设置。沙箱权限不变。");
-                ui.label(if self.codex_restart_pending {
-                    "任务完成后自动切换 Codex 连接。"
-                } else {
-                    "程序路径或工作目录变更时自动重建会话。"
+                ui.spacing_mut().item_spacing = vec2(10., 10.);
+                ui.spacing_mut().button_padding = vec2(10., 6.);
+                ui.horizontal_top(|ui| {
+                    ui.allocate_ui_with_layout(
+                        vec2(76., 326.),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            for (connection, title) in [(false, "常规"), (true, "连接")] {
+                                if ui
+                                    .add_sized(
+                                        [76., 34.],
+                                        egui::Button::new(title)
+                                            .selected(self.settings_connection == connection),
+                                    )
+                                    .clicked()
+                                {
+                                    self.settings_connection = connection;
+                                }
+                            }
+                        },
+                    );
+                    ui.separator();
+                    ui.allocate_ui_with_layout(
+                        vec2(ui.available_width(), 326.),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            egui::ScrollArea::vertical()
+                                .id_salt("settings-content")
+                                .max_height(326.)
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.add_space(2.);
+                                    ui.label(
+                                        egui::RichText::new(if self.settings_connection {
+                                            "连接"
+                                        } else {
+                                            "常规"
+                                        })
+                                        .size(20.)
+                                        .strong(),
+                                    );
+                                    ui.add_space(6.);
+                                    if self.settings_connection {
+                                        egui::Frame::group(ui.style())
+                                            .fill(egui::Color32::WHITE)
+                                            .inner_margin(12)
+                                            .corner_radius(8)
+                                            .show(ui, |ui| {
+                                                ui.set_width(ui.available_width());
+                                                ui.horizontal(|ui| {
+                                                    ui.strong("Codex");
+                                                    ui.with_layout(
+                                                        egui::Layout::right_to_left(egui::Align::Center),
+                                                        |ui| {
+                                                            ui.add(
+                                                                egui::Label::new(&self.codex_status)
+                                                                    .truncate(),
+                                                            )
+                                                            .on_hover_text(&self.codex_status);
+                                                        },
+                                                    );
+                                                });
+                                                ui.separator();
+                                                let directory = self
+                                                    .config
+                                                    .codex
+                                                    .working_directory
+                                                    .as_ref()
+                                                    .map_or_else(|| self.root.clone(), |dir| self.root.join(dir));
+                                                for (title, value) in [
+                                                    ("程序", self.config.codex.executable.clone()),
+                                                    ("工作目录", directory.display().to_string()),
+                                                ] {
+                                                    ui.weak(title);
+                                                    ui.horizontal(|ui| {
+                                                        if ui.small_button("复制").clicked() {
+                                                            ctx.copy_text(value.clone());
+                                                        }
+                                                        ui.add(egui::Label::new(&value).truncate())
+                                                            .on_hover_text(&value);
+                                                    });
+                                                }
+                                            });
+                                        if self.codex_restart_pending {
+                                            ui.weak("任务结束后重新连接");
+                                        }
+                                        restart_codex = ui
+                                            .add_enabled(!self.busy, egui::Button::new("重启会话"))
+                                            .on_hover_text(if self.busy {
+                                                "当前任务结束后可重启"
+                                            } else {
+                                                "重新连接 Codex，清空会话上下文"
+                                            })
+                                            .clicked();
+                                    } else {
+                                        egui::Frame::group(ui.style())
+                                            .fill(egui::Color32::WHITE)
+                                            .inner_margin(12)
+                                            .corner_radius(8)
+                                            .show(ui, |ui| {
+                                                ui.set_width(ui.available_width());
+                                                ui.strong("审批");
+                                                approval_changed = ui
+                                                    .checkbox(&mut no_approval, "无需审批")
+                                                    .on_hover_text("下次发送生效；关闭时恢复本机审批策略。沙箱权限不变。")
+                                                    .changed();
+                                            });
+                                        egui::Frame::group(ui.style())
+                                            .fill(egui::Color32::WHITE)
+                                            .inner_margin(12)
+                                            .corner_radius(8)
+                                            .show(ui, |ui| {
+                                                ui.set_width(ui.available_width());
+                                                ui.strong("资源与配置");
+                                                let path = self.root.join("config/config.json").display().to_string();
+                                                ui.horizontal(|ui| {
+                                                    if ui.small_button("复制路径").clicked() {
+                                                        ctx.copy_text(path.clone());
+                                                    }
+                                                    ui.add(egui::Label::new("config.json").sense(egui::Sense::hover()))
+                                                        .on_hover_text(&path);
+                                                });
+                                                ui.separator();
+                                                reload = ui.button("重新加载")
+                                                    .on_hover_text("重新加载资源与配置；配置文件更改也会自动生效")
+                                                    .clicked();
+                                            });
+                                    }
+                                    if !self.config_error.is_empty() {
+                                        ui.colored_label(
+                                            egui::Color32::from_rgb(180, 45, 45),
+                                            &self.config_error,
+                                        );
+                                    }
+                                });
+                        },
+                    );
                 });
-                restart_codex = ui.button("重启 Codex 会话").clicked();
-                ui.button("重新加载资源与配置").clicked()
-            })
-            .is_some_and(|response| response.inner == Some(true));
+            });
         if approval_changed {
             match Config::save_no_approval(&self.root, no_approval) {
                 Ok(()) => {
