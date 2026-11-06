@@ -1,12 +1,14 @@
 use super::{assets::Picture, style};
 use crate::{
-    backend::{character::CharacterState, clock::ClockState, config::Config, resources},
+    backend::{
+        character::CharacterState, clock::ClockState, codex::Client, config::Config, resources,
+    },
     tools::{paths, platform},
 };
 use eframe::egui::{self, Rect, Vec2, pos2, vec2};
 use std::{
+    collections::VecDeque,
     path::PathBuf,
-    sync::mpsc,
     time::{Duration, Instant},
 };
 
@@ -33,7 +35,11 @@ pub struct Pet {
     pub(super) clock_state: ClockState,
     pub(super) input: String,
     pub(super) error: String,
-    pub(super) response: Option<mpsc::Receiver<Result<String, String>>>,
+    pub(super) codex: Option<Client>,
+    pub(super) codex_status: String,
+    pub(super) busy: bool,
+    pub(super) codex_messages: Vec<(String, String)>,
+    pub(super) codex_prompts: VecDeque<super::codex::PendingPrompt>,
     pub(super) capture: Option<PathBuf>,
     pub(super) capture_requested: bool,
     pub(super) capture_delay: Duration,
@@ -56,6 +62,7 @@ impl Pet {
         {
             app.drag_window = platform::DragWindow::new(cc);
         }
+        app.start_codex(&cc.egui_ctx);
         app
     }
     pub(super) fn from_context(ctx: &egui::Context, pinned: bool) -> Self {
@@ -87,7 +94,11 @@ impl Pet {
             clock_state: ClockState::default(),
             input: String::new(),
             error: String::new(),
-            response: None,
+            codex: None,
+            codex_status: "未启动".into(),
+            busy: false,
+            codex_messages: vec![],
+            codex_prompts: VecDeque::new(),
             capture: std::env::args()
                 .skip_while(|a| a != "--screenshot")
                 .nth(1)
@@ -232,23 +243,15 @@ impl Pet {
         if ctx.input(|i| i.pointer.delta() != Vec2::ZERO) {
             self.last_activity = Instant::now();
         }
-        if !self.text.is_empty()
+        self.poll_codex();
+        if !self.busy
+            && !self.text.is_empty()
             && self.last_activity.elapsed().as_secs_f64() >= self.config.dialog.auto_close_delay
         {
             self.text.clear();
         }
         if let Some(message) = self.clock_state.poll(&self.config.clock_in) {
             self.say(message);
-        }
-        if let Some(result) = self.response.as_ref().and_then(|rx| rx.try_recv().ok()) {
-            self.response = None;
-            match result {
-                Ok(text) => {
-                    self.input.clear();
-                    self.say(text);
-                }
-                Err(error) => self.error = error,
-            }
         }
         let screen = ctx.screen_rect();
         let (size, transform, clicked) = self.pet_ui(ctx, screen);
@@ -276,16 +279,34 @@ impl Pet {
             .show(ctx, |ui| {
                 ui.label("Lexington 2.0\n纯 Rust 桌面宠物\neframe / egui");
             });
+        let mut restart_codex = false;
         let reload = egui::Window::new("设置")
             .open(&mut self.settings)
             .show(ctx, |ui| {
                 ui.label("配置文件：");
                 ui.label(self.root.join("config/config.json").display().to_string());
+                ui.separator();
+                ui.label(format!("Codex：{}", self.codex_status));
+                ui.label(format!("程序：{}", self.config.codex.executable));
+                let directory = self
+                    .config
+                    .codex
+                    .working_directory
+                    .as_ref()
+                    .map_or_else(|| self.root.clone(), |dir| self.root.join(dir));
+                ui.label(format!("工作目录：{}", directory.display()));
+                ui.label("修改 codex 工作目录或程序路径后，请重启会话。");
+                restart_codex = ui.button("重启 Codex 会话").clicked();
                 ui.button("重新加载资源与配置").clicked()
             })
             .is_some_and(|response| response.inner == Some(true));
         if reload {
             self.refresh(ctx);
         }
+        if restart_codex {
+            self.config = Config::load(&self.root);
+            self.start_codex(ctx);
+        }
+        self.codex_prompt_ui(ctx);
     }
 }

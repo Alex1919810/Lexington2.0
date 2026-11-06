@@ -1,5 +1,8 @@
 use serde::Deserialize;
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -23,17 +26,15 @@ impl Default for DialogConfig {
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct LlmConfig {
-    pub api_url: String,
-    pub api_key: String,
-    pub model: String,
+pub struct CodexConfig {
+    pub executable: String,
+    pub working_directory: Option<PathBuf>,
 }
-impl Default for LlmConfig {
+impl Default for CodexConfig {
     fn default() -> Self {
         Self {
-            api_url: "https://api.openai.com/v1/chat/completions".into(),
-            api_key: String::new(),
-            model: "gpt-3.5-turbo".into(),
+            executable: "codex".into(),
+            working_directory: None,
         }
     }
 }
@@ -59,7 +60,7 @@ impl Default for ClockConfig {
 #[serde(default, rename_all = "camelCase")]
 pub struct Config {
     pub dialog: DialogConfig,
-    pub llm: LlmConfig,
+    pub codex: CodexConfig,
     pub clock_in: ClockConfig,
 }
 impl Config {

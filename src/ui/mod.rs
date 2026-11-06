@@ -1,5 +1,6 @@
 mod app;
 mod assets;
+mod codex;
 mod dialog;
 mod input;
 mod pet;

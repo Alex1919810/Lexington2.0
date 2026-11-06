@@ -6,15 +6,14 @@
     "offsetY": 50,
     "autoCloseDelay": 10
   },
-  "llm": {
-    "apiUrl": "https://api.deepseek.com/chat/completions",
-    "apiKey": "",
-    "model": "deepseek-chat"
-  },
   "clockIn": {
     "workReminderHours": 12,
     "clockInMessage": "打卡成功！",
     "clockOutMessage": "下班时间到了！",
     "clockInCancelMessage": "打卡已终止"
+  },
+  "codex": {
+    "executable": "codex",
+    "workingDirectory": null
   }
 }

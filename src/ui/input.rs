@@ -1,21 +1,29 @@
 use super::app::Pet;
 use super::style::{self, draw_bubble};
-use crate::backend::config::Config;
 use eframe::egui::{self, Color32, Rect, vec2};
 use eframe::egui::{Sense, Stroke};
 
 impl Pet {
     pub(super) fn submit(&mut self, ctx: &egui::Context) {
-        if self.input.trim().is_empty() || self.response.is_some() {
+        if self.input.trim().is_empty() || self.busy {
             return;
         }
-        let config = Config::load(&self.root).llm;
-        let input = self.input.clone();
-        let ctx = ctx.clone();
-        self.response = Some(crate::backend::llm::request(config, input, move || {
-            ctx.request_repaint()
-        }));
-        self.error.clear();
+        let result = self
+            .codex
+            .as_ref()
+            .ok_or_else(|| "Codex 未启动，请在设置中重启会话。".to_owned())
+            .and_then(|codex| codex.submit(self.input.trim().to_owned()));
+        match result {
+            Ok(()) => {
+                self.busy = true;
+                self.codex_status = "Lexington正在思考".into();
+                self.error.clear();
+                self.codex_messages.clear();
+                self.text.clear();
+            }
+            Err(error) => self.error = error,
+        }
+        ctx.request_repaint();
     }
     pub(super) fn input_ui(
         &mut self,
@@ -60,7 +68,7 @@ impl Pet {
         let focused = ctx.memory(|m| m.has_focus(id));
         let alpha = ctx.animate_value_with_time(
             egui::Id::new("input-alpha"),
-            if hovered || focused || self.response.is_some() {
+            if hovered || focused || self.busy {
                 1.
             } else {
                 0.
@@ -79,7 +87,7 @@ impl Pet {
                 ui.scope_builder(
                     egui::UiBuilder::new().max_rect(rect.shrink2(vec2(14., 10.))),
                     |ui| {
-                        if self.response.is_some() {
+                        if self.busy {
                             ui.horizontal_centered(|ui| {
                                 ui.spacing_mut().item_spacing.x = 8.;
                                 let (rect, _) =
@@ -108,7 +116,7 @@ impl Pet {
                                     Stroke::new(2_f32, Color32::from_gray(51)),
                                 ));
                                 ui.label(
-                                    egui::RichText::new("正在思考...")
+                                    egui::RichText::new("Lexington正在思考")
                                         .font(style::font(13.))
                                         .color(Color32::from_gray(102)),
                                 );
@@ -148,10 +156,17 @@ impl Pet {
                     },
                 );
             });
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && self.response.is_none() {
-            self.input.clear();
-            self.error.clear();
-            ctx.memory_mut(|m| m.surrender_focus(id));
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if self.busy {
+                if let Some(codex) = &self.codex {
+                    codex.interrupt();
+                }
+                self.codex_status = "正在停止…".into();
+            } else {
+                self.input.clear();
+                self.error.clear();
+                ctx.memory_mut(|m| m.surrender_focus(id));
+            }
         }
     }
 }

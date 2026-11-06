@@ -2,7 +2,7 @@
 
 一个使用 Rust 编写界面和业务逻辑的桌面宠物。eframe/egui + glow 直接绘制透明原生窗口，运行时无需 Node.js、Electron、WebView 或 N-API。
 
-支持 GIF/PNG 立绘、多角色切换、随机台词、打字机对话、大模型聊天、打卡提醒、自定义气泡背景和窗口拖动。沿用原有 `resource/` 目录和 `config/config.json` 格式。
+支持 GIF/PNG 立绘、多角色切换、随机台词、打字机对话、Codex 会话与流式回复、打卡提醒、自定义气泡背景和窗口拖动。沿用原有 `resource/` 目录和 `config/config.json` 格式。
 
 ## 快速开始
 
@@ -17,6 +17,8 @@ cargo run --release --locked
 ```bash
 cargo run --locked -- --dev
 ```
+
+Codex 输入输出需要预先安装并登录 Codex CLI（本机验证版本为 0.166.0）。Lexington 启动时自动运行 `codex app-server --stdio`，缺少 CLI 或连接失败会在输入区显示错误，宠物的其他功能仍可使用。
 
 Linux 需要桌面 OpenGL/EGL 驱动及 X11/XWayland。存在 `DISPLAY` 时默认选 X11/XWayland；可通过 `cargo run --release --locked -- --wayland` 选择原生 Wayland。
 
@@ -38,7 +40,7 @@ bash scripts/install-linux.sh
 
 以上打包和安装脚本用于 Linux。打包生成 `dist/lexington/` 和 `dist/lexington-linux-<架构>.tar.gz`，包含可执行文件、资源和配置。解压后运行其中的 `lexington` 即可。
 
-安装脚本默认安装到 `~/.local/share/lexington/`（遵循 `XDG_DATA_HOME`），创建名称固定为 `Lexington` 的应用菜单和桌面快捷方式（桌面文件为 `Lexington.desktop`），升级时迁移旧快捷方式并保留已安装版本的配置。发布前请确保配置中的 `llm.apiKey` 为空。
+安装脚本默认安装到 `~/.local/share/lexington/`（遵循 `XDG_DATA_HOME`），创建名称固定为 `Lexington` 的应用菜单和桌面快捷方式（桌面文件为 `Lexington.desktop`），升级时迁移旧快捷方式并保留已安装版本的配置。分发前请检查配置中没有遗留的密钥；新配置不再保存聊天 API key。Codex CLI 需单独安装，程序不会自动下载。
 
 Windows 在对应系统使用 `cargo build --release --locked` 构建，将 `target/release/lexington.exe` 与 `resource/`、`config/` 一起分发；macOS 对应的可执行文件为 `target/release/lexington`。
 
@@ -46,7 +48,7 @@ Windows 在对应系统使用 `cargo build --release --locked` 构建，将 `tar
 
 - 宠物中心圆形区域：单击显示随机角色台词；第二次点击显示全文；第三次关闭。按住后移动超过 5px 拖动整个窗口。
 - 对话：每 50ms 显示一个字符，鼠标活动重置自动关闭计时；点击圆形区域和气泡以外的位置关闭。
-- 输入框：在立绘下方悬停显示，点击后输入；Enter 发送，显示“正在思考...”，回复通过气泡展示。请求失败显示错误，Escape 清空输入和错误。窗口启动时不自动聚焦输入框。
+- 输入框：在立绘下方悬停显示，点击后输入；Enter 发送给 Codex，等待时显示“Lexington正在思考”，回复流式显示在气泡中；连接期间发送的第一条消息会等待会话就绪。任务进行中按 Escape 中断，否则清空输入和错误。请求失败显示错误。窗口启动时不自动聚焦输入框。
 - 右键宠物：设置、关于、关闭。
 
 | 侧栏按钮 | 功能 |
@@ -97,10 +99,9 @@ config/config.json
     "offsetY": 50,
     "autoCloseDelay": 10
   },
-  "llm": {
-    "apiUrl": "https://api.deepseek.com/chat/completions",
-    "apiKey": "",
-    "model": "deepseek-chat"
+  "codex": {
+    "executable": "codex",
+    "workingDirectory": null
   },
   "clockIn": {
     "workReminderHours": 12,
@@ -113,15 +114,21 @@ config/config.json
 
 `width/maxHeight/offsetX/offsetY` 为逻辑像素，`autoCloseDelay` 为秒，`workReminderHours` 为小时。输入框水平居中。缺失字段采用默认值，格式错误时回退默认配置。
 
-聊天需填写 `llm.apiUrl`、`llm.apiKey` 和 `llm.model`。接口使用 OpenAI Chat Completions 兼容格式，仅发送当前一条用户消息，60 秒超时；网络请求在后台执行，不阻塞界面。
+聊天改为连接本机 Codex app-server，通过后台线程处理标准输入输出，不阻塞界面。沿用 Codex CLI 的登录、模型及权限配置，不再使用旧的 `llm` 字段；旧配置仍可加载，安装升级保留原配置。
+
+`codex.executable` 可设为 CLI 的绝对路径；默认从 PATH 查找，Linux 桌面启动时还会查找 `~/.local/bin/codex` 和 `~/.cargo/bin/codex`。`codex.workingDirectory` 指定 Codex 操作的项目目录：绝对路径直接使用，相对路径以资源根目录为基准；`null` 默认使用资源根目录（安装版通常为 `~/.local/share/lexington`）。需要操作其他项目时应改为该项目的路径。
+
+同一次启动内复用一个 Codex thread，支持连续对话；退出程序会终止所启动的 app-server（Unix 同时清理该进程组的后代），下次启动新建会话。右键 → 设置可查看连接状态、程序路径和工作目录；修改配置后点击“重启 Codex 会话”使其生效并清空会话上下文。命令或文件审批、Codex 提问会显示交互窗口；不支持的请求会明确返回错误。连接请求响应超时为 30 秒，模型生成不设置固定超时。
+
+协议参考：[Codex app-server](https://developers.openai.com/codex/app-server/)。本机集成根据已安装 CLI 的帮助与生成的 JSON Schema 验证。
 
 ## 代码结构
 
 | 目录 / 文件 | 职责 |
 |---|---|
 | `src/main.rs` | 应用入口与原生窗口启动参数 |
-| `src/ui/` | 应用编排、宠物、侧栏、对话、输入、纹理与样式 |
-| `src/backend/` | 配置、资源扫描、角色/立绘选择、打卡和后台 HTTP |
+| `src/ui/` | 应用编排、宠物、侧栏、对话、Codex 状态与审批、输入、纹理与样式 |
+| `src/backend/` | 配置、资源扫描、角色/立绘选择、打卡和 Codex 子进程/协议 |
 | `src/tools/` | 资源根目录定位、图片/GIF 流式解码、平台窗口适配 |
 | `scripts/` | Linux 安装、打包和 X11 窗口验证 |
 
@@ -136,7 +143,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo run --locked -- --dev --screenshot /tmp/lexington.png
 ```
 
-`--screenshot` 默认等待 4 秒后保存透明 PNG 并退出，`--screenshot-delay 7` 可调整等待秒数。测试覆盖正常/战损配对与独立队列、缺失配对和格式回退、资源删除后的刷新恢复、配置、GIF 循环与局部帧还原、HTTP 协议与失败响应、UI 指针与键盘交互、打卡计时和对话关闭。HTTP 测试使用本地模拟服务，不需要真实 API key。
+`--screenshot` 默认等待 4 秒后保存透明 PNG 并退出，`--screenshot-delay 7` 可调整等待秒数。测试覆盖正常/战损配对与独立队列、缺失配对和格式回退、资源删除后的刷新恢复、配置、GIF 循环与局部帧还原、Codex 握手、流式回复、审批、提问、中断与进程异常、UI 指针与键盘交互、打卡计时和对话关闭。Codex 测试使用 Python 3 模拟子进程，不连接模型、不读取用户凭据；运行测试需安装 Python 3。真实 CLI 启动和握手需单独验证。
 
 内置 Noto Sans CJK SC、Liberation 和 Noto Sans Math 字体，并附带许可证，减少字体缺失造成的字号、换行及按钮符号差异。立绘、气泡和输入框共同缩放与浮动；图片使用线性 mipmap 过滤，保留缩小后的平滑效果。
 

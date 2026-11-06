@@ -156,8 +156,7 @@ fn right_click_in_drag_circle_opens_context_menu() {
 fn input_focus_enter_error_and_escape_use_real_ui_events() {
     let ctx = egui::Context::default();
     let mut app = Pet::from_context(&ctx, true);
-    // This test exercises the missing-key path without using a developer's API.
-    app.root = std::env::temp_dir().join(format!("lexington-no-config-{}", rand::random::<u64>()));
+    app.codex = Some(crate::backend::codex::Client::mock("error"));
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![]);
     assert!(!ctx.memory(|m| m.has_focus("message-input".into())));
@@ -176,15 +175,15 @@ fn input_focus_enter_error_and_escape_use_real_ui_events() {
         vec![egui::Event::Text("测试消息".into()), key(egui::Key::Enter)],
     );
     assert_eq!(app.input, "测试消息");
-    assert!(app.response.is_some());
+    assert!(app.busy);
     for _ in 0..100 {
         frame(&mut app, &ctx, vec![]);
-        if app.response.is_none() {
+        if !app.busy {
             break;
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    assert!(app.error.contains("配置不完整"));
+    assert!(app.error.contains("模拟请求失败"));
     frame(&mut app, &ctx, vec![key(egui::Key::Escape)]);
     assert!(app.input.is_empty());
     assert!(app.error.is_empty());
@@ -205,47 +204,10 @@ fn sidebar_cancel_keeps_new_message_when_dialog_already_open() {
     assert!(app.text.is_empty());
 }
 #[test]
-fn enter_delivers_successful_llm_reply_through_the_native_ui() {
-    use std::io::{Read, Write};
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = std::thread::spawn(move || {
-        let (mut socket, _) = listener.accept().unwrap();
-        socket
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-        let mut bytes = vec![];
-        loop {
-            let mut buffer = [0; 4096];
-            let n = socket.read(&mut buffer).unwrap();
-            assert!(n > 0);
-            bytes.extend_from_slice(&buffer[..n]);
-            if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
-                let header = String::from_utf8_lossy(&bytes[..end]);
-                let length: usize = header
-                    .lines()
-                    .find_map(|line| {
-                        line.to_lowercase()
-                            .strip_prefix("content-length: ")
-                            .map(str::to_owned)
-                    })
-                    .unwrap()
-                    .parse()
-                    .unwrap();
-                if bytes.len() >= end + 4 + length {
-                    break;
-                }
-            }
-        }
-        let body = r#"{"choices":[{"message":{"content":"收到，提督！"}}]}"#;
-        write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
-    });
-    let fixture = std::env::temp_dir().join(format!("lexington-ui-{}", rand::random::<u64>()));
-    std::fs::create_dir_all(fixture.join("config")).unwrap();
-    std::fs::write(fixture.join("config/config.json"),serde_json::json!({"llm":{"apiUrl":format!("http://{address}/chat"),"apiKey":"local-test","model":"local"}}).to_string()).unwrap();
+fn enter_delivers_streamed_codex_reply_through_the_native_ui() {
     let ctx = egui::Context::default();
     let mut app = Pet::from_context(&ctx, true);
-    app.root = fixture.clone();
+    app.codex = Some(crate::backend::codex::Client::mock("normal"));
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![]);
     click(&mut app, &ctx, pos2(400., 560.));
@@ -253,7 +215,7 @@ fn enter_delivers_successful_llm_reply_through_the_native_ui() {
         &mut app,
         &ctx,
         vec![
-            egui::Event::Text("你好".into()),
+            egui::Event::Text("你好，Codex！".into()),
             egui::Event::Key {
                 key: egui::Key::Enter,
                 physical_key: None,
@@ -263,18 +225,22 @@ fn enter_delivers_successful_llm_reply_through_the_native_ui() {
             },
         ],
     );
+    assert!(app.busy);
     let deadline = Instant::now() + Duration::from_secs(5);
-    while app.response.is_some() && Instant::now() < deadline {
+    while app.busy && Instant::now() < deadline {
         frame(&mut app, &ctx, vec![]);
         std::thread::sleep(Duration::from_millis(5));
     }
-    assert!(app.response.is_none());
-    assert!(app.error.is_empty());
+    assert!(!app.busy);
+    assert!(app.error.is_empty(), "{}", app.error);
     assert!(app.input.is_empty());
-    assert_eq!(app.text, "收到，提督！");
-    server.join().unwrap();
-    std::fs::remove_dir_all(fixture).unwrap();
+    assert_eq!(app.text, "第1轮：你好，Codex！");
+    assert!(
+        app.full_text,
+        "do not delay already streamed text with the typewriter"
+    );
 }
+
 #[test]
 fn empty_library_character_format_fallback_and_resource_reload() {
     let fixture =
