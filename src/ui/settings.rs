@@ -14,6 +14,7 @@ struct SettingsActions {
     clock_auto_changed: bool,
     clock_action: Option<ClockAction>,
     connection: Option<CodexConfig>,
+    weather: Option<super::weather::WeatherAction>,
 }
 
 impl Pet {
@@ -271,6 +272,9 @@ impl Pet {
                 Err(error) => self.connection_error = error,
             }
         }
+        if let Some(action) = actions.weather {
+            self.weather_action(action, ctx);
+        }
         if actions.reload {
             self.refresh(ctx);
         }
@@ -288,6 +292,7 @@ impl Pet {
         let mut clock_auto_changed = false;
         let mut clock_action = None;
         let mut connection = None;
+        let mut weather = None;
         for (text_style, size) in [
             (egui::TextStyle::Body, 14.),
             (egui::TextStyle::Button, 14.),
@@ -304,7 +309,7 @@ impl Pet {
                 vec2(76., 326.),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
-                    for (page, title) in [(0, "常规"), (1, "连接"), (2, "打卡"), (3, "闹钟")] {
+                    for (page, title) in [(0, "常规"), (1, "连接"), (2, "打卡"), (3, "闹钟"), (4, "天气")] {
                         if ui
                             .add_sized(
                                 [76., 34.],
@@ -331,12 +336,14 @@ impl Pet {
                             ui.set_width(ui.available_width());
                             ui.add_space(2.);
                             ui.label(
-                                egui::RichText::new(match self.settings_page { 1 => "连接", 2 => "打卡", 3 => "闹钟", _ => "常规" })
+                                egui::RichText::new(match self.settings_page { 1 => "连接", 2 => "打卡", 3 => "闹钟", 4 => "天气", _ => "常规" })
                                 .size(20.)
                                 .strong(),
                             );
                             ui.add_space(6.);
-                            if self.settings_page == 3 {
+                            if self.settings_page == 4 {
+                                weather = self.weather_settings_ui(ui);
+                            } else if self.settings_page == 3 {
                                 self.alarm_settings_ui(ui);
                             } else if self.settings_page == 2 {
                                 (clock_auto_changed, clock_action) = self.clock_settings_ui(ui);
@@ -532,6 +539,7 @@ impl Pet {
             clock_auto_changed,
             clock_action,
             connection,
+            weather,
         }
     }
 }

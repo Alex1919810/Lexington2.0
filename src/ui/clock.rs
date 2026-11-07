@@ -34,15 +34,17 @@ impl Pet {
                     Ok(true) => {
                         self.clock_notice = true;
                         self.clock_error.clear();
+                        let time = self
+                            .clock_state
+                            .started()
+                            .and_then(local_time)
+                            .map(|t| t.label())
+                            .unwrap_or_default();
+                        let message = format!("已记录今天 {time} 开始工作");
                         if !self.busy {
-                            let time = self
-                                .clock_state
-                                .started()
-                                .and_then(local_time)
-                                .map(|t| t.label())
-                                .unwrap_or_default();
-                            self.say(format!("已记录今天 {time} 开始工作"));
+                            self.say(message.clone());
                         }
+                        self.queue_clock_weather(message);
                     }
                     Ok(false) => {}
                     Err(error) => self.clock_error = error,

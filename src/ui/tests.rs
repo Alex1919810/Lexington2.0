@@ -1310,3 +1310,123 @@ fn alarm_settings_save_edit_toggle_delete_and_reminder_requires_acknowledgement(
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn input_keeps_typing_visible_across_multiple_cjk_characters() {
+    for size in [vec2(500., 500.), vec2(800., 600.)] {
+        let ctx = egui::Context::default();
+        let root =
+            std::env::temp_dir().join(format!("lexington-input-text-{}", rand::random::<u64>()));
+        crate::backend::config::Config::save_no_approval(&root, false).unwrap();
+        let mut app = Pet::from_root(&ctx, true, root.clone());
+        app.library
+            .refresh(std::path::Path::new(env!("CARGO_MANIFEST_DIR")));
+        app.load_picture(&ctx);
+        let run = |app: &mut Pet, events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.ui(ctx),
+            )
+        };
+        for _ in 0..3 {
+            run(&mut app, vec![]);
+        }
+        run(
+            &mut app,
+            vec![egui::Event::PointerMoved((size / 2.).to_pos2())],
+        );
+        for _ in 0..3 {
+            run(&mut app, vec![]);
+        }
+        let point = app.input_bounds.unwrap().center();
+        for pressed in [true, false] {
+            run(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+        }
+        assert!(ctx.memory(|m| m.has_focus("message-input".into())));
+        let mut expected = String::new();
+        for ch in "一二三四五六七八".chars() {
+            if expected.chars().count() == 3 {
+                app.error = "模拟连接中断，请稍后重试。".into();
+            }
+            expected.push(ch);
+            let output = run(&mut app, vec![egui::Event::Text(ch.to_string())]);
+            assert_eq!(app.input, expected);
+            let mut shapes: Vec<_> = output
+                .shapes
+                .iter()
+                .map(|s| (s.clip_rect, &s.shape))
+                .collect();
+            let mut text = None;
+            while let Some((clip, shape)) = shapes.pop() {
+                match shape {
+                    egui::Shape::Vec(children) => shapes.extend(children.iter().map(|s| (clip, s))),
+                    egui::Shape::Text(shape) if shape.galley.job.text == expected => {
+                        text = Some((clip, Rect::from_min_size(shape.pos, shape.galley.size())));
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            let (clip, text) = text.expect("typed text must be painted");
+            assert!(
+                clip.expand(1.).contains_rect(text),
+                "short draft must remain visible: {expected}, clip={clip:?}, text={text:?}, size={size:?}"
+            );
+        }
+        // Continue past the single-line width: the caret and tail must scroll into view.
+        for _ in 0..8 {
+            let output = run(&mut app, vec![egui::Event::Text("九十".into())]);
+            let mut shapes: Vec<_> = output
+                .shapes
+                .iter()
+                .map(|s| (s.clip_rect, &s.shape))
+                .collect();
+            let mut tail = None;
+            while let Some((clip, shape)) = shapes.pop() {
+                match shape {
+                    egui::Shape::Vec(children) => shapes.extend(children.iter().map(|s| (clip, s))),
+                    egui::Shape::Text(shape) if shape.galley.job.text == app.input => {
+                        let right = shape.pos.x + shape.galley.size().x;
+                        tail = Some((clip, right));
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            let (clip, right) = tail.expect("long draft must be painted");
+            assert!(
+                right <= clip.right() + 1. && right >= clip.left() + 10.,
+                "long input tail clipped: right={right}, clip={clip:?}"
+            );
+        }
+        let before = app.input.clone();
+        run(&mut app, vec![egui::Event::Ime(egui::ImeEvent::Enabled)]);
+        run(
+            &mut app,
+            vec![egui::Event::Ime(egui::ImeEvent::Preedit("ceshi".into()))],
+        );
+        run(
+            &mut app,
+            vec![egui::Event::Ime(egui::ImeEvent::Commit(
+                "测试输入法".into(),
+            ))],
+        );
+        assert_eq!(app.input, format!("{before}测试输入法"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

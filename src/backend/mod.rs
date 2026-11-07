@@ -6,6 +6,7 @@ pub mod codex_config;
 pub mod config;
 pub mod handoff;
 pub mod resources;
+pub mod weather;
 
 #[cfg(test)]
 mod tests {

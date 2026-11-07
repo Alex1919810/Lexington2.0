@@ -19,3 +19,5 @@
 
 - 按受影响模块筛选，如 `cargo test --locked backend::codex::tests::`、`cargo test --locked backend::clock::tests::`；集中配置测试用 `cargo test --locked backend::tests::`，也可按具体用例名筛选。涉及 UI 消费协议/状态时补测对应 UI 用例。
 - 测试使用临时路径、环境和 Python 3 模拟进程，不访问真实模型、登录或用户记录。`Pet::from_root` 不启动监测或读取用户记录/Codex 配置；资源数量/配对由角色模块检查。
+
+- 天气仅在显式请求时通过 ureq/Rustls 查询 Open-Meteo，不接入 Codex；缓存按城市/日期区分，响应有大小及总超时限制，退出丢弃队列并回收工作线程。城市保存在 weather.city，沿用配置无损原子写入。

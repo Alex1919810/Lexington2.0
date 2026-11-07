@@ -50,20 +50,29 @@ impl Pet {
         image_height: f32,
     ) {
         let width = self.config.dialog.width;
-        let error_height = ctx.fonts(|fonts| {
-            let mut job = egui::text::LayoutJob::simple(
-                self.error.clone(),
-                style::font(13.),
-                Color32::from_rgb(231, 76, 60),
-                width - 28.,
-            );
-            job.sections[0].format.line_height = Some(19.5);
-            fonts.layout_job(job).size().y + 20.
-        });
-        let height = 50_f32.max(error_height);
+        let error_height = if self.error.is_empty() || self.busy {
+            0.
+        } else {
+            ctx.fonts(|fonts| {
+                let mut job = egui::text::LayoutJob::simple(
+                    self.error.clone(),
+                    style::font(13.),
+                    Color32::from_rgb(231, 76, 60),
+                    width - 28.,
+                );
+                job.sections[0].format.line_height = Some(19.5);
+                fonts.layout_job(job).size().y.clamp(19.5, 100.)
+            })
+        };
+        let height = 50.
+            + if error_height > 0. {
+                error_height + 8.
+            } else {
+                0.
+            };
         // Preserve the old 450px component's local boundary checks before translation.
         let origin = center - vec2(225., 225.);
-        let position = origin
+        let mut position = origin
             + vec2(
                 (225. - width / 2.).clamp(10., (screen.width() - 10. - width).max(10.)),
                 (225. + image_height / 2. + self.config.dialog.offset_y).clamp(
@@ -71,11 +80,18 @@ impl Pet {
                     (screen.height() - 10. - self.config.dialog.max_height).max(10.),
                 ),
             );
-        let rect = Rect::from_min_size(position, vec2(width, height));
         let id = egui::Id::new("message-input");
         let input_transform = ctx
             .layer_transform_to_global(egui::LayerId::new(egui::Order::Foreground, "input".into()))
             .unwrap_or_default();
+        // Keep the full editor/error panel inside the native viewport after hover scaling.
+        let global = input_transform * Rect::from_min_size(position, vec2(width, height));
+        let top = global.top().clamp(
+            screen.top() + 4.,
+            (screen.bottom() - global.height() - 4.).max(screen.top() + 4.),
+        );
+        position = input_transform.inverse() * egui::pos2(global.left(), top);
+        let rect = Rect::from_min_size(position, vec2(width, height));
         let pointer = ctx.input(|i| i.pointer.hover_pos());
         #[cfg(target_os = "linux")]
         // Transparent areas receive no native motion events. Poll for hover
@@ -152,22 +168,12 @@ impl Pet {
                                         .color(Color32::from_gray(102)),
                                 );
                             });
-                        } else if !self.error.is_empty() {
-                            ui.add_sized(
-                                vec2(width - 28., height - 20.),
-                                egui::Label::new(
-                                    egui::RichText::new(&self.error)
-                                        .font(style::font(13.))
-                                        .line_height(Some(19.5))
-                                        .color(Color32::from_rgb(231, 76, 60)),
-                                )
-                                .wrap(),
-                            );
                         } else {
                             let edit = ui.add_sized(
                                 vec2(width - 28., 30.),
                                 egui::TextEdit::singleline(&mut self.input)
                                     .id(id)
+                                    .desired_width(width - 28.)
                                     .font(style::font(14.))
                                     .text_color(Color32::from_gray(51))
                                     .hint_text(
@@ -178,6 +184,24 @@ impl Pet {
                                     .vertical_align(egui::Align::Center)
                                     .frame(false),
                             );
+                            if error_height > 0. {
+                                // Errors accompany the editor, so a failed connection cannot eat later keystrokes.
+                                egui::ScrollArea::vertical()
+                                    .id_salt("input-error")
+                                    .max_height(error_height)
+                                    .drag_to_scroll(false)
+                                    .show(ui, |ui| {
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(&self.error)
+                                                    .font(style::font(13.))
+                                                    .line_height(Some(19.5))
+                                                    .color(Color32::from_rgb(231, 76, 60)),
+                                            )
+                                            .wrap(),
+                                        );
+                                    });
+                            }
                             if (edit.has_focus() || edit.lost_focus())
                                 && ui.input(|i| i.key_pressed(egui::Key::Enter))
                             {

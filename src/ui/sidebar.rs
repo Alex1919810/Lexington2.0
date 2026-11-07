@@ -182,7 +182,10 @@ impl Pet {
             Ok(message) => {
                 self.clock_error.clear();
                 self.clock_notice = false;
-                self.say(message);
+                self.say(message.clone());
+                if self.clock_state.running() {
+                    self.queue_clock_weather(message);
+                }
             }
             Err(error) => {
                 self.clock_error = error;

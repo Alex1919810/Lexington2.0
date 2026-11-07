@@ -9,6 +9,7 @@ mod pet;
 mod settings;
 mod sidebar;
 mod style;
+mod weather;
 
 pub use app::Pet;
 

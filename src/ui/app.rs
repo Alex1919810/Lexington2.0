@@ -45,6 +45,7 @@ pub struct Pet {
     pub(super) drag_sent: bool,
     pub(super) last_activity: Instant,
     pub(super) clock_state: ClockState,
+    pub(super) weather: super::weather::WeatherUi,
     pub(super) alarm: super::alarm::AlarmUi,
     pub(super) activity_monitor: Option<activity::Monitor>,
     pub(super) activity_status: String,
@@ -174,6 +175,7 @@ impl Pet {
             drag_sent: false,
             last_activity: Instant::now(),
             clock_state: ClockState::default(),
+            weather: Default::default(),
             alarm: super::alarm::AlarmUi::default(),
             activity_monitor: None,
             activity_status: "等待系统活动".into(),
@@ -477,6 +479,7 @@ impl Pet {
             self.text.clear();
         }
         self.poll_clock();
+        self.poll_weather(ctx);
         let screen = ctx.screen_rect();
         let (size, transform, clicked) = self.pet_ui(ctx, screen);
         let center = screen.center();

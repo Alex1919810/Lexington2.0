@@ -124,12 +124,26 @@ impl Default for ClockConfig {
 }
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
+pub struct WeatherConfig {
+    pub city: Option<super::weather::City>,
+}
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct Config {
     pub dialog: DialogConfig,
     pub codex: CodexConfig,
     pub clock_in: ClockConfig,
+    pub weather: WeatherConfig,
 }
 impl Config {
+    pub fn save_weather(root: &Path, city: Option<&super::weather::City>) -> Result<(), String> {
+        if let Some(city) = city {
+            city.validate()?;
+        }
+        let value = serde_json::to_value(city).map_err(|_| "城市配置无法保存。".to_owned())?;
+        Self::save_settings(root, "weather", [("city", value)])
+    }
+
     pub fn save_no_approval(root: &Path, enabled: bool) -> Result<(), String> {
         Self::save_settings(root, "codex", [("noApproval", enabled.into())])
     }
@@ -216,6 +230,9 @@ impl Config {
             .to_owned();
         config.codex.api_key = config.codex.api_key.trim().to_owned();
         config.codex.validate_connection()?;
+        if let Some(city) = &config.weather.city {
+            city.validate()?;
+        }
         // Keep malformed sizes/timers from crashing the native renderer.
         config.dialog.width = config.dialog.width.clamp(40., 2000.);
         config.dialog.max_height = config.dialog.max_height.clamp(24., 2000.);
