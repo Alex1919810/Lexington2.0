@@ -36,6 +36,7 @@ yarn-error.log*
 
 # Rust
 /target/
+/.tools/
 
 # Native verification helpers
 __pycache__/

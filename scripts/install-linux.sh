@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "$(uname -s)" != Linux ]]; then
+    printf '%s\n' 'Linux installer requires Linux. On Windows run scripts/install-windows.ps1.' >&2
+    exit 1
+fi
 project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_root"
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"

@@ -60,7 +60,7 @@ for line in sys.stdin:
         pass
     elif method == "thread/start":
         assert os.path.isabs(params["cwd"])
-        assert params["cwd"] == os.getcwd()
+        assert os.path.samefile(params["cwd"], os.getcwd())
         send({"id": message["id"], "result": {"thread": {"id": thread}, "approvalPolicy": {"granular": {"sandbox_approval": True, "rules": False, "skill_approval": True, "request_permissions": True, "mcp_elicitations": True}} if mode == "granular" else "on-request"}})
     elif method == "turn/start":
         assert params["threadId"] == thread

@@ -58,8 +58,46 @@ pub struct Client {
     child: Arc<Mutex<Process>>,
     worker: Option<JoinHandle<()>>,
 }
+#[cfg(windows)]
+fn windows_executable() -> Option<std::path::PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(paths) = std::env::var_os("PATH") {
+        candidates
+            .extend(std::env::split_paths(&paths).map(|directory| directory.join("codex.exe")));
+    }
+    if let Some(home) = std::env::var_os("USERPROFILE") {
+        for suffix in [".local/bin/codex.exe", ".cargo/bin/codex.exe"] {
+            candidates.push(Path::new(&home).join(suffix));
+        }
+    }
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        let base = Path::new(&appdata).join("npm/node_modules/@openai/codex");
+        let arch = if cfg!(target_arch = "aarch64") {
+            "arm64"
+        } else {
+            "x64"
+        };
+        let target = if cfg!(target_arch = "aarch64") {
+            "aarch64-pc-windows-msvc"
+        } else {
+            "x86_64-pc-windows-msvc"
+        };
+        for vendor in [
+            base.join("vendor"),
+            base.join(format!("node_modules/@openai/codex-win32-{arch}/vendor")),
+        ] {
+            for suffix in ["codex/codex.exe", "bin/codex.exe"] {
+                candidates.push(vendor.join(target).join(suffix));
+            }
+        }
+    }
+    candidates.into_iter().find(|path| path.is_file())
+}
+
 struct Process {
     child: Child,
+    #[cfg(windows)]
+    job: crate::tools::windows::Job,
     stopped: bool,
 }
 impl Process {
@@ -68,6 +106,8 @@ impl Process {
             return;
         }
         self.stopped = true;
+        #[cfg(windows)]
+        self.job.terminate();
         // npm launchers may spawn the real server. Kill our isolated group before reaping
         // its leader so descendants cannot retain stdout or continue work after app exit.
         #[cfg(unix)]
@@ -84,6 +124,9 @@ impl Client {
         root: &Path,
         wake: impl Fn() + Send + 'static,
     ) -> Result<Self, String> {
+        Self::launch(Self::command(config, root)?, wake)
+    }
+    fn command(config: &CodexConfig, root: &Path) -> Result<Command, String> {
         config.validate_connection()?;
         let directory = config.working_directory.as_ref().map_or_else(
             || root.to_path_buf(),
@@ -98,8 +141,27 @@ impl Client {
         let directory = directory
             .canonicalize()
             .map_err(|e| format!("Codex 工作目录不可用：{e}"))?;
+        #[cfg(windows)]
+        let executable = if config.executable == "codex" {
+            windows_executable()
+                .ok_or("找不到原生 codex.exe，请安装 Codex CLI 或在连接设置中指定完整 exe 路径。")?
+        } else {
+            std::path::PathBuf::from(&config.executable)
+        };
+        #[cfg(windows)]
+        if executable
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+            })
+        {
+            return Err("Windows 请指定原生 codex.exe，不能使用 .cmd/.bat 启动器。".into());
+        }
+        #[cfg(not(windows))]
         let mut executable = std::path::PathBuf::from(&config.executable);
         // Desktop launchers often omit the user's CLI installation directory from PATH.
+        #[cfg(not(windows))]
         if config.executable == "codex" {
             let in_path = std::env::var_os("PATH").is_some_and(|paths| {
                 std::env::split_paths(&paths).any(|p| {
@@ -151,7 +213,7 @@ impl Client {
         } else {
             command.env_remove("LEXINGTON_MODEL_API_KEY");
         }
-        Self::launch(command, wake)
+        Ok(command)
     }
     fn launch(mut command: Command, wake: impl Fn() + Send + 'static) -> Result<Self, String> {
         let secret = command
@@ -168,7 +230,7 @@ impl Client {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            command.creation_flags(0x08000004);
         }
         let directory = command
             .get_current_dir()
@@ -182,10 +244,21 @@ impl Client {
             .map_err(|e| {
                 format!("无法启动 Codex：{e}。请安装并登录 Codex，或配置 codex.executable。")
             })?;
+        #[cfg(windows)]
+        let job = match crate::tools::windows::Job::attach(&child) {
+            Ok(job) => job,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("无法隔离 Codex 子进程，未启动会话。".into());
+            }
+        };
         let stdout = child.stdout.take().expect("piped stdout");
         let mut stdin = child.stdin.take().expect("piped stdin");
         let child = Arc::new(Mutex::new(Process {
             child,
+            #[cfg(windows)]
+            job,
             stopped: false,
         }));
         let owned_child = child.clone();
@@ -627,9 +700,14 @@ fn communicate(
 #[cfg(test)]
 impl Client {
     pub(crate) fn mock(mode: &str) -> Self {
-        let mut command = Command::new("python3");
+        let mut command = Command::new(
+            std::env::var_os("LEXINGTON_TEST_PYTHON")
+                .unwrap_or_else(|| if cfg!(windows) { "python" } else { "python3" }.into()),
+        );
         command
             .args([
+                "-X",
+                "utf8",
                 "-u",
                 "-c",
                 include_str!("../../tests/fixtures/codex-server.py"),
@@ -642,6 +720,79 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_launch_configuration_preserves_unicode_and_isolates_credentials() {
+        let root =
+            std::env::temp_dir().join(format!("lexington launch 中文 {}", rand::random::<u64>()));
+        std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        for (custom, mode) in [(true, "api-config"), (false, "inherit-config")] {
+            let config = CodexConfig {
+                executable: "fixture-only.exe".into(),
+                model: "fixture-model\"with-quote".into(),
+                use_custom_api: custom,
+                base_url: "http://127.0.0.1:9999/v1".into(),
+                api_key: "fixture-key-not-a-real-secret".into(),
+                ..Default::default()
+            };
+            let configured = Client::command(&config, &root).unwrap();
+            assert_eq!(configured.get_current_dir(), Some(root.as_path()));
+            assert!(
+                !configured
+                    .get_args()
+                    .any(|argument| argument.to_string_lossy().contains(&config.api_key))
+            );
+            let mut command = Command::new(
+                std::env::var_os("LEXINGTON_TEST_PYTHON")
+                    .unwrap_or_else(|| if cfg!(windows) { "python" } else { "python3" }.into()),
+            );
+            command.args([
+                "-X",
+                "utf8",
+                "-u",
+                "-c",
+                include_str!("../../tests/fixtures/codex-server.py"),
+                mode,
+            ]);
+            command.args(configured.get_args()).current_dir(&root);
+            for (key, value) in configured.get_envs() {
+                if let Some(value) = value {
+                    command.env(key, value);
+                } else {
+                    command.env_remove(key);
+                }
+            }
+            let client = Client::launch(command, || {}).unwrap();
+            client.submit("确认配置".into(), false).unwrap();
+            wait_for(&client, |event| {
+                matches!(event, Event::Finished { interrupted: false })
+            });
+            if custom {
+                client.submit("echo-secret".into(), false).unwrap();
+                assert!(
+                    matches!(wait_for(&client, |event| matches!(event, Event::Text { .. })), Event::Text { text, .. } if text == "[hidden]")
+                );
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_rejects_shell_launchers_before_starting_a_process() {
+        for executable in [
+            "codex.cmd",
+            "CODEX.BAT",
+            r"C:\Program Files\Codex\codex.CmD",
+        ] {
+            let config = CodexConfig {
+                executable: executable.into(),
+                ..Default::default()
+            };
+            assert!(Client::command(&config, &std::env::temp_dir()).is_err());
+        }
+    }
 
     fn wait_for(client: &Client, matches: impl Fn(&Event) -> bool) -> Event {
         loop {
@@ -756,7 +907,6 @@ mod tests {
         );
     }
     #[test]
-    #[cfg(unix)]
     fn exit_cleans_descendants_holding_stdout_without_hanging() {
         let client = Client::mock("normal");
         wait_for(&client, |e| matches!(e, Event::Ready));
@@ -775,8 +925,20 @@ mod tests {
         let result = receiver.recv_timeout(Duration::from_secs(5));
         if result.is_err() {
             // Release the inherited pipe even when the regression returns, so the test can fail.
+            #[cfg(unix)]
             unsafe {
                 libc::kill(pid, libc::SIGKILL);
+            }
+            #[cfg(windows)]
+            unsafe {
+                use windows_sys::Win32::System::Threading::*;
+                if let Ok(process) = crate::tools::windows::Handle::new(OpenProcess(
+                    PROCESS_TERMINATE,
+                    0,
+                    pid as u32,
+                )) {
+                    TerminateProcess(process.0, 1);
+                }
             }
         }
         worker.join().unwrap();
@@ -784,6 +946,15 @@ mod tests {
             result.is_ok(),
             "a launcher descendant retained stdout and blocked shutdown"
         );
+        #[cfg(windows)]
+        unsafe {
+            use windows_sys::Win32::{Foundation::WAIT_OBJECT_0, System::Threading::*};
+            if let Ok(process) =
+                crate::tools::windows::Handle::new(OpenProcess(PROCESS_SYNCHRONIZE, 0, pid as u32))
+            {
+                assert_eq!(WaitForSingleObject(process.0, 1000), WAIT_OBJECT_0);
+            }
+        }
         #[cfg(target_os = "linux")]
         if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
             assert_eq!(

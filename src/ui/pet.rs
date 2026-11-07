@@ -109,7 +109,7 @@ impl Pet {
                 if ctx.input(|i| i.pointer.primary_pressed()) {
                     self.pet_pressed = inside.then(Instant::now);
                     self.drag_sent = false;
-                    #[cfg(target_os = "linux")]
+                    #[cfg(any(target_os = "linux", windows))]
                     if inside
                         && response.is_pointer_button_down_on()
                         && let Some(window) = &mut self.drag_window
@@ -127,11 +127,11 @@ impl Pet {
                         })
                 });
                 if response.dragged_by(egui::PointerButton::Primary) && moved && !self.drag_sent {
-                    #[cfg(target_os = "linux")]
+                    #[cfg(any(target_os = "linux", windows))]
                     if self.drag_window.is_none() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                     }
-                    #[cfg(not(target_os = "linux"))]
+                    #[cfg(not(any(target_os = "linux", windows)))]
                     ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                     self.drag_sent = true;
                 }

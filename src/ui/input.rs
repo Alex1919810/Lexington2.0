@@ -10,7 +10,7 @@ impl Pet {
         }
         self.send_message(ctx, self.input.trim().to_owned(), false);
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     pub(super) fn poll_handoff(&mut self, ctx: &egui::Context) {
         if !self.busy
             && let Some(request) = self.inbox.as_ref().and_then(|inbox| inbox.poll())
@@ -93,7 +93,7 @@ impl Pet {
         position = input_transform.inverse() * egui::pos2(global.left(), top);
         let rect = Rect::from_min_size(position, vec2(width, height));
         let pointer = ctx.input(|i| i.pointer.hover_pos());
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", windows))]
         // Transparent areas receive no native motion events. Poll for hover
         // discovery without claiming clicks or stealing another app's focus.
         let pointer = self.drag_window.as_ref().map_or(pointer, |window| {

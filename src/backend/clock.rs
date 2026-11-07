@@ -25,19 +25,8 @@ impl LocalTime {
     }
 }
 pub fn local_time(timestamp: i64) -> Option<LocalTime> {
-    #[cfg(unix)]
     {
-        let native = timestamp as libc::time_t;
-        if native as i128 != i128::from(timestamp) {
-            return None;
-        }
-        let timestamp = native;
-        let mut date = std::mem::MaybeUninit::<libc::tm>::uninit();
-        // localtime_r initializes tm using the process local timezone.
-        if unsafe { libc::localtime_r(&timestamp, date.as_mut_ptr()) }.is_null() {
-            return None;
-        }
-        let date = unsafe { date.assume_init() };
+        let date = crate::tools::time::local(timestamp)?;
         Some(LocalTime {
             day: format!(
                 "{:04}-{:02}-{:02}",
@@ -48,11 +37,6 @@ pub fn local_time(timestamp: i64) -> Option<LocalTime> {
             hour: date.tm_hour as u32,
             minute: date.tm_min as u32,
         })
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = timestamp;
-        None
     }
 }
 
@@ -187,22 +171,13 @@ impl ClockState {
         if hour > 23 || minute > 59 {
             return Err("时间超出范围".into());
         }
-        #[cfg(unix)]
         {
-            let timestamp = now as libc::time_t;
-            if timestamp as i128 != i128::from(now) {
-                return Err("时间超出范围".into());
-            }
-            let mut date = std::mem::MaybeUninit::<libc::tm>::uninit();
-            if unsafe { libc::localtime_r(&timestamp, date.as_mut_ptr()) }.is_null() {
-                return Err("无法读取本地日期".into());
-            }
-            let mut date = unsafe { date.assume_init() };
+            let mut date = crate::tools::time::local(now).ok_or("无法读取本地日期")?;
             date.tm_hour = hour as i32;
             date.tm_min = minute as i32;
             date.tm_sec = 0;
             date.tm_isdst = -1;
-            let start = unsafe { libc::mktime(&mut date) } as i64;
+            let start = crate::tools::time::timestamp(&mut date);
             let converted = local_time(start).ok_or("时间超出范围")?;
             if converted.day != self.record.day
                 || converted.hour != hour
@@ -221,10 +196,6 @@ impl ClockState {
             })?;
             self.reset_candidate();
             Ok(())
-        }
-        #[cfg(not(unix))]
-        {
-            Err("当前平台暂不支持本地时间修改".into())
         }
     }
     pub fn observe(

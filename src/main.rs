@@ -8,7 +8,12 @@ use eframe::egui;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use backend::handoff::{self, Request};
     let args: Vec<_> = std::env::args_os().collect();
-    if args.get(1).is_some_and(|arg| arg == "--native-messaging") {
+    if args.get(1).is_some_and(|arg| arg == "--native-messaging")
+        || std::env::current_exe().ok().is_some_and(|path| {
+            path.file_stem()
+                .is_some_and(|name| name == "lexington-native-host")
+        })
+    {
         handoff::native_host()?;
         return Ok(());
     }
@@ -43,7 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let dev = std::env::args().any(|arg| arg == "--dev");
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     let Some(endpoint) = handoff::Endpoint::bind(dev)? else {
         // Context-menu requests are forwarded to this existing instance.
         return Ok(());
@@ -56,6 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_resizable(dev)
         .with_always_on_top()
         .with_taskbar(false)
+        .with_active(false)
         .with_title("Lexington 桌面宠物");
     if dev {
         viewport = viewport.with_position([100., 100.]);
@@ -68,6 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             rgba: icon.into_raw(),
         });
     }
+    #[allow(unused_mut)]
     let mut options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Glow,
@@ -94,7 +101,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Box::new(move |cc| {
             Ok(Box::new(ui::Pet::new(
                 cc,
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", windows))]
                 endpoint,
             )))
         }),

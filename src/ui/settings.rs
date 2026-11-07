@@ -45,7 +45,7 @@ impl Pet {
                 ctx.input(|i| i.viewport().monitor_size)
                     .unwrap_or(vec2(1920., 1080.)),
             );
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", windows))]
             if let Some(window) = &self.drag_window {
                 let monitors = window.monitors(ctx.pixels_per_point());
                 if let Some(found) = self
@@ -166,7 +166,7 @@ impl Pet {
                         } else {
                             false
                         };
-                        #[cfg(target_os = "linux")]
+                        #[cfg(any(target_os = "linux", windows))]
                         if let Some(window) = &self.drag_window
                             && let Some((pointer, down)) =
                                 window.screen_pointer(settings.pixels_per_point())
@@ -215,7 +215,7 @@ impl Pet {
                                 settings.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                             }
                         }
-                        #[cfg(not(target_os = "linux"))]
+                        #[cfg(not(any(target_os = "linux", windows)))]
                         {
                             if settings.input(|i| i.pointer.primary_pressed()) {
                                 self.settings_drag_active = body_pressed;

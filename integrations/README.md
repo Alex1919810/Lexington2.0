@@ -6,6 +6,12 @@
 
 项目运行 `bash scripts/install-linux.sh` 时安装客户端和本机通信桥；不自动修改浏览器的安全策略。菜单必须由各软件的扩展提供，不能注入所有软件的原生菜单。
 
+### Windows 文件资源管理器
+
+运行 `powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1`，在 HKCU 注册文件/文件夹的“看看Lexington怎么说”。Windows 11 经典菜单通常位于“显示更多选项”，不代表新菜单的原生扩展。命令直接启动带引号的 exe 和本地路径，不通过 shell。VS Code 默认程序为 `%LOCALAPPDATA%\lexington\lexington.exe`。
+
+浏览器宿主注册在 HKCU 的 Chrome/Chromium/Edge/Brave/Firefox NativeMessagingHosts。`lexington-native-host.exe` 是同一 Rust 二进制的别名，stdout 仅协议帧；启动桌宠时转交同目录 lexington.exe。Chromium key/宿主白名单与产物保持一致；扩展仍需浏览器加载，Firefox 持久安装仍需签名。宿主注册和边界测试不代表所有浏览器已端到端验证。
+
 ### GNOME 文件管理器（Nautilus）
 
 选择本地文件或文件夹，右键 → **脚本 → 看看Lexington怎么说**。安装器已创建此脚本；发送绝对路径，让 Lexington 自行查看内容。支持多个文件，路径中的空格、引号和换行不会被当成命令执行。

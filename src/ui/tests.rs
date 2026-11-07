@@ -907,10 +907,12 @@ fn enter_delivers_streamed_codex_reply_through_the_native_ui() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 fn context_requests_wait_for_current_turn_and_send_without_replacing_drafts() {
     use crate::backend::handoff::{Endpoint, Request};
+    #[cfg(target_os = "linux")]
     use std::io::{Read, Write};
+    #[cfg(target_os = "linux")]
     use std::os::unix::net::UnixStream;
 
     let path = std::env::temp_dir().join(format!("lexington-ui-inbox-{}", rand::random::<u64>()));
@@ -921,30 +923,45 @@ fn context_requests_wait_for_current_turn_and_send_without_replacing_drafts() {
     app.input = "interrupt".into();
     app.submit(&ctx);
     app.input = "未发送的草稿".into();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !app.text.contains("第1轮：interrupt") && Instant::now() < deadline {
+        frame(&mut app, &ctx, vec![]);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(app.busy && app.text.contains("第1轮：interrupt"));
+    let selected_path = std::env::temp_dir()
+        .join("中文 空格.rs")
+        .to_string_lossy()
+        .into_owned();
     for text in ["第一段选区", "第二段选区"] {
         let request = Request {
             text: text.into(),
-            files: vec!["/tmp/中文 空格.rs".into()],
+            files: vec![selected_path.clone()],
             source: "VS Code".into(),
             line: Some(17),
         };
-        let bytes = serde_json::to_vec(&request).unwrap();
-        let mut stream = UnixStream::connect(path.join("inbox.sock")).unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(3)))
-            .unwrap();
-        stream
-            .write_all(&(bytes.len() as u32).to_le_bytes())
-            .unwrap();
-        stream.write_all(&bytes).unwrap();
-        let mut size = [0; 4];
-        stream.read_exact(&mut size).unwrap();
-        let mut response = vec![0; u32::from_le_bytes(size) as usize];
-        stream.read_exact(&mut response).unwrap();
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&response).unwrap()["ok"],
-            true
-        );
+        #[cfg(windows)]
+        crate::backend::handoff::deliver_at(&path, &request).unwrap();
+        #[cfg(target_os = "linux")]
+        {
+            let bytes = serde_json::to_vec(&request).unwrap();
+            let mut stream = UnixStream::connect(path.join("inbox.sock")).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            stream
+                .write_all(&(bytes.len() as u32).to_le_bytes())
+                .unwrap();
+            stream.write_all(&bytes).unwrap();
+            let mut size = [0; 4];
+            stream.read_exact(&mut size).unwrap();
+            let mut response = vec![0; u32::from_le_bytes(size) as usize];
+            stream.read_exact(&mut response).unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&response).unwrap()["ok"],
+                true
+            );
+        }
     }
     frame(&mut app, &ctx, vec![]);
     assert!(
@@ -962,10 +979,16 @@ fn context_requests_wait_for_current_turn_and_send_without_replacing_drafts() {
     }
     assert!(!app.busy && app.error.is_empty(), "{}", app.error);
     assert!(app.text.starts_with("第3轮："), "{}", app.text);
-    assert!(app.text.contains("第二段选区") && app.text.contains("/tmp/中文 空格.rs"));
+    assert!(
+        app.text.contains("第二段选区")
+            && app
+                .text
+                .contains(&serde_json::to_string(&selected_path).unwrap())
+    );
     assert!(app.text.contains("17"));
     assert_eq!(app.input, "未发送的草稿");
     drop(app);
+    #[cfg(target_os = "linux")]
     std::fs::remove_dir_all(path).unwrap();
 }
 

@@ -8,8 +8,9 @@ const root = path.join(__dirname, '..');
 const commands = {};
 const messages = [];
 let errors = [];
+let configuredExecutable = '/tmp/带 空格/lexington';
 const vscode = {
-    workspace: { getConfiguration: () => ({ get: () => '/tmp/带 空格/lexington' }) },
+    workspace: { getConfiguration: () => ({ get: () => configuredExecutable }) },
     window: { showErrorMessage: message => errors.push(message) },
     commands: { registerCommand: (name, callback) => { commands[name] = callback; return {}; } }
 };
@@ -50,6 +51,13 @@ commands['lexington.askFile'](localFile, [localFile]);
 assert.deepEqual(messages.pop().files, [localFile.fsPath]);
 commands['lexington.askFile']({ scheme: 'vscode-remote' });
 assert.equal(errors.length, 1);
+configuredExecutable = '';
+commands['lexington.askFile'](localFile, [localFile]);
+assert.equal(invocation.options.windowsHide, true);
+if (process.platform === 'win32') {
+    assert.equal(invocation.executable, path.join(process.env.LOCALAPPDATA || path.join(require('os').homedir(), 'AppData', 'Local'), 'lexington', 'lexington.exe'));
+}
+messages.pop();
 
 let installed;
 let clicked;
@@ -79,6 +87,8 @@ assert.deepEqual(messages.pop(), { text: '网页选区', files: [], source: 'htt
 clicked({ menuItemId: menu.id, selectionText: '本地选区', pageUrl: 'file:///tmp/%E4%B8%AD%E6%96%87%20%22.rs' });
 assert.deepEqual(messages.pop().files, ['/tmp/中文 ".rs']);
 nativeResponse = { ok: false, error: '队列已满' };
+clicked({ menuItemId: menu.id, selectionText: 'Windows 文件', pageUrl: 'file:///C:/Users/%E4%B8%AD%E6%96%87/a%20b.rs' });
+assert.deepEqual(messages.pop().files, ['C:\\Users\\中文\\a b.rs']);
 clicked({ menuItemId: menu.id, selectionText: '失败提示', pageUrl: 'https://example.com/' });
 assert.equal(badge, '!');
 console.log('VS Code and browser context-menu boundary checks passed.');

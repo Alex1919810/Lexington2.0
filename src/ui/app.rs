@@ -17,10 +17,10 @@ use std::{
 };
 
 pub struct Pet {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     pub(super) inbox: Option<crate::backend::handoff::Inbox>,
     pub(super) external_turn: bool,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     pub(super) drag_window: Option<platform::DragWindow>,
     pub(super) root: PathBuf,
     pub(super) config: Config,
@@ -68,7 +68,7 @@ pub struct Pet {
     pub(super) placed: bool,
     pub(super) dev: bool,
     pub(super) window_position: Option<egui::Pos2>,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     window_pixels_per_point: f32,
     pub(super) raised: bool,
     pub(super) hints_applied: bool,
@@ -78,7 +78,7 @@ pub struct Pet {
     pub(super) settings_viewport_open: bool,
     pub(super) settings_started: Instant,
     pub(super) settings_raised: bool,
-    pub(super) settings_drag: Option<(egui::Pos2, egui::Pos2, u32)>,
+    pub(super) settings_drag: Option<(egui::Pos2, egui::Pos2, platform::WindowId)>,
     pub(super) settings_pointer_down: bool,
     pub(super) settings_drag_active: bool,
     pub(super) connection_draft: Option<crate::backend::config::CodexConfig>,
@@ -89,7 +89,7 @@ pub struct Pet {
 impl Pet {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
-        #[cfg(target_os = "linux")] endpoint: crate::backend::handoff::Endpoint,
+        #[cfg(any(target_os = "linux", windows))] endpoint: crate::backend::handoff::Endpoint,
     ) -> Self {
         platform::configure(cc);
         let mut app = Self::from_context(&cc.egui_ctx, true);
@@ -104,7 +104,7 @@ impl Pet {
                     .or_else(|| std::env::var_os("USERPROFILE"))
                     .map(|home| PathBuf::from(home).join(".codex"))
             });
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", windows))]
         {
             app.drag_window = platform::DragWindow::new(cc);
         }
@@ -119,7 +119,7 @@ impl Pet {
         app.load_alarms();
         app.activity_monitor = Some(activity::Monitor::start(move || ctx.request_repaint()));
         app.start_codex(&cc.egui_ctx);
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", windows))]
         {
             let ctx = cc.egui_ctx.clone();
             app.inbox = Some(endpoint.start(move || ctx.request_repaint()));
@@ -147,10 +147,10 @@ impl Pet {
         style::install(ctx);
         let config = Config::load(&root);
         let mut app = Self {
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", windows))]
             inbox: None,
             external_turn: false,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", windows))]
             drag_window: None,
             root,
             config,
@@ -208,7 +208,7 @@ impl Pet {
             placed: false,
             dev: std::env::args().any(|arg| arg == "--dev"),
             window_position: None,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", windows))]
             window_pixels_per_point: 1.,
             raised: false,
             hints_applied: false,
@@ -303,7 +303,7 @@ impl eframe::App for Pet {
         storage.set_string("window", String::new());
         storage.set_string("sidebarAlwaysVisible", self.pinned.to_string());
         let position = self.window_position;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", windows))]
         let position = self
             .drag_window
             .as_ref()
@@ -329,12 +329,12 @@ impl eframe::App for Pet {
 impl Pet {
     pub(super) fn ui(&mut self, ctx: &egui::Context) {
         self.input_regions.clear();
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", windows))]
         {
             self.window_pixels_per_point = ctx.pixels_per_point();
         }
         ctx.request_repaint_after(Duration::from_millis(16));
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", windows))]
         if let Some(window) = &mut self.drag_window {
             if ctx.input(|i| i.pointer.any_pressed()) {
                 window.focus();
@@ -348,7 +348,7 @@ impl Pet {
             self.raised = true;
         }
         if !self.hints_applied && self.started.elapsed() > Duration::from_millis(600) {
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", windows))]
             if let Some(window) = &self.drag_window {
                 window.configure();
             }
@@ -363,7 +363,7 @@ impl Pet {
                 vec2(500., 500.)
             };
             let mut monitors = vec![Rect::from_min_size(egui::Pos2::ZERO, size)];
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", windows))]
             if let Some(window) = &self.drag_window {
                 let native_monitors = window.monitors(ctx.pixels_per_point());
                 if !native_monitors.is_empty() {
@@ -411,7 +411,7 @@ impl Pet {
             self.placed = true;
         } else if self.placed {
             let position = ctx.input(|i| i.viewport().outer_rect.map(|rect| rect.min));
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", windows))]
             let position = self
                 .drag_window
                 .as_ref()
@@ -470,7 +470,7 @@ impl Pet {
         if self.codex_restart_pending && !self.busy {
             self.start_codex(ctx);
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", windows))]
         self.poll_handoff(ctx);
         if !self.busy
             && !self.text.is_empty()
@@ -514,7 +514,7 @@ impl Pet {
         self.codex_prompt_ui(ctx);
         self.clock_notice_ui(ctx);
         self.alarm_popup_ui(ctx);
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", windows))]
         if let Some(window) = &mut self.drag_window {
             window.set_input_regions(&self.input_regions, screen, ctx.pixels_per_point());
         }

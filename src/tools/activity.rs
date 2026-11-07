@@ -172,7 +172,22 @@ fn sample() -> Sample {
     }
     unavailable()
 }
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+fn sample() -> Sample {
+    let idle = crate::tools::windows::idle_duration();
+    Sample {
+        idle,
+        status: if idle.is_some() {
+            "Windows 系统活动监测正常"
+        } else {
+            "会话锁定、非本机活动或无法读取，可手动打卡"
+        }
+        .into(),
+        sampled: Instant::now(),
+    }
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 fn sample() -> Sample {
     Sample {
         idle: None,

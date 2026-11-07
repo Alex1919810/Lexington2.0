@@ -5,15 +5,17 @@ const os = require('os');
 
 function send(request) {
     const configured = vscode.workspace.getConfiguration('lexington').get('executable');
-    const data = process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
-    const executable = configured || path.join(data, 'lexington', 'lexington');
+    const windows = process.platform === 'win32';
+    const data = windows ? process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
+        : process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
+    const executable = configured || path.join(data, 'lexington', windows ? 'lexington.exe' : 'lexington');
     const payload = JSON.stringify(request);
     if (Buffer.byteLength(payload) > 1024 * 1024) {
         vscode.window.showErrorMessage('选中内容超过 1 MiB，请缩小选区。');
         return;
     }
     // No shell, command interpolation, clipboard modification, or temporary text files.
-    const child = spawn(executable, ['--ask-json'], { stdio: ['pipe', 'ignore', 'pipe'] });
+    const child = spawn(executable, ['--ask-json'], { stdio: ['pipe', 'ignore', 'pipe'], windowsHide: true });
     let error = '';
     child.stderr.on('data', chunk => { error = (error + chunk.toString()).slice(-4096); });
     child.on('error', problem => vscode.window.showErrorMessage(`无法发送给 Lexington：${problem.message}`));

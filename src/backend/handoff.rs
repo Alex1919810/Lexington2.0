@@ -381,7 +381,15 @@ mod local {
 #[cfg(target_os = "linux")]
 pub use local::{Endpoint, Inbox, deliver};
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+#[path = "handoff_windows.rs"]
+mod windows;
+#[cfg(all(windows, test))]
+pub(crate) use windows::deliver_at;
+#[cfg(windows)]
+pub use windows::{Endpoint, Inbox, deliver};
+
+#[cfg(not(any(target_os = "linux", windows)))]
 pub fn deliver(_request: Request) -> io::Result<()> {
     Err(io::Error::other("右键集成暂仅支持 Linux"))
 }
@@ -410,7 +418,12 @@ mod tests {
     fn requests_preserve_sources_and_reject_empty_relative_or_oversized_input() {
         let request = Request {
             text: "你好\n第二行".into(),
-            files: vec!["/tmp/空 格\".rs".into()],
+            files: vec![
+                std::env::temp_dir()
+                    .join("空 格.rs")
+                    .to_string_lossy()
+                    .into_owned(),
+            ],
             source: "VS Code".into(),
             line: Some(12),
         };

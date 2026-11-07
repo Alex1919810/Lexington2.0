@@ -18,7 +18,7 @@ cargo run --release --locked
 cargo run --locked -- --dev
 ```
 
-Codex 输入输出需要 Codex CLI（本机验证版本为 0.166.0）；安装器可自动安装，使用本机服务前需登录，或在设置中配置自定义模型 API。Lexington 启动时自动运行 `codex app-server --stdio`，通过安装脚本可自动补齐 CLI；直接运行时缺少 CLI 或连接失败会在输入区显示错误，宠物的其他功能仍可使用。
+Codex 输入输出需要 Codex CLI（本机验证版本为 0.166.0）；Linux 安装器可自动安装；Windows 使用已有原生 codex.exe。使用本机服务前需登录，或在设置中配置自定义模型 API。Lexington 启动时自动运行 `codex app-server --stdio`，Linux 安装脚本可自动补齐 CLI；直接运行时缺少 CLI 或连接失败会在输入区显示错误，宠物的其他功能仍可使用。
 
 Linux 需要桌面 OpenGL/EGL 驱动及 X11/XWayland。存在 `DISPLAY` 时默认选 X11/XWayland；可通过 `cargo run --release --locked -- --wayland` 选择原生 Wayland。
 
@@ -26,7 +26,8 @@ Linux 需要桌面 OpenGL/EGL 驱动及 X11/XWayland。存在 `DISPLAY` 时默�
 |---|---|
 | Linux X11 / XWayland | 提供窗口定位、置顶、拖动及隐藏任务栏；已在独立 X11 桌面验证 |
 | Linux 原生 Wayland | 提供后端；窗口位置和层级由合成器控制，尚需对应桌面实测 |
-| Windows / macOS | 使用 eframe 原生后端；尚需对应系统构建和运行验证 |
+| Windows | Win32 窗口、Job 进程树、私有命名管道、本地时间与用户级安装；全量 Rust、原生穿透/拖动及安装升级测试通过，范围见模块文档 |
+| macOS | 使用 eframe 原生后端；尚需对应系统构建和运行验证 |
 
 资源查找顺序：`LEXINGTON_HOME` 环境变量指定的目录 → 可执行文件旁的 `resource/` → 当前工作目录。发布时把 `resource/` 与 `config/` 放在可执行文件旁，启动不依赖工作目录。
 
@@ -42,7 +43,19 @@ bash scripts/install-linux.sh
 
 安装脚本默认安装到 `~/.local/share/lexington/`（遵循 `XDG_DATA_HOME`），创建名称固定为 `Lexington` 的应用菜单和桌面快捷方式（桌面文件为 `Lexington.desktop`），升级时迁移旧快捷方式并保留已安装版本的配置。分发前请检查配置中没有遗留的密钥；默认配置的 API Key 为空，用户填写后仅保存到自己的配置文件。安装器自动检查依赖：缺少 Codex 时下载并校验官方原生包，保留已有版本和登录配置；缺少 Rust 时安装最小稳定工具链（仅源码安装），Ubuntu/Debian 缺失的系统库与桌面集成依赖通过系统授权安装。安装器本身不执行 Codex 登录；可运行 `codex login`，也可在设置中配置模型 API。
 
-Windows 在对应系统使用 `cargo build --release --locked` 构建，将 `target/release/lexington.exe` 与 `resource/`、`config/` 一起分发；macOS 对应的可执行文件为 `target/release/lexington`。
+### Windows
+
+源码需要 Rust stable MSVC 和 Visual Studio C++ Build Tools。PowerShell 执行：
+
+```powershell
+cargo build --release --locked
+powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1
+powershell -ExecutionPolicy Bypass -File scripts/package-windows.ps1
+```
+
+默认安装到 `%LOCALAPPDATA%\lexington`，创建桌面/开始菜单快捷方式、Explorer 经典右键菜单和用户级浏览器本机桥。升级保留配置、密钥和登录，安全关闭旧版后同目录原子替换并核对 SHA256，不强制杀进程。使用现有原生 `codex.exe` 或在连接设置指定完整路径；不运行 npm/Node 启动器、不自动登录。`-NoIntegrations` / `-NoShortcuts` 可关闭相应集成。ZIP 包包含资源、集成产物及空白安全配置，解压后运行 `scripts/install-windows.ps1`，无需 Rust/Python。Windows 打卡/闹钟位于 `%LOCALAPPDATA%\lexington`，普通/开发记录隔离。
+
+macOS 可执行文件为 `target/release/lexington`，尚未验证。
 
 ## 使用
 
@@ -162,7 +175,7 @@ Key 默认以密码形式显示，开启自定义 API 并保存后写入当前�
 
 右键 → 设置 → 常规中的“无需审批”开关会自动保存到 `codex.noApproval`，默认关闭。开启后，从下一条消息起使用 `approvalPolicy: never`，关闭后恢复当前会话启动时继承的本机审批策略（包括本机原本就无需审批的情况）。切换不重启服务、不清空对话，也不改变当前任务或沙箱权限；超出沙箱允许范围的操作仍会失败。Codex 的补充信息提问仍需回答。
 
-同一次启动内复用一个 Codex thread，支持连续对话；退出程序会终止所启动的 app-server（Unix 同时清理该进程组的后代），下次启动新建会话。右键 → 设置 → 连接可查看连接状态、程序路径和工作目录，路径支持悬停查看及复制；普通设置热加载时保留对话；程序路径、工作目录、模型或启用中的 API 地址/Key 改变时自动重建 Codex 会话，正在处理任务则等任务结束后切换，会话上下文随重建清空。也可空闲时手动点击“重启会话”。命令或文件审批、Codex 提问会显示交互窗口；不支持的请求会明确返回错误。连接请求响应超时为 30 秒，模型生成不设置固定超时。
+同一次启动内复用一个 Codex thread，支持连续对话；退出程序会终止所启动的 app-server（Unix 清理独立进程组、Windows 通过 Job 清理后代），下次启动新建会话。右键 → 设置 → 连接可查看连接状态、程序路径和工作目录，路径支持悬停查看及复制；普通设置热加载时保留对话；程序路径、工作目录、模型或启用中的 API 地址/Key 改变时自动重建 Codex 会话，正在处理任务则等任务结束后切换，会话上下文随重建清空。也可空闲时手动点击“重启会话”。命令或文件审批、Codex 提问会显示交互窗口；不支持的请求会明确返回错误。连接请求响应超时为 30 秒，模型生成不设置固定超时。
 
 协议参考：[Codex app-server](https://developers.openai.com/codex/app-server/)。本机集成根据已安装 CLI 的帮助与生成的 JSON Schema 验证。
 
@@ -175,7 +188,7 @@ Key 默认以密码形式显示，开启自定义 API 并保存后写入当前�
 | `src/backend/` | 配置、资源扫描、角色/立绘选择、打卡、闹钟调度与记录、城市搜索/天气预报和 Codex 子进程/协议 |
 | `src/tools/` | 资源根目录定位、图片/GIF 解码、隔帧播放与索引缓存、平台窗口适配 |
 | `integrations/` | VS Code、浏览器和 Nautilus 右键客户端 |
-| `scripts/` | Linux 安装、打包、右键集成生成/安装及原生验证 |
+| `scripts/` | Linux/Windows 安装、打包、右键集成生成/安装及原生验证 |
 
 完整目录、每个文件的职责、主要接口及依赖方向见 [模块职责说明](docs/MODULES.md)。后续代码变更须同步维护该文档，具体要求见根 [AGENTS.md](AGENTS.md) 及 `src/backend/`、`src/ui/`、`src/tools/`、`scripts/` 下的目录规则。
 

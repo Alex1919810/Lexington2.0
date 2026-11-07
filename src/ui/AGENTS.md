@@ -6,13 +6,15 @@
 - Key 默认遮蔽；“按住显示”仅在按钮按住且设置窗口聚焦时临时明文，含继承配置，松开/失焦立即隐藏，不持久化显示状态。普通输入只发送裁首尾空白的原文；外部请求单独使用 `handoff::Request::prompt`。等待/忙碌文案使用 Lexington，等待提示固定“Lexington正在思考”。
 - 普通窗口 500×500，开发窗口 800×600，立绘容器 450×450；侧栏独立，立绘/对话/输入共享悬停变换。气泡按全文测高、限制最大高度，Area 禁用自动约束以允许溢出；几何和字体参数见模块文档。图片用线性 mipmap；CJK 字体不要再用 FontTweak.scale 放大。
 - 设置与中央提醒必须用独立原生 viewport，不能受主窗内 egui::Window 限制；X11 使用 Dock + AlwaysOnTop，不套用桌宠 XShape。映射后延迟一次性激活，提醒须晚于桌宠启动置顶；长内容可滚动、确认按钮固定。show_viewport_immediate 仅主线程使用；Embedded 后端提供 Window 回退，设置用 Foreground。设置操作在 viewport 回调后执行，忙碌禁用重启会话。
-- 设置标题栏及正文空白可拖动，按钮/输入/滚动条不得拖窗，正文关闭拖拽滚动。X11 按原生指针和窗口位置移动，保留按下候选等待 egui 命中结果，不能依赖 Dock StartDrag 或缓存 outer_rect；其他平台/Wayland 使用 StartDrag。位置仅首次打开初始化，关闭只销毁子 viewport；详细命中与时序规则见模块文档。
+- 设置标题栏及正文空白可拖动，按钮/输入/滚动条不得拖窗，正文关闭拖拽滚动。X11/Windows 按原生指针和窗口位置移动，保留按下候选等待 egui 命中结果，不能依赖跨阈值后的 StartDrag 或缓存 outer_rect；其他平台/Wayland 使用 StartDrag。位置仅首次打开初始化，关闭只销毁子 viewport；详细命中与时序规则见模块文档。
 - 透明区无 motion 事件，X11 用原生指针轮询发现悬停，失败回退 egui。输入在悬停共同变换后的立绘容器/输入区域、聚焦或生成中显示；离开且失焦后淡出，草稿/错误保留但不强制显示。原生失焦须 surrender_focus；Enter 同时判断 has_focus/lost_focus，启动不主动聚焦。侧栏点击阻止同帧“外部点击关闭”，避免清掉新消息。
 - egui 0.31 菜单打开时 context_menu 可能返回 None；输入区域须在菜单绘制闭包中取当前矩形加菜单边距，仅打开时提交。回归检查立绘外的“关闭”项连续帧可点击；模拟 UI 事件不能替代原生穿透验证。
 - 保持 persist_window=false、禁用 egui 区域缓存、旧 window 字段置空；Storage 分别保存 windowPosition/devWindowPosition，只恢复逻辑位置、不恢复尺寸。X11 保存查原生位置；启动按活动显示器（含负坐标）检查可见立绘至少 24×24，允许透明边距出屏，无效/不可见位置回主屏默认值。
 - 截图事件须在 context input 读锁外发 viewport 命令；锁内 Close 会卡住。Color32 导出 PNG 用 to_srgba_unmultiplied()。
 
 ## 增量验证
+
+- 涉及中断和轮次的 UI 协议测试先等待模拟服务的首轮流式文本，不能把 UI busy 当作握手或发送完成的证据；握手期间中断会取消尚未发送的消息。
 
 - 按受影响用例名或专项模块筛选，如 `cargo test --locked ui::assets::tests::`；UI 协作范围较大时用 `cargo test --locked ui::tests::`。只补充与改动有关的后端测试。
 - 普通/开发窗口输入回归覆盖悬停、聚焦、失焦后草稿/错误恢复和生成中可见；资源侧栏用例统一验证切换、加载和重载保留，避免重复测试。

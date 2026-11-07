@@ -12,7 +12,8 @@ chrome.contextMenus.onClicked.addListener(info => {
     try {
         const url = new URL(source);
         if (url.protocol === 'file:' && (!url.hostname || url.hostname === 'localhost')) {
-            request.files = [decodeURIComponent(url.pathname)];
+            const pathname = decodeURIComponent(url.pathname);
+            request.files = [/^\/[a-z]:\//i.test(pathname) ? pathname.slice(1).replace(/\//g, '\\') : pathname];
         }
     } catch (_) { /* Preserve the original source when no local path is available. */ }
     const action = chrome.action || chrome.browserAction;

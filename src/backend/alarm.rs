@@ -45,17 +45,8 @@ fn next_due(text: &str, now: i64) -> Result<i64, String> {
     if hour > 23 || minute > 59 {
         return Err("时间超出范围".into());
     }
-    #[cfg(unix)]
     {
-        let timestamp = now as libc::time_t;
-        if timestamp as i128 != i128::from(now) {
-            return Err("时间超出范围".into());
-        }
-        let mut date = std::mem::MaybeUninit::<libc::tm>::uninit();
-        if unsafe { libc::localtime_r(&timestamp, date.as_mut_ptr()) }.is_null() {
-            return Err("无法读取本地日期".into());
-        }
-        let date = unsafe { date.assume_init() };
+        let date = crate::tools::time::local(now).ok_or("无法读取本地日期")?;
         // A nonexistent spring-forward time is skipped, not shifted an hour.
         for offset in 0..=3 {
             let mut target = date;
@@ -64,7 +55,7 @@ fn next_due(text: &str, now: i64) -> Result<i64, String> {
             target.tm_min = minute;
             target.tm_sec = 0;
             target.tm_isdst = -1;
-            let result = unsafe { libc::mktime(&mut target) } as i64;
+            let result = crate::tools::time::timestamp(&mut target);
             if result > now
                 && local_time(result)
                     .is_some_and(|t| t.hour == hour as u32 && t.minute == minute as u32)
@@ -73,11 +64,6 @@ fn next_due(text: &str, now: i64) -> Result<i64, String> {
             }
         }
         Err("无法计算下次闹钟时间".into())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = now;
-        Err("当前平台暂不支持本地闹钟".into())
     }
 }
 

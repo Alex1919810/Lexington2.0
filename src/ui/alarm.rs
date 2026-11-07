@@ -166,7 +166,7 @@ impl Pet {
             .input(|i| i.viewport().monitor_size)
             .unwrap_or(vec2(1920., 1080.));
         let mut monitor = egui::Rect::from_min_size(egui::Pos2::ZERO, monitor_size);
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", windows))]
         if let Some(window) = &self.drag_window {
             let monitors = window.monitors(ctx.pixels_per_point());
             if let Some(found) = self

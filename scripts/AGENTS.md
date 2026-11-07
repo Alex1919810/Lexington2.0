@@ -8,5 +8,8 @@
 
 ## 增量验证
 
+- Windows 安装/打包使用 install-windows.ps1/package-windows.ps1；PowerShell 5 调用 File.Replace 的空备份参数用 [NullString]::Value，不能用 $null。ZIP 配置必须为空对象，不得复制源码目录的密钥；解压包的基本安装不依赖 Rust/Python。
+- Windows 原生测试用 windows-smoke.py，需明确授权、同桌面串行；使用隔离配置/记录和不可用的 Codex 路径，退出恢复鼠标和焦点，仅回收测试创建的进程。GIF 画布中心未必有 alpha，抓取点必须选持续可见的实体区域。
+
 - 仅运行改动涉及的脚本：依赖安装用 `python3 scripts/test-dependencies.py`；集成客户端用 `node scripts/test-integrations.js`；CLI/桥接用 `python3 scripts/context-smoke.py target/release/lexington`；设置用 settings-smoke；平台窗口用相关 native-smoke 模式。命令和场景详见模块文档。
 - 夹具不调用模型、不安装真实依赖；安装验收仍遵守根 AGENTS 的 release、用户配置保留及安装版核对要求。

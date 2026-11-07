@@ -58,10 +58,21 @@ fn x11_hints(window: u32) -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 pub fn configure(_: &eframe::CreationContext<'_>) {}
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(windows)]
+#[path = "platform_windows.rs"]
+mod windows;
+#[cfg(windows)]
+pub use windows::{DragWindow, configure};
+
+#[cfg(windows)]
+pub type WindowId = usize;
+#[cfg(not(windows))]
+pub type WindowId = u32;
+
+#[cfg(any(target_os = "linux", windows, test))]
 /// Snapshot the press in screen pixels once. Window-relative pointer deltas create
 /// feedback after each move; capturing only after the threshold also loses pixels.
 #[derive(Clone, Copy)]
@@ -71,7 +82,7 @@ struct DragAnchor {
     threshold: f32,
     active: bool,
 }
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", windows, test))]
 impl DragAnchor {
     fn new(window: (i32, i32), offset: (i32, i32), pixels_per_point: f32) -> Self {
         Self {

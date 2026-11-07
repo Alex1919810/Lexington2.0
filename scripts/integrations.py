@@ -25,7 +25,7 @@ def build(output):
     with zipfile.ZipFile(output / 'lexington-firefox.xpi', 'w', zipfile.ZIP_DEFLATED) as archive:
         for name in ('manifest.json', 'background.js'):
             archive.write(output / 'firefox' / name, name)
-    metadata = json.loads((ROOT / 'integrations/vscode/package.json').read_text())
+    metadata = json.loads((ROOT / 'integrations/vscode/package.json').read_text(encoding='utf-8'))
     version = metadata['version']
     manifest = f'''<?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">
