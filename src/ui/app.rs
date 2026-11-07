@@ -77,7 +77,9 @@ pub struct Pet {
     pub(super) settings_viewport_open: bool,
     pub(super) settings_started: Instant,
     pub(super) settings_raised: bool,
-    pub(super) settings_drag: Option<(egui::Pos2, egui::Pos2)>,
+    pub(super) settings_drag: Option<(egui::Pos2, egui::Pos2, u32)>,
+    pub(super) settings_pointer_down: bool,
+    pub(super) settings_drag_active: bool,
     pub(super) connection_draft: Option<crate::backend::config::CodexConfig>,
     pub(super) connection_error: String,
 }
@@ -205,6 +207,8 @@ impl Pet {
             settings_started: Instant::now(),
             settings_raised: false,
             settings_drag: None,
+            settings_pointer_down: false,
+            settings_drag_active: false,
             connection_draft: None,
             connection_error: String::new(),
         };

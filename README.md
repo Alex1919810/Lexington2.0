@@ -49,7 +49,7 @@ Windows 在对应系统使用 `cargo build --release --locked` 构建，将 `tar
 - 宠物中心圆形区域：单击显示随机角色台词；第二次点击显示全文；第三次关闭。按住后移动超过 5px 拖动整个窗口。Linux X11/XWayland 允许透明边距移出屏幕，立绘中心可拖至屏幕边缘。
 - 对话：每 50ms 显示一个字符，鼠标活动重置自动关闭计时；点击圆形区域和气泡以外的位置关闭。
 - 输入框：鼠标移到立绘或输入区域时显示在立绘下方，点击后输入；输入时或正在生成时保持显示；鼠标移开且失去焦点后自动收起，草稿和错误会保留，移回后恢复。Enter 发送给 Codex，等待时显示“Lexington正在思考”，回复流式显示在气泡中；连接期间发送的第一条消息会等待会话就绪。任务进行中按 Escape 中断，否则清空输入和错误。请求失败显示错误。窗口启动时不自动聚焦输入框。
-- 右键宠物：设置、关于、关闭。设置使用独立窗口，可按住标题栏拖到屏幕其他位置，关闭设置不会退出桌宠。
+- 右键宠物：设置、关于、关闭。设置使用独立窗口，可按住标题栏或正文空白处拖到屏幕其他位置；按钮、输入框和滚动条保留原有操作，正文使用滚轮或滚动条滚动，关闭设置不会退出桌宠。
 - 正常退出后保存窗口位置，下次启动恢复；普通与开发模式分别记录，窗口尺寸保持不变。屏幕布局变化导致立绘不可见时回到默认位置（原生 Wayland 由合成器管理位置）。
 - X11/XWayland 下透明空白区域可点击穿透；立绘按当前帧轮廓接收鼠标，侧栏、输入框和打开的窗口保留交互。
 
@@ -205,6 +205,7 @@ cargo test --release --locked frame_sampling_performance -- --ignored --nocaptur
 活动 Linux 桌面可进一步执行（会移动鼠标，需要 libX11 和 libXtst）：
 
 ```bash
+python3 scripts/settings-smoke.py target/release/lexington
 python3 scripts/native-smoke.py target/release/lexington /tmp/lexington-drag.png drag
 python3 scripts/native-smoke.py target/release/lexington /tmp/lexington-edges.png drag-edges --production
 python3 scripts/native-smoke.py target/release/lexington /tmp/lexington-position.png position --production
@@ -214,7 +215,9 @@ python3 scripts/native-smoke.py target/release/lexington /tmp/lexington-input.pn
 python3 scripts/native-smoke.py target/release/lexington /tmp/lexington-production.png idle --production
 ```
 
-脚本验证窗口尺寸、置顶、隐藏任务栏和窗口切换器；`drag` 还断言 5px 阈值、精确位移、反向移动、离开初始命中区域和拖动后尺寸。`click-through` 检查透明空白处将点击传给真实底层窗口，立绘与侧栏仍接收点击。`drag-edges` 从可见立绘按下并检查四角、贴边释放与拖回，透明窗体允许部分出屏且保持尺寸。`position` 模式拖动后正常关闭并再次启动，检查位置及尺寸恢复。`pin` 模式切换侧栏显示模式，配合独立 `XDG_DATA_HOME` 可验证重启后的保存结果（Linux 状态文件为 `$XDG_DATA_HOME/lexington/app.ron`，默认位于 `~/.local/share/lexington/`）。测试宜使用 Xephyr + 窗口管理器等独立 X11 桌面，避免影响工作桌面。
+`settings-smoke.py` 使用临时资源根目录（默认粉色宠物）和配置，不连接 Codex；检查标题栏/正文空白拖动、按住按钮后移出不拖窗、失焦/重开、1×/1.5× 缩放和开关仍可点击。请优先在隔离 X11 显示中运行，避免将测试默认形象误认为桌面安装版。
+
+`native-smoke.py` 验证窗口尺寸、置顶、隐藏任务栏和窗口切换器；`drag` 还断言 5px 阈值、精确位移、反向移动、离开初始命中区域和拖动后尺寸。`click-through` 检查透明空白处将点击传给真实底层窗口，立绘与侧栏仍接收点击。`drag-edges` 从可见立绘按下并检查四角、贴边释放与拖回，透明窗体允许部分出屏且保持尺寸。`position` 模式拖动后正常关闭并再次启动，检查位置及尺寸恢复。`pin` 模式切换侧栏显示模式，配合独立 `XDG_DATA_HOME` 可验证重启后的保存结果（Linux 状态文件为 `$XDG_DATA_HOME/lexington/app.ron`，默认位于 `~/.local/share/lexington/`）。测试宜使用 Xephyr + 窗口管理器等独立 X11 桌面，避免影响工作桌面。
 
 已在 Linux X11 独立桌面验证上述窗口行为、500×500 普通窗口、800×600 开发窗口和侧栏状态保存，并对照原 Vue 渲染检查立绘、气泡、输入框和默认宠物。
 

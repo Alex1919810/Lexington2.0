@@ -20,6 +20,8 @@ impl Pet {
             self.connection_error.clear();
             self.settings_viewport_open = false;
             self.settings_drag = None;
+            self.settings_pointer_down = false;
+            self.settings_drag_active = false;
             return;
         }
         let id = egui::ViewportId::from_hash_of("lexington-settings");
@@ -112,6 +114,15 @@ impl Pet {
                             .inner_margin(12),
                     )
                     .show(settings, |ui| {
+                        // Register behind the controls so only unused body space
+                        // starts a drag; buttons, editors and scrollbars win hit testing.
+                        let background = ui.interact(
+                            ui.max_rect(),
+                            ui.id().with("settings-body-drag"),
+                            egui::Sense::click_and_drag(),
+                        );
+                        let mut title_rect = egui::Rect::NOTHING;
+                        let mut title_drag_started = false;
                         ui.horizontal(|ui| {
                             let (rect, response) = ui.allocate_exact_size(
                                 vec2(ui.available_width() - 36., 28.),
@@ -124,42 +135,93 @@ impl Pet {
                                 egui::FontId::proportional(16.),
                                 ui.visuals().text_color(),
                             );
-                            #[cfg(target_os = "linux")]
-                            let native_pointer = self
-                                .drag_window
-                                .as_ref()
-                                .and_then(|w| w.screen_pointer(settings.pixels_per_point()));
-                            #[cfg(not(target_os = "linux"))]
-                            let native_pointer: Option<(
-                                egui::Pos2,
-                                bool,
-                            )> = None;
-                            if let Some((pointer, down)) = native_pointer {
-                                if !down {
-                                    self.settings_drag = None;
-                                } else if self.settings_drag.is_none()
-                                    && response.is_pointer_button_down_on()
-                                    && let Some(position) =
-                                        settings.input(|i| i.viewport().outer_rect.map(|r| r.min))
-                                {
-                                    self.settings_drag = Some((pointer, position));
-                                }
-                                if let Some((press, origin)) = self.settings_drag {
-                                    settings.send_viewport_cmd(
-                                        egui::ViewportCommand::OuterPosition(
-                                            origin + (pointer - press),
-                                        ),
-                                    );
-                                }
-                            } else if response.drag_started() {
-                                settings.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                            }
+                            title_rect = rect;
+                            title_drag_started = response.drag_started();
                             if ui.add_sized([28., 28.], egui::Button::new("×")).clicked() {
                                 open = false;
                             }
                         });
                         ui.add_space(8.);
                         actions = self.settings_contents(ui);
+                        let body_pressed = if settings.input(|i| i.pointer.primary_pressed()) {
+                            // A background drag can share the press with a button
+                            // (like a scroll area). Reject interactive children
+                            // for the whole gesture, even after leaving the control.
+                            let hits = settings.interaction_snapshot(|state| {
+                                state.contains_pointer.iter().copied().collect::<Vec<_>>()
+                            });
+                            background.is_pointer_button_down_on()
+                                && !hits
+                                    .into_iter()
+                                    .filter(|id| *id != background.id)
+                                    .filter_map(|id| settings.read_response(id))
+                                    .any(|response| {
+                                        response.sense.senses_click()
+                                            || response.sense.senses_drag()
+                                    })
+                        } else {
+                            false
+                        };
+                        #[cfg(target_os = "linux")]
+                        if let Some(window) = &self.drag_window
+                            && let Some((pointer, down)) =
+                                window.screen_pointer(settings.pixels_per_point())
+                        {
+                            let was_active = self.settings_drag_active;
+                            if !down {
+                                self.settings_drag = None;
+                                self.settings_drag_active = false;
+                            } else if !self.settings_pointer_down {
+                                self.settings_drag = window
+                                    .window_at_pointer(
+                                        "Lexington 设置",
+                                        settings.pixels_per_point(),
+                                    )
+                                    .map(|(native, origin)| (pointer, origin, native));
+                                self.settings_drag_active =
+                                    self.settings_drag.is_some_and(|(_, origin, _)| {
+                                        title_rect.contains(egui::Pos2::ZERO + (pointer - origin))
+                                    });
+                            }
+                            // X11 polling may see the press one UI frame before
+                            // egui receives it. Retain its native anchor while
+                            // waiting for background hit testing to approve it.
+                            if down && body_pressed {
+                                self.settings_drag_active = self.settings_drag.is_some();
+                            }
+                            if self.settings_drag_active && !was_active {
+                                settings.send_viewport_cmd(egui::ViewportCommand::Focus);
+                            }
+                            self.settings_pointer_down = down;
+                            if self.settings_drag_active
+                                && let Some((press, origin, native)) = self.settings_drag
+                            {
+                                let position = origin + (pointer - press);
+                                // Use the same WM request as the pet. Mutter may
+                                // ignore direct ConfigureWindow on managed Docks.
+                                window.move_window(native, position, settings.pixels_per_point());
+                            }
+                        } else {
+                            if settings.input(|i| i.pointer.primary_pressed()) {
+                                self.settings_drag_active = body_pressed;
+                            }
+                            if title_drag_started
+                                || (self.settings_drag_active && background.drag_started())
+                            {
+                                settings.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                            }
+                        }
+                        #[cfg(not(target_os = "linux"))]
+                        {
+                            if settings.input(|i| i.pointer.primary_pressed()) {
+                                self.settings_drag_active = body_pressed;
+                            }
+                            if title_drag_started
+                                || (self.settings_drag_active && background.drag_started())
+                            {
+                                settings.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                            }
+                        }
                     });
             }
         });
@@ -169,6 +231,8 @@ impl Pet {
             self.connection_error.clear();
             self.settings_viewport_open = false;
             self.settings_drag = None;
+            self.settings_pointer_down = false;
+            self.settings_drag_active = false;
             ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Close);
         }
         if let Some(no_approval) = actions.no_approval {
@@ -258,6 +322,7 @@ impl Pet {
                 |ui| {
                     egui::ScrollArea::vertical()
                         .id_salt("settings-content")
+                        .drag_to_scroll(false)
                         .max_height(326.)
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());

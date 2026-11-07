@@ -96,6 +96,7 @@ pub struct DragWindow {
     window: u32,
     root: u32,
     move_atom: u32,
+    window_manager: bool,
     drag: Option<DragAnchor>,
     input_shape: Vec<x11rb::protocol::xproto::Rectangle>,
     shape_available: bool,
@@ -118,6 +119,28 @@ impl DragWindow {
             .reply()
             .ok()?
             .atom;
+        let window_manager = connection
+            .intern_atom(false, b"_NET_SUPPORTING_WM_CHECK")
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .and_then(|atom| {
+                connection
+                    .get_property(
+                        false,
+                        root,
+                        atom.atom,
+                        x11rb::protocol::xproto::AtomEnum::WINDOW,
+                        0,
+                        1,
+                    )
+                    .ok()
+            })
+            .and_then(|cookie| cookie.reply().ok())
+            .is_some_and(|reply| {
+                reply
+                    .value32()
+                    .is_some_and(|mut values| values.next().is_some())
+            });
         use x11rb::protocol::shape::ConnectionExt as _;
         let shape_available = connection
             .shape_query_version()
@@ -129,6 +152,7 @@ impl DragWindow {
             window,
             root,
             move_atom,
+            window_manager,
             drag: None,
             input_shape: Vec::new(),
             shape_available,
@@ -166,6 +190,110 @@ impl DragWindow {
                 pointer.mask.contains(KeyButMask::BUTTON1),
             )
         })
+    }
+    /// Resolve the actual native child under a new press, rather than relying
+    /// on egui's local pointer/outer-rectangle cache after moving a viewport.
+    pub fn window_at_pointer(
+        &self,
+        title: &str,
+        pixels_per_point: f32,
+    ) -> Option<(u32, eframe::egui::Pos2)> {
+        use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
+        let name = self
+            .connection
+            .intern_atom(false, b"_NET_WM_NAME")
+            .ok()?
+            .reply()
+            .ok()?
+            .atom;
+        let pid = self
+            .connection
+            .intern_atom(false, b"_NET_WM_PID")
+            .ok()?
+            .reply()
+            .ok()?
+            .atom;
+        let mut window = self.root;
+        for _ in 0..8 {
+            window = self
+                .connection
+                .query_pointer(window)
+                .ok()?
+                .reply()
+                .ok()?
+                .child;
+            if window == x11rb::NONE {
+                return None;
+            }
+            let owner = self
+                .connection
+                .get_property(false, window, pid, AtomEnum::CARDINAL, 0, 1)
+                .ok()?
+                .reply()
+                .ok()?;
+            if owner.value32().and_then(|mut values| values.next()) != Some(std::process::id()) {
+                continue;
+            }
+            let value = self
+                .connection
+                .get_property(false, window, name, AtomEnum::ANY, 0, 256)
+                .ok()?
+                .reply()
+                .ok()?;
+            if value.value != title.as_bytes() {
+                continue;
+            }
+            let position = self
+                .connection
+                .translate_coordinates(window, self.root, 0, 0)
+                .ok()?
+                .reply()
+                .ok()?;
+            return Some((
+                window,
+                eframe::egui::pos2(f32::from(position.dst_x), f32::from(position.dst_y))
+                    / pixels_per_point,
+            ));
+        }
+        None
+    }
+    pub fn move_window(&self, window: u32, position: eframe::egui::Pos2, pixels_per_point: f32) {
+        use x11rb::protocol::xproto::{ClientMessageEvent, ConnectionExt, EventMask};
+        let position = position * pixels_per_point;
+        if !self.window_manager {
+            // A bare X server has no WM to consume the EWMH message.
+            if let Ok(cookie) = self.connection.configure_window(
+                window,
+                &x11rb::protocol::xproto::ConfigureWindowAux::new()
+                    .x(position.x.round() as i32)
+                    .y(position.y.round() as i32),
+            ) {
+                let _ = cookie.check();
+            }
+            return;
+        }
+        let event = ClientMessageEvent::new(
+            32,
+            window,
+            self.move_atom,
+            [
+                1 | (1 << 8) | (1 << 9) | (1 << 12),
+                position.x.round() as i32 as u32,
+                position.y.round() as i32 as u32,
+                0,
+                0,
+            ],
+        );
+        // A checked request is necessary when the connection may be dropped
+        // immediately after closing this child viewport.
+        if let Ok(cookie) = self.connection.send_event(
+            false,
+            self.root,
+            EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+            event,
+        ) {
+            let _ = cookie.check();
+        }
     }
     pub fn position(&self, pixels_per_point: f32) -> Option<eframe::egui::Pos2> {
         use x11rb::protocol::xproto::ConnectionExt;
