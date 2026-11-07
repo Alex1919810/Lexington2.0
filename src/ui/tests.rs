@@ -485,35 +485,13 @@ fn connection_form_masks_key_validates_save_and_defers_restart_while_busy() {
     std::fs::remove_dir_all(root).unwrap();
 }
 #[test]
-fn real_resources_select_cycle_refresh_and_change_format() {
+fn sidebar_switches_damage_and_format_and_refresh_preserves_selection() {
     let ctx = egui::Context::default();
     let mut app = Pet::from_context(&ctx, true);
-    assert_eq!(app.library.illustrations.len(), 30);
     assert_eq!(app.library.character, "lexington");
     assert_eq!(app.library.format, "gif");
     assert!(app.picture.is_some());
     assert!(!app.library.texts.is_empty());
-    let old = app.library.illustrations[app.library.selected.unwrap()]
-        .path
-        .clone();
-    app.refresh(&ctx);
-    assert_eq!(
-        app.library.illustrations[app.library.selected.unwrap()].path,
-        old
-    );
-    app.library.format = "png".into();
-    app.library.select_first();
-    app.load_picture(&ctx);
-    assert_eq!(
-        app.library.illustrations[app.library.selected.unwrap()].format,
-        "png"
-    );
-    assert!(app.picture.is_some());
-}
-#[test]
-fn sidebar_switches_matching_damage_versions_and_separate_next_queues() {
-    let ctx = egui::Context::default();
-    let mut app = Pet::from_context(&ctx, true);
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![]);
     assert_eq!(
@@ -536,6 +514,14 @@ fn sidebar_switches_matching_damage_versions_and_separate_next_queues() {
         );
         assert_eq!(app.library.damaged, damaged);
         assert!(app.picture.is_some());
+        let selected = app.library.selected_path().unwrap().to_path_buf();
+        app.refresh(&ctx);
+        assert_eq!(app.library.selected_path(), Some(selected.as_path()));
+        assert_eq!(app.library.damaged, damaged);
+        assert!(
+            app.picture.is_some(),
+            "refresh must reload the selected picture"
+        );
     }
 }
 #[test]

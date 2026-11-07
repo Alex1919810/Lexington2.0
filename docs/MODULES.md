@@ -8,6 +8,7 @@
 src/
 ├── main.rs
 ├── ui/
+│   ├── AGENTS.md
 │   ├── mod.rs
 │   ├── alarm.rs
 │   ├── app.rs
@@ -22,6 +23,7 @@ src/
 │   ├── style.rs
 │   └── tests.rs
 ├── backend/
+│   ├── AGENTS.md
 │   ├── mod.rs
 │   ├── alarm.rs
 │   ├── config.rs
@@ -32,6 +34,7 @@ src/
 │   ├── handoff.rs
 │   └── clock.rs
 └── tools/
+    ├── AGENTS.md
     ├── mod.rs
     ├── paths.rs
     ├── activity.rs
@@ -53,6 +56,7 @@ integrations/
     ├── send.py
     └── lexington_menu.py
 scripts/
+├── AGENTS.md
 ├── install-linux.sh
 ├── install-dependencies.sh
 ├── dependencies.py
@@ -90,7 +94,7 @@ docs/
 | `ui/input.rs` | `submit` 仅发送输入原文（裁首尾空白，不拼接路径或来源）发起输入框聊天，`poll_handoff` 从 Inbox 顺序直接发送外部上下文，二者通过 `send_message` 复用发送状态；`input_ui` 管理输入框位置、焦点、悬停、加载动画（文案固定为“Lexington正在思考”）、错误展示、Enter 与 Escape | 提交给启动时创建的 Codex Client，每次提交附带当前 `noApproval` 值；外部请求不填输入框、不改焦点、保留草稿，不中断忙碌任务，立即提交失败通过气泡提示；不重复提交；Escape 中断正在进行的任务，空闲时清空输入/错误。后台回调只请求重绘，结果由 `ui/codex.rs` 接收。Enter 同时检查 `has_focus`/`lost_focus`；启动不抢焦点，占位色固定 #999；鼠标进入共同变换后的 450×450 立绘容器或输入区域时显示，输入焦点或生成中保持显示；离开悬停且失焦后淡出并移除输入区域，草稿和错误仅保留内容，不强制显示；原生失焦显式清除 TextEdit 焦点 ID；隐藏时不占据原生输入区域，alpha 大于 0.01 才加入。X11 下通过平台读取窗口局部指针发现悬停，失败回退 egui 指针，恢复输入框显示，不依赖透明处收不到的鼠标移动事件，也不抢焦点 |
 | `ui/assets.rs` | `Picture::load/size/texture` 将解码像素上传到 GPU，复用纹理并更新动画帧；`opaque_regions` 保存当前合成帧的归一化 alpha 覆盖条带（最多 256×256 网格，按格内最大 alpha ≥ 8 判断，逐格扫描命中即停止，使用 ceil 反推像素边界以等价保留非整除尺寸细节，不额外常驻 RGBA 帧）；`icons` 加载内置侧栏图标；保留 GIF 抽帧后的像素、循环、跳过帧的局部处置、输入遮罩随显示帧透明度更新、非整除尺寸 alpha 覆盖等价性及纹理复用回归测试 | 调用 `tools::gif::Decoder`，读取当前 RgbaImage 并保持只读；颜色转换和 alpha 区域计算仍在 UI 层，不实现循环策略；立绘/背景使用线性 mipmap。字体和图标的 `include_bytes!` 路径相对 `src/ui/` |
 | `ui/style.rs` | `install` 注册字体和浅色主题；`font`、`bubble_tail`、`draw_bubble`、`draw_shadow` 提供共同绘制规则 | 使用 egui 与 `Picture`；CJK TTC 使用简体中文 face index 2；对话尾尖距左边 28px，输入尾尖居中。气泡 Area 的溢出策略由对话/输入组件保持 `constrain(false)` |
-| `ui/tests.rs` | 使用真实 egui 指针和键盘事件验证组件协作：侧栏、正常/战损对应切换、下一张的状态隔离、跨格式保留服装、角色与格式、对话、打卡、输入、外部请求在任务中排队/同一会话多轮/来源路径和行号保留/完成不覆盖草稿、普通/开发窗口悬停立绘唤出输入、点击聚焦输入、原生失焦后草稿/错误隐藏且内容保留、再悬停恢复及生成中显示、Codex 流式回复/失败、配置热加载/错误保留/忙碌延迟重建、设置开关点击/持久化/同会话连续切换、API 表单本机夹具自动填充/读取不落盘/继承保存不复制凭据和模型/滚动保存/密码遮蔽及按住显示与松开或失焦隐藏/非法地址拒绝/成功保存及忙碌延迟重连、空白背景/隐藏输入框不命中与关闭窗口输入区域立即清理、右键菜单关闭项在立绘外持续接收原生输入并触发退出、自动打卡提示撤销、时间编辑、自动开关持久化和热加载、闹钟表单校验、编辑/保存、启停/删除、弹窗外点击不消失和确认持久化、位置保存/恢复/开发模式隔离/无效或越界位置回退及中文排版；直接调用 `refresh` 验证资源重载恢复 | 使用模拟 Codex 子进程和临时配置，不访问真实模型或凭据；GIF 和几何专项测试靠近各自 UI 实现 |
+| `ui/tests.rs` | 使用真实 egui 指针和键盘事件验证组件协作：侧栏、正常/战损对应切换、下一张的状态隔离、跨格式保留服装、角色与格式、对话、打卡、输入、外部请求在任务中排队/同一会话多轮/来源路径和行号保留/完成不覆盖草稿、普通/开发窗口悬停立绘唤出输入、点击聚焦输入、原生失焦后草稿/错误隐藏且内容保留、再悬停恢复及生成中显示、Codex 流式回复/失败、配置热加载/错误保留/忙碌延迟重建、设置开关点击/持久化/同会话连续切换、API 表单本机夹具自动填充/读取不落盘/继承保存不复制凭据和模型/滚动保存/密码遮蔽及按住显示与松开或失焦隐藏/非法地址拒绝/成功保存及忙碌延迟重连、空白背景/隐藏输入框不命中与关闭窗口输入区域立即清理、右键菜单关闭项在立绘外持续接收原生输入并触发退出、自动打卡提示撤销、时间编辑、自动开关持久化和热加载、闹钟表单校验、编辑/保存、启停/删除、弹窗外点击不消失和确认持久化、位置保存/恢复/开发模式隔离/无效或越界位置回退及中文排版；侧栏资源用例统一验证图片加载、格式/正常战损切换，并在每次切换后调用 `refresh` 验证路径、状态和图片加载保留；资源数量与配对完整性统一由 backend/character.rs 检查 | 使用模拟 Codex 子进程和临时配置，不访问真实模型或凭据；GIF 和几何专项测试靠近各自 UI 实现 |
 
 ## 后端功能
 
@@ -132,9 +136,11 @@ docs/
 
 ## 新代码放置与文档维护
 
+根 [AGENTS.md](../AGENTS.md) 维护全项目约束；目录规则分别位于 [后端](../src/backend/AGENTS.md)、[界面](../src/ui/AGENTS.md)、[工具](../src/tools/AGENTS.md)、[脚本](../scripts/AGENTS.md)。跨目录任务读取相关规则，模块知识在对应目录维护。
+
 - 视觉、输入、焦点、纹理及窗口界面编排放入 UI；配置、资源选择、计时及 Codex 会话业务规则放入后端；不涉及业务的路径、解码及平台适配放入工具。
 - 新增功能优先扩展所属模块，相关逻辑保持内聚；不要仅因代码只用一次就抽取新的辅助函数或文件。
-- 后续任何代码文件改动，须同步检查并更新本文件对应的职责、接口、依赖、行为或约束；新增、删除、移动、重命名文件同时更新目录树。只改内部实现时，也应维护受影响的行为或约束说明。要求同时记录于项目 `AGENTS.md`。
+- 后续任何代码文件改动，须同步检查并更新本文件对应的职责、接口、依赖、行为或约束；新增、删除、移动、重命名文件同时更新目录树。只改内部实现时，也应维护受影响的行为或约束说明。工作规则由根及对应目录 `AGENTS.md` 分层维护；新增可复用知识写入最接近所属模块的 AGENTS.md，仅跨模块通用规则写入根文件，更新前阅读并合并去重，无新增知识不必添加。
 - 安装、打包及原生验证脚本仍放在 `scripts/`；原资源布局和配置格式不随 Rust 模块拆分改变。
 
 ## 测试夹具
@@ -143,13 +149,45 @@ docs/
 
 ## 验证入口
 
+默认只运行本次增量及受影响模块/直接依赖链路的测试；仅用户明确要求时运行全量测试。模块或用例过滤器必须按改动选择，以下为入口示例，不要求逐条执行；纯文档改动只检查内容、链接和差异。Rust 改动仍运行格式检查及 Clippy。
+
 ```bash
 cargo fmt --check
-cargo test --locked
+cargo test --locked backend::codex::tests::  # 示例：仅 Codex 后端测试
+cargo test --locked sidebar_switches_damage_and_format_and_refresh_preserves_selection  # 示例：单用例
 cargo clippy --locked --all-targets -- -D warnings
-cargo run --locked -- --dev --screenshot /tmp/lexington.png
+cargo run --locked -- --dev --screenshot /tmp/lexington.png  # 涉及真实渲染时
 ```
+
+不带过滤器的 `cargo test --locked` 仅在用户明确要求全量测试时使用。专项 smoke、GIF 参考像素及性能测试按改动影响选择，受影响检查通过且无新问题后不重复运行。
 
 `scripts/settings-smoke.py` 在临时配置/资源根目录下验证设置标题栏和正文空白拖动、按钮手势不拖窗、独立设置不移动桌宠、关闭/重开和失焦、开关点击、1×/1.5× DPI；不调用真实模型，显示默认粉色宠物，宜在隔离显示中运行，退出恢复指针并回收测试进程。
 
-`scripts/native-smoke.py` 验证原生窗口尺寸、层级、拖动与交互；`position` 拖动后正常关闭并再次启动，断言位置精确恢复、透明边距可出屏及尺寸不变；`click-through` 创建真实底层窗口验证透明空白点击传递、立绘及侧栏保留点击；`drag-edges` 用真实指针逐步拖动可见立绘抓取点到四角，断言透明边距出屏、释放不回弹、重新按下拖回和尺寸保持；失败清理时也释放鼠标按钮。涉及窗口、缩放或拖动的改动还应在隔离 X11 桌面运行该脚本；可用模式和环境要求见 README 与 AGENTS.md。
+`scripts/native-smoke.py` 验证原生窗口尺寸、层级、拖动与交互；`position` 拖动后正常关闭并再次启动，断言位置精确恢复、透明边距可出屏及尺寸不变；`click-through` 创建真实底层窗口验证透明空白点击传递、立绘及侧栏保留点击；`drag-edges` 用真实指针逐步拖动可见立绘抓取点到四角，断言透明边距出屏、释放不回弹、重新按下拖回和尺寸保持；失败清理时也释放鼠标按钮。涉及窗口、缩放或拖动的改动还应在隔离 X11 桌面运行该脚本；可用模式、环境要求和调用方式见下文。
+
+
+### 原生与集成专项验证
+
+以下入口仅选择与改动直接相关的脚本/模式。
+
+```bash
+python3 scripts/native-smoke.py target/release/lexington /tmp/lexington.png drag
+python3 scripts/settings-smoke.py target/release/lexington
+python3 scripts/context-smoke.py target/release/lexington
+node scripts/test-integrations.js
+python3 scripts/test-dependencies.py
+```
+
+- native-smoke 模式为 `drag`、`drag-edges`、`click-through`、`position`、`clock`、`input`、`pin`、`idle`，`--production` 验证普通尺寸。需要 libX11/libXtst，优先 Xephyr + 窗口管理器隔离，同一 display 的指针测试必须串行；脚本移动并恢复鼠标。GIF 画布中心可能透明，拖动须从可见轮廓按下；验收包括阈值、精确位移、反向移动和尺寸保持，失败也须释放鼠标按钮。
+- 侧栏模式跨启动验证使用独立 `XDG_DATA_HOME`，两次正常退出后检查 `lexington/app.ron` 中的固定模式。
+- settings-smoke 用无资源临时根目录显示粉色测试形象，不代表安装资源丢失；覆盖 1×/1.5× DPI。集成和依赖脚本使用夹具，不调用模型或安装真实依赖；Node 仅是 JS 客户端测试的开发依赖。
+
+## 实现补充与兼容细节
+
+以下细节与模块表配合阅读，避免在项目操作规则中重复维护。
+
+- 配置：旧 `llm` 可加载但不再使用。模型提供方进程覆盖包含 `model`、`model_provider=lexington_api` 及 `model_providers.lexington_api.*`（base_url、wire_api=responses、env_key=LEXINGTON_MODEL_API_KEY、requires_openai_auth=false）；thread/start 返回所选模型/提供方，不支持仅有 Chat Completions 的服务。
+- UI：设置两栏为“常规 / 连接 / 打卡 / 闹钟”导航与分组滚动内容，说明用悬停提示；设置拖动在 primary_pressed 时取得 interaction_snapshot 命中 ID，再于锁外 read_response 排除其他 click/drag 控件，禁止锁内重入；无 WM 时直接 ConfigureWindow。气泡/输入局部坐标检查后再平移到窗口中心。字体组合为 Noto Sans CJK TTC 简体 face index 2、Liberation、Noto Sans Math；14px 中文字宽应接近 14px，不额外 FontTweak.scale 放大。
+- 立绘与 GIF：`Normal_Normal` 的服装名为 `Normal`；随包 GIF 7 对、PNG 8 对。现有 1024×1024、67 帧 GIF 索引约 67 MiB；完整 RGBA 全库缓存曾导致系统杀进程。LZ4 压缩 RGBA 本机解压慢于索引合成，不作为默认方案；性能测试不代表整程序 CPU/RSS，后者需另行采样。跳过 Keep/Any 帧均更新处置画布，UI 不额外保存合成帧副本。
+- 状态文件：打卡为 `$XDG_DATA_HOME/lexington/clock.json` / `clock-dev.json`（默认 `~/.local/share`），闹钟为同目录 `alarms.json` / `alarms-dev.json`，含 alarms/pending。Unix 本地时间使用 libc；打卡提醒后保留起点并立即保存已提醒状态，取消、撤销、午休和重启当天不再自动开始。
+- 安装：用 `xdg-user-dir DESKTOP`，桌面文件为 `Lexington.desktop`，迁移小写旧文件，菜单 ID 仍为 `lexington.desktop`；设可执行并尝试可信标记。缺 Rust 时安装最小稳定工具链；发布包 `install.sh` 仅安装运行依赖。Codex 原生包须保留 `bin/codex-code-mode-host`、`codex-resources`、`codex-path`、`codex-package.json` 完整布局后链接 `~/.local/bin/codex`；`--skip-optional` 可跳过可选系统包。

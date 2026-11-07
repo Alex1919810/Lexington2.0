@@ -177,13 +177,15 @@ Key 默认以密码形式显示，开启自定义 API 并保存后写入当前�
 | `integrations/` | VS Code、浏览器和 Nautilus 右键客户端 |
 | `scripts/` | Linux 安装、打包、右键集成生成/安装及原生验证 |
 
-完整目录、每个文件的职责、主要接口及依赖方向见 [模块职责说明](docs/MODULES.md)。后续代码变更须同步维护该文档，具体要求见 [AGENTS.md](AGENTS.md)。
+完整目录、每个文件的职责、主要接口及依赖方向见 [模块职责说明](docs/MODULES.md)。后续代码变更须同步维护该文档，具体要求见根 [AGENTS.md](AGENTS.md) 及 `src/backend/`、`src/ui/`、`src/tools/`、`scripts/` 下的目录规则。
 
 ## 验证
 
+默认只运行增量及受影响模块的测试，下面的入口按改动选择；只有用户明确要求时才执行不带过滤器的全量测试 `cargo test --locked`。纯文档改动只检查内容、链接和差异。
+
 ```bash
 cargo fmt --check
-cargo test --locked
+cargo test --locked backend::codex::tests::  # 示例：按受影响模块筛选
 cargo clippy --locked --all-targets -- -D warnings
 python3 scripts/context-smoke.py target/release/lexington
 node scripts/test-integrations.js  # 仅开发验证，主程序不依赖 Node

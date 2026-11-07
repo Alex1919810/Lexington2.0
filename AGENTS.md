@@ -1,53 +1,27 @@
 # 项目约定
 
-- 本项目采用纯 Rust 原生 GUI：eframe/egui + glow；禁止引入 Vue、Electron、Node、WebView 或 N-API 作为运行链。`Cargo.lock` 随代码保留。
-- 代码按三类组织：`src/ui/` 负责界面与交互，`src/backend/` 负责配置、资源、角色选择、打卡、闹钟、外部上下文和 Codex 会话，`src/tools/` 负责路径、图片/GIF 解码和平台窗口操作；`src/main.rs` 仅负责启动。具体模块职责、接口和依赖以 `docs/MODULES.md` 为准。
-- **后续任何代码文件改动，都必须同步检查并更新 `docs/MODULES.md` 中对应模块的职责、主要接口、依赖与约束；新增、删除、移动或重命名文件时同步更新目录结构。** 实现内部调整而职责不变时，也须同步补充或修正相关行为/约束说明，不能只修改代码而遗漏模块文档。README 的结构概览发生变化时也要同步。
-- 后端不依赖 egui/UI：`CharacterState` 管理资源选择与格式回退，`ClockState` 管理打卡状态；UI 根据后端选中的路径加载纹理。`codex::Client` 在后台管理 app-server stdio 与会话，标准库事件通道返回结果，回调仅唤醒 UI。`tools::gif::Decoder` 只产生 RGBA 像素并控制帧时序，`ui::assets::Picture` 持有并复用 GPU 纹理；平台适配是工具层中允许依赖 eframe 的边界。
-- 保持 `resource/` 目录结构和 `config/config.json` 的 camelCase 字段兼容。资源根目录按 `LEXINGTON_HOME`、可执行文件旁、当前目录依次寻找。安装升级须保留用户配置/API key；日志和测试结果不得泄露密钥。
-- Codex 协议兼容基线为 CLI 0.166.0，协议字段以该 CLI 生成的 JSON Schema 为准；升级 CLI 后须回归握手、真实流式回复与进程清理。Lexington 启动即运行 `codex app-server --stdio`，先 initialize/initialized 再 thread/start；同次运行复用一个 thread，退出/重启清理并回收子进程。Unix 必须将启动器放入独立进程组并整组终止（libc），关闭 stdin 后再等待读线程；npm CLI 可能派生真实服务，仅 kill 启动器会因后代持有 stdout 而退出卡住。默认继承本机 Codex 登录、模型和权限；配置 `codex.executable` / `workingDirectory`，相对目录基于资源根目录，默认资源根目录。桌面 PATH 缺少 codex 时查找 `~/.local/bin`、`~/.cargo/bin`；旧 `llm` 配置可加载但不再使用。
-- 配置由 UI 每 500ms 检查修改时间/长度，变化时热加载，使用 `Config::read` 区分错误并保留上次有效值，不能在热加载失败时调用默认回退覆盖现有设置。普通设置/审批模式保持当前 thread；程序路径、工作目录、模型或启用中的自定义 API 参数改变需重建连接，忙碌时等当前任务结束，避免中断任务或丢失审批。资源仍手动重载。
-- “设置 → 常规 → 无需审批”持久化为 `codex.noApproval`（默认 false），切换从下一次发送起生效，不重启会话、不改变当前任务或沙箱。`turn/start.approvalPolicy` 会影响后续轮次，必须缓存 thread/start 返回的原策略，开启显式传 never，关闭显式恢复原值（可能是字符串或 granular 对象），不能靠省略字段恢复。保存开关须保留未知配置/旧密钥，损坏 JSON 拒绝覆盖，同目录临时文件同步后原子替换。
-- Codex 通知可能先于 turn/start ACK 到达；须按 thread/turn 和启动请求 ID 关联，忽略旧 ACK，按 item ID 将流式增量与最终文本去重。连接 ACK 超时 30 秒，生成不限时。命令/文件审批与问题通过 UI 回复；文件改动从 item/started 缓存路径/diff，未知请求明确返回 -32601。测试用 `tests/fixtures/codex-server.py`，运行需 Python 3，不依赖真实模型或凭据。
-- 立绘仅按文件名最后的 `_Normal` / `_Damage` 后缀识别状态（ASCII 大小写不敏感），前面的完整服装名用于同角色、同格式配对；`Normal_Normal` 的服装名是 `Normal`，无后缀文件视为正常。侧栏 ↻ 切换对应正常/战损图，缺少配对时禁用；▶ 仅循环当前状态队列，默认正常。格式切换尽量保留服装和状态，资源回退优先保留状态。现有 GIF 为 7 对，PNG 为 8 对；原重载入口已移到“设置 → 常规 → 重新加载”。
-- 设置页使用独立原生 viewport（464×390、无边框、Dock/置顶），不能使用主窗内 egui::Window 限制拖动；两栏布局，左侧“常规 / 连接 / 打卡 / 闹钟”导航，右侧分组卡片与独立滚动区；保持简短标签，说明使用悬停提示，长路径截断并支持悬停查看及复制。原生设置通过自绘标题栏拖动和关闭，不复用桌宠 XShape；仅 Embedded 后端使用 Foreground egui::Window，否则侧栏会盖住导航；14px 正文/按钮字号仅局部应用。重启会话按钮忙碌时禁用，避免丢失任务和审批；设置操作仍在窗口回调结束后执行。
-- 自动计时按本地日期每天一次：默认活跃确认 180 秒（clockIn.confirmationSeconds 限制 30～600），起点回溯首次新操作；闲置满 60 秒、锁屏/非活动/远程会话、检测失败、采样断档超过 10 秒或时钟跳变均重置确认，确认终点须有新操作。clockIn.autoStart 默认 true，热加载改变开关/确认时长后重置候选；不追溯启动前的工作时间。
-- 系统活动采样在 tools/activity.rs 后台线程每 2 秒进行：loginctl 校验本地活动会话和 LockedHint，优先 gdbus 读取 Mutter IdleMonitor；原生 X11 可回退 XScreenSaver，Wayland 不得以 XWayland 空闲时钟替代全桌面活动。不读取键盘内容；不可用时保留手动入口，命令超时清理，退出回收线程。
-- 打卡记录独立保存在 $XDG_DATA_HOME/lexington/clock.json（默认 ~/.local/share），开发模式为 clock-dev.json；起点、当天已处理、已提醒状态立即原子保存，失败不提交内存状态，损坏文件不得覆盖。测试用临时路径；Pet::from_root 不启动监测、不加载用户打卡记录。取消、撤销、午休及重启不再自动开始，仍可手动打卡；次日本地日期重置。Unix 用 libc 转换本地时间，编辑当天 HH:MM 拒绝未来或 DST 不存在时间。提醒后保留起点并保存已提醒状态，重启不重复提醒。
-- 闹钟由 backend/alarm.rs 管理，ui/alarm.rs 提供设置和独立原生 viewport；状态位于 XDG 数据目录 alarms.json / alarms-dev.json，含 alarms 与 pending。到期先原子保存 pending 和下次时间/一次性停用状态；确认成功保存后才关闭，重启不丢未确认提醒或重复触发。每天按本地日历 mktime 计算，不能固定加 86400 秒跨 DST；停机/休眠错过每个补一次并推进到未来。提示语 1～500 字符，HH:MM 严格校验；损坏记录禁用操作且保留原文件。
-- 屏幕中央提醒必须使用独立 viewport，不能用主窗内 egui::Window（桌宠可能贴边/出屏）；X11 按 RandR 逻辑显示器居中，弹窗需 Dock 层加 AlwaysOnTop，普通 Normal 层即使置顶仍可能被桌宠 Dock 遮挡。弹窗创建后需等待映射并晚于桌宠启动置顶（当前 800ms）再一次性 Focus/AlwaysOnTop，否则桌宠会盖住提醒；弹窗不套用桌宠 XShape，确认按钮固定且长内容可滚动；show_viewport_immediate 仅主线程使用，测试/不支持多窗口的后端需提供 Embedded 分支。
-- 原版立绘组件为 450×450，侧栏按钮为 40×40、间隔 10；发布窗口 500×500，`--dev` 为 800×600。气泡按全文测高、21px 行高、最大高度限制；输入框沿用组件局部坐标边界检查后再平移到窗口中心。
-- GIF 不缓存合成 RGBA 帧，当前采用每两帧保留一帧（源帧 0、2、4…）；跳过帧的归一化延迟并入前一显示帧，奇数结尾保留，不跨循环合并，总时长不变、动画帧率约减半，分辨率与线性 mipmap 保留。每张当前 GIF 逐步缓存索引像素/调色板/元数据，96 MiB 上限，超限释放前缀后保持流式，切换/重载释放，不预加载全部资源。现有 1024×1024、67 帧 GIF 的索引约 67 MiB；不能全资源库缓存 RGBA，曾触发系统杀进程。无循环扩展的 Finite(0) 按无限，显式有限循环照常；原始帧低于 20ms 延迟先按 100ms 处理再合并。
-- GIF 抽帧不能简单丢弃局部帧：跳过 Keep/Any 仍须直接更新处置画布，Background 清帧区域，Previous 保留原画布；跳过帧不创建全尺寸 RGBA，也不触发 UI 纹理上传/透明遮罩重算。Decoder::load/advance 返回当前 RgbaImage；完整索引缓存循环清空画布且不重开源文件。解码变动须 release 对照 image 参考解码器，验证保留帧像素和合并延迟、首轮/缓存回放、奇数结尾、局部调色板/交错帧与各处置方法。frame_sampling_performance 比较同等循环的原帧率/抽帧取帧，整程序 CPU 和 RSS 另行采样；LZ4 压缩 RGBA 本机解压慢于索引合成，不作为默认方案。alpha 网格保留 ceil 边界反推、格内最大 alpha ≥8 和提前结束。
-- 图片启用线性 mipmap 过滤，避免高分辨率背景缩小后产生锯齿。字体采用 Noto Sans CJK TTC 的简体中文 face（index 2）、Liberation 和 Noto Sans Math；不要额外用 `FontTweak.scale` 按 ascent/descent 放大，14px 中文字宽应接近 14px。输入占位文字需显式指定 #999，避免系统主题改变颜色。
-- 450×450 容器的悬停缩放与浮动应同时作用于立绘、对话和输入层；侧栏独立。气泡 Area 禁用自动约束，避免 egui 自动移动原版允许溢出的输入框。对话尾尖距左边 28px，输入尾尖居中。
-- Linux 默认优先 X11/XWayland；原生 Wayland 用 `--wayland`，位置/层级由合成器控制。egui 的 taskbar 参数只支持 Windows，Linux 要设置 `_NET_WM_STATE_SKIP_TASKBAR`、`SKIP_PAGER`、`ABOVE`。窗口映射后再次请求 AlwaysOnTop，避免映射时序丢失置顶。Linux X11/XWayland 窗口类型必须使用 Dock（不设置 strut、不预留屏幕空间）；GNOME/Mutter 会将 Utility 窗口完整透明矩形约束在屏幕内，导致立绘中心无法到右下角。保留受窗口管理器管理的窗口；Dock 可能不自动聚焦，用户按下鼠标时才通过 X11 set_input_focus 获取键盘焦点，启动/悬停不得抢焦点；拖动仍通过屏幕绝对坐标及 `_NET_MOVERESIZE_WINDOW` 实现，允许透明边距出屏并保持窗口尺寸。
-- X11/XWayland 透明渲染不会自动鼠标穿透，须启用 x11rb `shape` 并设置 XShape Input（≥1.1），不能改变 Bounding/绘制区域或全窗 CursorPassthrough。每帧由 UI 收集当前立绘 alpha 轮廓与可见控件/菜单/窗口范围，DPI 换算、裁到 viewport 后提交，缓存相同遮罩；不能将全屏 pet Area/egui 历史区域加入。输入遮罩只保留当前帧的 ≤256×256 格最大 alpha 覆盖条带，不额外复制 RGBA 帧（Decoder 不保留合成帧缓存）。隐藏输入框不拦截，使用原生局部指针轮询发现悬停（透明处无 motion 事件），显示后加入输入区域；关闭设置/关于时立即清除范围，不保留 egui 淡出期的输入区域。原生 Wayland 尚无对应局部输入区域实现。
-- egui 0.31 的 `Response::context_menu` 在菜单保持打开时返回 `None`，不能用返回值收集原生输入区域；须在菜单绘制闭包内取当前 `ui.min_rect()` 并加 `Frame::menu(...).total_margin()`，仅在 `context_menu_opened()` 时提交，保证透明背景上的菜单项及边框可点击。回归须将“关闭”放在立绘之外，检查连续帧的输入覆盖及退出命令，单纯注入 egui 点击不足以验证原生穿透。
-- 设置标题栏及正文空白支持拖动，按钮/输入框/滚动条不能启动窗体拖动；正文禁用拖拽滚动，保留滚轮和滚动条。egui 可把背景 drag 与子按钮 click 同时分配，须在 primary_pressed 时检查 interaction_snapshot 的命中控件（取 ID 后再 read_response，不能在持锁闭包内重入），排除其他 click/drag 控件。X11 用 window_at_pointer 核对当前进程/窗口标题，捕获真实窗口位置与屏幕指针，通过 move_window 的 _NET_MOVERESIZE_WINDOW 移动（无 WM 时直接 ConfigureWindow）；不依赖缓存 outer_rect 或 Dock 的 StartDrag。原生查询可能先于 egui 按下事件一帧，需保留按下候选锚点再根据正文命中结果激活，不能仅在原生 down 上升沿检查 UI 响应；松开/关闭清除。其他平台/Wayland 使用 StartDrag。位置仅首次打开初始化，不能每帧 with_position 拉回；关闭设置只销毁子 viewport。
-- X11 临时连接的属性/消息请求在关闭连接前需 `.check()`，只 flush 可能丢失。拖动锚点在按下时查询 X11 原生屏幕指针及窗口位置计算偏移，不能使用移动后可能滞后的 egui 局部指针缓存（贴边释放后重新拖动会跳跃），阈值按 DPI 换算；不能等跨过阈值再取初始位置，也不能累加窗口局部指针差值。
-- 保持 eframe `persist_window=false` 和禁用 egui 区域缓存，`window` 旧字段置空；用 eframe Storage 独立保存 `windowPosition` / `devWindowPosition`（JSON `[x,y]`、逻辑屏幕坐标），普通/开发模式互不覆盖，只恢复位置，尺寸仍固定 500×500 / 800×600。X11 保存时查询原生窗口屏幕位置，避免拖动后缓存滞后；按当前 DPI 换算。启动用 RandR 活动显示器（含负坐标，失败回退根窗口尺寸）校验当前可见立绘范围至少 24×24 在任一屏内，透明边距出屏保留；损坏/非有限值或旧屏幕已不可见时回到主屏默认位置。Wayland 位置仍由合成器管理。
-- 聊天等待提示固定使用“Lexington正在思考”，忙碌提示同样使用 Lexington 名称；底层 Codex 协议命名保持原样。
-- 输入框在鼠标进入共同变换后的 450×450 立绘容器或输入区域时显示，输入焦点或生成中保持可见；鼠标移开且失焦后淡出，草稿和错误保留在内存，不能作为强制显示条件，避免只能悬停不可见输入框才显示。X11 继续原生指针轮询，失败回退 egui 指针；只将可见输入框加入输入区域，不因悬停容器阻拦透明空白点击。原生窗口失焦时显式 surrender_focus，避免 egui 残留 TextEdit ID 导致常显；回归覆盖普通/开发窗口、点击聚焦、草稿/错误隐藏后再悬停恢复及生成中可见。
-- 原生单行 TextEdit 按 Enter 会失焦，提交判断必须同时考虑 `has_focus()` 与 `lost_focus()`。不要启动时主动聚焦输入框。
-- 侧栏点击须阻止本帧对话的“外部点击关闭”，否则已打开对话时取消打卡会立即清掉新消息。Codex 交互测试使用临时配置/Python 3 模拟子进程，不能依赖用户真实登录或调用模型。
-- eframe 截图事件在 context input 读锁之外发 viewport 命令；锁内发送 Close 会导致退出卡住。截图的 Color32 是预乘 alpha，导出 PNG 需 `to_srgba_unmultiplied()`。
-- 验证：`cargo fmt --check`、`cargo test --locked`、`cargo clippy --locked --all-targets -- -D warnings`。测试包含现有 30 张立绘、UI 指针/键盘事件、模拟 Codex 协议、计时、GIF 元数据。`cargo run -- --dev --screenshot /tmp/lexington.png` 验证真实渲染。
-- `python3 scripts/native-smoke.py target/release/lexington /tmp/lexington.png drag` 验证置顶/隐藏任务栏和精确拖动；模式还包括 `drag-edges`、`click-through`、`position`、`clock`、`input`、`pin`、`idle`，`--production` 验证普通尺寸。脚本需 libX11/libXtst，会移动鼠标并恢复位置，宜用 Xephyr + 窗口管理器隔离测试，同一 display 的指针测试必须串行；随包 GIF 的画布中心可能透明，原生拖动测试须从可见轮廓按下。拖动验收需核对阈值、精确位移、反向移动和尺寸；`click-through` 用真实底层窗口检查透明处点击传递且立绘/侧栏不穿透；`drag-edges` 还检查可见立绘抓取点到四角、透明窗体部分出屏、贴边释放不回弹和重新拖回，脚本失败也须释放鼠标按钮。`position` 拖动后正常关闭并重启，核对屏幕边缘位置和尺寸；侧栏跨启动验证使用独立 `XDG_DATA_HOME`，检查两次退出后 `lexington/app.ron` 中的固定模式。
-- `python3 scripts/settings-smoke.py target/release/lexington` 验证标题栏/正文拖动、控件不拖窗、失焦/重开与 1×/1.5× DPI。它使用无资源的临时根目录显示粉色测试形象，不代表安装版资源丢失；优先放在 Xephyr 隔离显示中运行。
-- 打包：`bash scripts/package.sh`；用户级安装：`bash scripts/install-linux.sh`，菜单和桌面快捷方式显示名固定为 `Lexington`，桌面文件固定为 `Lexington.desktop`。安装时迁移旧 `lexington.desktop`，避免重复；菜单 ID 保持 `lexington.desktop`。使用 `xdg-user-dir DESKTOP`，设置可执行权限并尝试标记可信。
-- **每次完成项目修改后，必须构建最新 release 版本并同步更新桌面安装版，不能只修改源码或生成构建产物。** 运行 `bash scripts/install-linux.sh` 完成 `cargo build --release --locked` 和用户级安装，保留已有配置/API key；核对安装二进制与 `target/release/lexington` 一致，桌面 `Lexington` 快捷方式指向该安装版。若旧实例仍在运行，需安全重启为新版本并验证。该构建/安装流程已获用户持续授权，无需每次再询问；Git 提交和推送仍须单独明确授权。
-- 未经用户明确授权，不执行 git commit 或 git push。代码任务结束前将新增且验证过的项目知识合并进本文件，避免记录临时进度。
+- 本项目采用纯 Rust 原生 GUI：eframe/egui + glow；禁止引入 Vue、Electron、Node、WebView 或 N-API 作为运行链。`Cargo.lock` 随代码保留；集成客户端的 JS 仅在各自应用宿主内运行。
+- `src/ui/` 负责界面与交互，`src/backend/` 负责业务和 Codex 会话，`src/tools/` 负责路径、解码和平台适配，`src/main.rs` 仅负责启动。后端不依赖 UI/egui；解码器只产出像素，UI 持有 GPU 纹理；仅平台工具允许依赖 eframe。模块职责、接口及实现细节以 [docs/MODULES.md](docs/MODULES.md) 为准，修改相关模块前阅读对应条目及适用目录的 AGENTS.md。
+- **任何代码文件改动都必须同步检查并更新 `docs/MODULES.md` 对应职责、接口、依赖、行为或约束；仅调整内部实现也不能遗漏。** 文件增删、移动或重命名须同步目录树；README 结构概览变化时同步更新。代码任务结束前将新增且验证过的可复用知识写入最接近所属模块的 AGENTS.md，不要求写入根文件；只有跨模块通用规则写入根 AGENTS.md。更新前阅读目标文件并合并去重，无新增知识无需添加，不记录临时进度；实现细节和测试场景清单写入模块文档。
+- 未经用户明确授权，不执行 `git commit` 或 `git push`；提交与推送分别授权。每次推送前检查远端是否已有目标分支，一般推送授权不包含创建远端新分支。未经明确允许，不修改 makefile（含大小写变体）或 `include/` 下子模块头文件。
+- 保持 `resource/` 布局和 `config/config.json` 的 camelCase 兼容。资源根按 `LEXINGTON_HOME` → 可执行文件旁 → 当前目录寻找。安装保留已有配置、密钥和登录；日志、Debug、错误及测试结果不得泄露凭据。
 
-- 外部右键统一命名“看看Lexington怎么说”：文件管理器发送本地绝对路径，VS Code 发送选区/路径/起始行，浏览器发送选区/page 或 frame URL，file URL 才转真实路径；未保存与远程文档明确来源，不伪造本机路径。各应用内部菜单需各自扩展，Nautilus 脚本为默认可用入口，顶层菜单需系统 python3-nautilus（Nautilus 4.0）；Firefox 正式持久安装需签名，Snap/Flatpak Native Messaging 须单独实测，不能宣称任意软件全局菜单或默认浏览器已端到端可用。
-- `backend/handoff.rs` 提供 Linux 单实例与 Unix socket Inbox（普通/开发隔离），0700 当前用户非软链接目录、0600 socket、flock 独占、SO_PEERCRED 当前用户验证；4 字节小端长度加 JSON，最多 1 MiB、32 个本地路径、16 条待处理，超时读写。`--ask-json` 从 stdin 接收，`--ask-files` 接收路径，`--native-messaging` stdout 只能输出浏览器帧；外部交付自动启动桌宠、ACK 仅表示入队，发出后不重试以避免重复任务。无 HTTP/TCP、URL scheme 或剪贴板监听。UI 空闲时直接 submit，复用审批和 thread，不填输入框、不清已有草稿；外部任务错误须通过气泡展示。
-- 右键集成客户端位于 integrations/，脚本 `scripts/integrations.py` 用 Python 标准库生成 VSIX/XPI 并安装桥接清单，VS Code/浏览器 JS 只在各自宿主内运行，不能给 Rust 主程序引入 Node 依赖。Chromium manifest 的公开 key 固定扩展 ID，宿主白名单由 key 推导；Firefox 固定 ID，禁止为了免签修改用户浏览器安全策略。`node scripts/test-integrations.js` 与 `python3 scripts/context-smoke.py target/release/lexington` 验证客户端边界和真实 CLI，均不调用模型。
-- 安装升级运行中的二进制必须先复制到安装目录临时文件再原子替换，不能直接 cp 截断旧文件（ETXTBSY）；配置仍保留。安装扩展不强制关闭文件管理器/浏览器/编辑器。
+## 目录规则
 
-- 模型/API 设置位于“连接 → 模型与 API”，codex.model 默认空、useCustomApi 默认 false，baseUrl/apiKey 默认空；自定义服务仅支持 Responses 协议，必须有模型、HTTP(S) 基础地址与 Key。保存表单一次性原子写入（Unix 0600，明文配置，UI password 遮蔽），不能逐字保存；无效设置拒绝覆盖，外部配置保持热加载。模型/API 变更等当前任务结束再重建，审批切换仍不重启；关闭设置丢弃未保存表单。
-- 连接表单用 backend/codex_config.rs 只读 CODEX_HOME/config.toml（默认 ~/.codex），支持所选 profile 和 provider；Key 来自 env_key 环境变量、experimental_bearer_token 或 OpenAI API Key 登录配置，不把 OAuth tokens 当作 API Key。解析错误禁止包含源文本；打开表单/手动重读只填草稿，关闭自定义 API 保存时不固定未修改的继承模型、不复制本机 Key，并保留原有未启用的自定义凭据。Pet::from_root 不读用户 Codex 配置，测试须注入临时 home/环境。
-- 已验证本机 Codex 0.166.0 接受进程级 -c model / model_provider=lexington_api 及 model_providers.lexington_api.*（base_url、wire_api=responses、env_key=LEXINGTON_MODEL_API_KEY、requires_openai_auth=false），thread/start 返回所选模型/提供方，无需修改 ~/.codex/config.toml。API Key 只能通过 Command.env 传入，禁入 argv/Debug/日志；关闭自定义 API 显式 env_remove，协议输出中的完整 Key 遮蔽。CLI 不支持仅有 Chat Completions 的服务。
-- 安装先运行 scripts/install-dependencies.sh / dependencies.py；Ubuntu/Debian 自动检查并授权安装缺失系统依赖（含 Nautilus 顶层菜单），缺 Rust 时安装最小稳定工具链；发布包含 install.sh，仅安装运行依赖。缺 Codex 时从官方 @openai/codex registry 下载固定 0.166.0 Linux 原生包、核验 SHA-512 并安全解包，保留 bin/codex-code-mode-host、codex-resources、codex-path 与 codex-package.json 完整布局，再链接 ~/.local/bin/codex，无 Node/npm 依赖；已有 CLI/登录保留，不自动登录。--skip-optional 可跳过可选系统包，取消可选授权仍保留脚本菜单，必需依赖失败终止安装。升级固定 CLI 版本前须回归协议。
-- scripts/test-dependencies.py 使用本地包夹具覆盖下载完整性、解包路径穿越、已有/缺失 CLI 与用户配置保留；不会写用户 HOME/安装真实依赖。模型/API UI 回归涵盖密码文本不泄露、非法地址不落盘、保存触发忙碌延迟重连；backend::codex 夹具检查 Key 不进 argv 并验证提供方关闭恢复继承。
+- 根规则适用于整个项目；进入目录修改前读取对应 AGENTS.md，跨目录任务同时遵守相关规则。子目录只维护局部约束，不覆盖根目录的授权、密钥保护、验证与交付要求。
+- [后端](src/backend/AGENTS.md)：配置、Codex 协议、角色、计时/闹钟、外部 Inbox。
+- [界面](src/ui/AGENTS.md)：输入/焦点、设置与提醒、纹理交互及 UI 回归。
+- [工具](src/tools/AGENTS.md)：GIF、X11、活动采样和平台限制。
+- [脚本](scripts/AGENTS.md)：安装/打包、快捷方式、专项测试环境。
 
-- 普通输入框提交只发送裁首尾空白的原文，不拼接路径、来源或外部请求模板；外部右键请求单独使用 handoff::Request::prompt。API Key 默认遮蔽，“按住显示”仅在按钮按住且设置窗口聚焦时临时明文，松开或失焦立即隐藏，继承配置也可查看，不持久化显示状态。
+## 验证与交付
+
+- **默认只做增量测试和受影响模块的测试；只有用户明确要求全量测试时才运行全量测试。** 根据本次改动和依赖关系选择用例/模块过滤器，跨层变化补测直接相关链路，不能因任务较长或临近结束自动扩大到全项目；受影响测试通过且无新问题后不重复执行。
+- Rust 改动运行 `cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`，测试使用 `cargo test --locked <模块路径或用例名>`；未指定过滤器的 `cargo test --locked` 仅限用户明确要求全量时。专项 smoke/像素回归按影响范围选择；纯文档改动只检查内容、链接和差异，不运行 Rust 测试。具体入口见 [模块文档](docs/MODULES.md#验证入口)。
+- 测试使用临时配置/夹具，不访问真实模型、凭据或用户记录；按层分工避免重复覆盖。模拟 UI 事件不能替代实际 WM、拖动或穿透验证；原生指针测试环境遵守脚本目录规则。
+- **每次完成项目修改后必须运行 `bash scripts/install-linux.sh` 构建最新 release 并同步桌面安装版。** 该流程已有持续授权，无需再次询问；保留配置/API key，二进制通过同目录临时文件原子替换，不能 cp 截断运行中文件。核对安装版与 target/release/lexington 一致；运行的旧版本须安全重启验证，不强制关闭文件管理器/浏览器/编辑器。
+
+## 外部集成
+
+- 右键统一命名“看看Lexington怎么说”：文件管理器发本地绝对路径，VS Code 发选区/路径/起始行，浏览器发选区及 page/frame URL，只有 file URL 转本地路径；未保存/远程文档不得伪造本机路径。
+- 各应用菜单分别扩展，Nautilus 脚本默认入口，顶层菜单需 python3-nautilus；Firefox 持久安装需签名，禁止修改浏览器安全策略免签；Chromium key/扩展 ID 与宿主白名单保持匹配。Snap/Flatpak 桥接需单独实测，不宣称任意软件全局菜单或默认浏览器已端到端可用。
