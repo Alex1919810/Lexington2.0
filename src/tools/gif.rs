@@ -1,4 +1,3 @@
-use image::Frames;
 use std::{
     fs::File,
     io::BufReader,
@@ -7,7 +6,7 @@ use std::{
 };
 
 pub struct Decoder {
-    pub(crate) animation: Option<Frames<'static>>,
+    pub(crate) animation: Option<GifFrames>,
     path: PathBuf,
     pub(crate) next_frame: Instant,
     pub(crate) repeats_left: Option<u16>,
@@ -37,7 +36,7 @@ impl Decoder {
         {
             let mut frames = gif_frames(path)?;
             let frame = frames
-                .next()
+                .next_sampled()
                 .ok_or("图片没有帧")?
                 .map_err(|e| e.to_string())?;
             let delay = delay(&frame);
@@ -61,7 +60,7 @@ impl Decoder {
     }
     pub fn advance(&mut self) -> Option<image::RgbaImage> {
         if self.animation.is_some() && Instant::now() >= self.next_frame {
-            let mut frame = self.animation.as_mut().and_then(Iterator::next);
+            let mut frame = self.animation.as_mut().and_then(GifFrames::next_sampled);
             if frame.is_none() {
                 if self.repeats_left == Some(0) {
                     self.animation = None;
@@ -70,8 +69,12 @@ impl Decoder {
                 if let Some(left) = &mut self.repeats_left {
                     *left -= 1;
                 }
-                self.animation = gif_frames(&self.path).ok();
-                frame = self.animation.as_mut().and_then(Iterator::next);
+                if let Some(animation) = &mut self.animation
+                    && animation.restart(&self.path).is_err()
+                {
+                    self.animation = None;
+                }
+                frame = self.animation.as_mut().and_then(GifFrames::next_sampled);
             }
             match frame {
                 Some(Ok(frame)) => {
@@ -84,39 +87,132 @@ impl Decoder {
         None
     }
 }
-// Keep one disposal canvas and one returned frame, never a cache of the animation.
-struct GifFrames {
-    reader: gif::Decoder<BufReader<File>>,
+// Only indexed pixels and palette/metadata are cached; RGBA stays one frame
+// plus a disposal canvas. Build during playback to avoid a startup decode burst.
+const INDEX_CACHE_LIMIT: usize = 96 * 1024 * 1024;
+
+pub(crate) struct GifFrames {
+    reader: Option<<gif::Decoder<BufReader<File>> as IntoIterator>::IntoIter>,
     canvas: image::RgbaImage,
     palette: Vec<u8>,
+    cache: Vec<gif::Frame<'static>>,
+    cache_bytes: usize,
+    cache_limit: usize,
+    cache_enabled: bool,
+    cursor: usize,
 }
-impl Iterator for GifFrames {
-    type Item = image::ImageResult<image::Frame>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let frame = match self.reader.read_next_frame() {
-            Ok(Some(frame)) => frame,
-            Ok(None) => return None,
-            Err(error) => {
-                return Some(Err(image::ImageError::IoError(std::io::Error::other(
-                    error,
-                ))));
+impl GifFrames {
+    // Retain source frames 0, 2, 4, ... and add each omitted frame's delay
+    // to the preceding displayed frame. Never pair across a loop boundary.
+    fn next_sampled(&mut self) -> Option<image::ImageResult<image::Frame>> {
+        let first = match self.next()? {
+            Ok(frame) => frame,
+            Err(error) => return Some(Err(error)),
+        };
+        let mut duration = delay(&first);
+        match self.next_frame(false) {
+            Some(Ok(skipped)) => duration += delay(&skipped),
+            Some(Err(error)) => return Some(Err(error)),
+            None => {}
+        }
+        Some(Ok(image::Frame::from_parts(
+            first.into_buffer(),
+            0,
+            0,
+            image::Delay::from_numer_denom_ms(duration.as_millis() as u32, 1),
+        )))
+    }
+    fn restart(&mut self, path: &Path) -> Result<(), String> {
+        if self.reader.is_none() && self.cache_enabled && !self.cache.is_empty() {
+            // Each loop starts on a transparent canvas, as when reopening a GIF.
+            self.canvas.as_mut().fill(0);
+            self.cursor = 0;
+        } else {
+            // Once over budget, stay streaming rather than rebuilding a prefix
+            // on every loop. Dropping/replacing Picture releases this whole cache.
+            *self = gif_frames_with_limit(
+                path,
+                if self.cache_enabled {
+                    self.cache_limit
+                } else {
+                    0
+                },
+            )?;
+        }
+        Ok(())
+    }
+    fn next_frame(&mut self, render: bool) -> Option<image::ImageResult<image::Frame>> {
+        let decoded;
+        let frame = if let Some(reader) = &mut self.reader {
+            decoded = match reader.next() {
+                Some(Ok(frame)) => frame,
+                None => {
+                    self.reader = None;
+                    self.cursor = self.cache.len();
+                    return None;
+                }
+                Some(Err(error)) => {
+                    return Some(Err(image::ImageError::IoError(std::io::Error::other(
+                        error,
+                    ))));
+                }
+            };
+            if self.cache_enabled {
+                let bytes = decoded.buffer.len()
+                    + decoded.palette.as_ref().map_or(0, Vec::len)
+                    + std::mem::size_of::<gif::Frame<'static>>();
+                if bytes <= self.cache_limit.saturating_sub(self.cache_bytes) {
+                    self.cache_bytes += bytes;
+                    self.cache.push(decoded);
+                    self.cache.last().expect("just cached frame")
+                } else {
+                    // A partial sequential cache would still need a decoder at
+                    // the loop boundary; release it and use bounded streaming.
+                    self.cache = Vec::new();
+                    self.cache_bytes = 0;
+                    self.cache_enabled = false;
+                    &decoded
+                }
+            } else {
+                &decoded
             }
+        } else {
+            let frame = self.cache.get(self.cursor)?;
+            self.cursor += 1;
+            frame
         };
         let palette = frame.palette.as_deref().unwrap_or(&self.palette);
         let mut colors = [[0_u8; 4]; 256];
         for (index, rgb) in palette.as_chunks::<3>().0.iter().take(256).enumerate() {
             colors[index] = [rgb[0], rgb[1], rgb[2], 255];
         }
-        let mut output = self.canvas.clone();
-        let left = u32::from(frame.left).min(output.width()) as usize;
-        let top = u32::from(frame.top).min(output.height()) as usize;
-        let width = usize::from(frame.width).min(output.width() as usize - left);
-        let height = usize::from(frame.height).min(output.height() as usize - top);
-        let stride = output.width() as usize * 4;
+        // Skipped Keep frames still affect the next visible frame. Compose
+        // directly into the disposal canvas without allocating/copying RGBA.
+        // Skipped Previous/Background need only apply their disposal below.
+        let keep = matches!(
+            frame.dispose,
+            gif::DisposalMethod::Any | gif::DisposalMethod::Keep
+        );
+        let mut output = if render {
+            self.canvas.clone()
+        } else if keep {
+            std::mem::take(&mut self.canvas)
+        } else {
+            image::RgbaImage::new(0, 0)
+        };
+        let dimensions = if render || keep {
+            output.dimensions()
+        } else {
+            self.canvas.dimensions()
+        };
+        let left = u32::from(frame.left).min(dimensions.0) as usize;
+        let top = u32::from(frame.top).min(dimensions.1) as usize;
+        let width = usize::from(frame.width).min(dimensions.0 as usize - left);
+        let height = usize::from(frame.height).min(dimensions.1 as usize - top);
+        let stride = dimensions.0 as usize * 4;
         // Work on contiguous rows: no full-canvas per-pixel coordinate division,
         // RGBA intermediate frame, or palette conversion for every pixel.
-        if width > 0 && height > 0 {
+        if (render || keep) && width > 0 && height > 0 {
             for (row, indices) in output.as_mut()[top * stride..]
                 .chunks_exact_mut(stride)
                 .take(height)
@@ -141,7 +237,11 @@ impl Iterator for GifFrames {
         }
         match frame.dispose {
             gif::DisposalMethod::Any | gif::DisposalMethod::Keep => {
-                self.canvas.clone_from(&output);
+                if render {
+                    self.canvas.clone_from(&output);
+                } else {
+                    self.canvas = std::mem::take(&mut output);
+                }
             }
             gif::DisposalMethod::Background if width > 0 && height > 0 => {
                 for row in self.canvas.as_mut()[top * stride..]
@@ -162,7 +262,17 @@ impl Iterator for GifFrames {
         )))
     }
 }
-fn gif_frames(path: &Path) -> Result<Frames<'static>, String> {
+impl Iterator for GifFrames {
+    type Item = image::ImageResult<image::Frame>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next_frame(true)
+    }
+}
+fn gif_frames(path: &Path) -> Result<GifFrames, String> {
+    gif_frames_with_limit(path, INDEX_CACHE_LIMIT)
+}
+fn gif_frames_with_limit(path: &Path, cache_limit: usize) -> Result<GifFrames, String> {
     let reader = gif::DecodeOptions::new()
         .read_info(BufReader::new(File::open(path).map_err(|e| e.to_string())?))
         .map_err(|e| e.to_string())?;
@@ -173,11 +283,18 @@ fn gif_frames(path: &Path) -> Result<Frames<'static>, String> {
         .map_err(|e| e.to_string())?;
     let canvas = image::RgbaImage::new(u32::from(reader.width()), u32::from(reader.height()));
     let palette = reader.global_palette().unwrap_or_default().to_vec();
-    Ok(Frames::new(Box::new(GifFrames {
-        reader,
+    let cache_enabled = cache_limit > palette.len();
+    let cache_bytes = if cache_enabled { palette.len() } else { 0 };
+    Ok(GifFrames {
+        reader: Some(reader.into_iter()),
         canvas,
         palette,
-    })))
+        cache: Vec::new(),
+        cache_bytes,
+        cache_limit,
+        cache_enabled,
+        cursor: 0,
+    })
 }
 pub(crate) fn delay(frame: &image::Frame) -> Duration {
     let (num, den) = frame.delay().numer_denom_ms();
@@ -194,6 +311,100 @@ mod tests {
     use image::AnimationDecoder;
 
     #[test]
+    fn indexed_cache_replays_without_file_and_over_budget_stays_streaming() {
+        let path =
+            std::env::temp_dir().join(format!("lexington-cache-{}.gif", rand::random::<u64>()));
+        {
+            let mut encoder =
+                gif::Encoder::new(File::create(&path).unwrap(), 4, 3, &[255, 0, 0, 0, 255, 0])
+                    .unwrap();
+            for index in [0, 1, 0] {
+                encoder
+                    .write_frame(&gif::Frame {
+                        width: 4,
+                        height: 3,
+                        delay: 2,
+                        dispose: gif::DisposalMethod::Keep,
+                        buffer: std::borrow::Cow::Owned(vec![index; 12]),
+                        ..Default::default()
+                    })
+                    .unwrap();
+            }
+        }
+        let mut cached = gif_frames(&path).unwrap();
+        let expected: Vec<_> = cached.by_ref().map(Result::unwrap).collect();
+        assert_eq!(cached.cache.len(), 3);
+        assert!(cached.reader.is_none());
+        assert!(cached.cache_bytes <= INDEX_CACHE_LIMIT);
+        let size = std::mem::size_of::<gif::Frame<'static>>();
+        let mut streaming = gif_frames_with_limit(&path, size + 12 + 6).unwrap();
+        for _ in 0..3 {
+            for expected in &expected {
+                assert_eq!(
+                    streaming.next().unwrap().unwrap().buffer(),
+                    expected.buffer()
+                );
+            }
+            assert!(streaming.next().is_none());
+            assert!(!streaming.cache_enabled);
+            assert_eq!(streaming.cache_bytes, 0);
+            assert!(streaming.cache.is_empty());
+            streaming.restart(&path).unwrap();
+        }
+        // A completed cache must not reopen the source, even at the loop boundary.
+        std::fs::remove_file(&path).unwrap();
+        for _ in 0..4 {
+            cached.restart(&path).unwrap();
+            for expected in &expected {
+                let actual = cached.next().unwrap().unwrap();
+                assert_eq!(actual.buffer(), expected.buffer());
+                assert_eq!(actual.delay(), expected.delay());
+            }
+            assert!(cached.next().is_none());
+            assert!(cached.next().is_none());
+        }
+        assert!(streaming.by_ref().all(|f| f.is_ok()));
+        assert!(streaming.restart(&path).is_err());
+    }
+
+    #[test]
+    #[ignore = "decoder benchmark; run with --release --ignored --nocapture"]
+    fn frame_sampling_performance() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resource/illustration/lexington/gif/BiKiNi_Normal.gif");
+        for sampled in [false, true] {
+            let mut decoder = gif_frames(&path).unwrap();
+            let warmup = Instant::now();
+            while let Some(frame) = if sampled {
+                decoder.next_sampled()
+            } else {
+                decoder.next()
+            } {
+                std::hint::black_box(frame.unwrap());
+            }
+            let warmup = warmup.elapsed();
+            let start = Instant::now();
+            let mut count = 0;
+            for _ in 0..10 {
+                decoder.restart(&path).unwrap();
+                while let Some(frame) = if sampled {
+                    decoder.next_sampled()
+                } else {
+                    decoder.next()
+                } {
+                    std::hint::black_box(frame.unwrap());
+                    count += 1;
+                }
+            }
+            eprintln!(
+                "sampled={sampled}, indexed={} bytes, first_loop={warmup:?}, {count} steady_frames={:?}",
+                decoder.cache_bytes,
+                start.elapsed()
+            );
+        }
+    }
+
+    #[test]
     fn local_palettes_interlacing_and_partial_disposals_match_reference() {
         let path =
             std::env::temp_dir().join(format!("lexington-palettes-{}.gif", rand::random::<u64>()));
@@ -206,10 +417,11 @@ mod tests {
                 gif::DisposalMethod::Previous,
                 gif::DisposalMethod::Background,
                 gif::DisposalMethod::Any,
+                gif::DisposalMethod::Keep,
             ]
             .into_iter()
             .cycle()
-            .take(12)
+            .take(13)
             .enumerate()
             {
                 let full = index == 0;
@@ -233,18 +445,28 @@ mod tests {
                     .unwrap();
             }
         }
-        let reference =
+        let expected: Vec<_> =
             image::codecs::gif::GifDecoder::new(BufReader::new(File::open(&path).unwrap()))
                 .unwrap()
-                .into_frames();
-        let mut actual = gif_frames(&path).unwrap();
-        for expected in reference {
-            let expected = expected.unwrap();
-            let actual = actual.next().unwrap().unwrap();
-            assert_eq!(actual.buffer(), expected.buffer());
-            assert_eq!(actual.delay(), expected.delay());
+                .into_frames()
+                .map(Result::unwrap)
+                .collect();
+        // Odd frame count, variable/short delays and all disposal methods on
+        // retained and skipped frames; validate streaming and cached loops.
+        for limit in [0, INDEX_CACHE_LIMIT] {
+            let mut actual = gif_frames_with_limit(&path, limit).unwrap();
+            for cycle in 0..3 {
+                if cycle > 0 {
+                    actual.restart(&path).unwrap();
+                }
+                for pair in expected.chunks(2) {
+                    let frame = actual.next_sampled().unwrap().unwrap();
+                    assert_eq!(frame.buffer(), pair[0].buffer());
+                    assert_eq!(delay(&frame), pair.iter().map(delay).sum::<Duration>());
+                }
+                assert!(actual.next_sampled().is_none());
+            }
         }
-        assert!(actual.next().is_none());
         std::fs::remove_file(path).unwrap();
     }
 
@@ -252,28 +474,47 @@ mod tests {
     #[ignore = "full pixel comparison; run with --release --ignored"]
     fn bundled_frames_match_reference_decoder_pixel_for_pixel() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let paths = crate::backend::resources::illustrations(root);
         let mut count = 0;
-        for illustration in paths.iter().filter(|p| p.format == "gif") {
-            let reference = image::codecs::gif::GifDecoder::new(BufReader::new(
-                File::open(&illustration.path).unwrap(),
-            ))
-            .unwrap()
-            .into_frames();
+        for illustration in crate::backend::resources::illustrations(root)
+            .iter()
+            .filter(|p| p.format == "gif")
+        {
             let mut actual = gif_frames(&illustration.path).unwrap();
-            for (index, frame) in reference.enumerate() {
-                let expected = frame.unwrap();
-                let actual = actual.next().expect("missing frame").unwrap();
-                assert_eq!(actual.delay(), expected.delay());
-                assert_eq!(
-                    actual.buffer(),
-                    expected.buffer(),
-                    "{} frame {index}",
-                    illustration.path.display()
-                );
-                count += 1;
+            let (mut playback, mut current) = Decoder::load(&illustration.path).unwrap();
+            for cycle in 0..2 {
+                if cycle > 0 {
+                    actual.restart(&illustration.path).unwrap();
+                }
+                let mut reference = image::codecs::gif::GifDecoder::new(BufReader::new(
+                    File::open(&illustration.path).unwrap(),
+                ))
+                .unwrap()
+                .into_frames();
+                let mut index = 0;
+                while let Some(expected) = reference.next() {
+                    let expected = expected.unwrap();
+                    let mut duration = delay(&expected);
+                    if let Some(skipped) = reference.next() {
+                        duration += delay(&skipped.unwrap());
+                    }
+                    let frame = actual.next_sampled().unwrap().unwrap();
+                    assert_eq!(
+                        frame.buffer(),
+                        expected.buffer(),
+                        "{} cycle {cycle} frame {index}",
+                        illustration.path.display()
+                    );
+                    assert_eq!(&current, expected.buffer());
+                    assert_eq!(delay(&frame), duration);
+                    playback.next_frame = Instant::now() - Duration::from_millis(1);
+                    current = playback.advance().expect("looped sampled frame");
+                    index += 2;
+                    count += 1;
+                }
+                assert!(actual.next_sampled().is_none());
+                assert!(actual.cache_enabled);
+                assert!(actual.cache_bytes <= INDEX_CACHE_LIMIT);
             }
-            assert!(actual.next().is_none());
         }
         assert!(count > 500);
     }
