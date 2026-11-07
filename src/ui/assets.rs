@@ -43,11 +43,22 @@ fn opaque_regions(image: &image::RgbaImage) -> Vec<egui::Rect> {
     let width = image.width().min(256);
     let height = image.height().min(256);
     let mut coverage = vec![false; (width * height) as usize];
-    for (x, y, pixel) in image.enumerate_pixels() {
-        if pixel[3] >= 8 {
-            coverage
-                [((y * height / image.height()) * width + x * width / image.width()) as usize] =
-                true;
+    // Visit each grid cell, stopping as soon as its maximum alpha reaches the
+    // threshold. Ceil boundaries exactly invert floor(pixel * grid / image).
+    for y in 0..height {
+        let top = (y * image.height()).div_ceil(height);
+        let bottom = ((y + 1) * image.height()).div_ceil(height);
+        for x in 0..width {
+            let left = (x * image.width()).div_ceil(width) as usize;
+            let right = ((x + 1) * image.width()).div_ceil(width) as usize;
+            coverage[(y * width + x) as usize] = (top..bottom).any(|row| {
+                let start = (row as usize * image.width() as usize + left) * 4;
+                image.as_raw()[start..start + (right - left) * 4]
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|pixel| pixel[3] >= 8)
+            });
         }
     }
     let mut regions = Vec::new();
@@ -111,6 +122,33 @@ mod tests {
         io::BufReader,
         time::{Duration, Instant},
     };
+    #[test]
+    fn compact_alpha_grid_matches_pixel_max_for_uneven_dimensions() {
+        for (width, height) in [(1, 1), (17, 9), (257, 263), (511, 389), (1024, 1024)] {
+            let image = image::RgbaImage::from_fn(width, height, |x, y| {
+                image::Rgba([3, 5, 7, if (x * 31 + y * 17) % 127 == 0 { 8 } else { 7 }])
+            });
+            let regions = opaque_regions(&image);
+            let w = width.min(256);
+            let h = height.min(256);
+            let mut expected = vec![false; (w * h) as usize];
+            for (x, y, pixel) in image.enumerate_pixels() {
+                if pixel[3] >= 8 {
+                    expected[((y * h / height) * w + x * w / width) as usize] = true;
+                }
+            }
+            let mut actual = vec![false; expected.len()];
+            for region in regions {
+                let y = (region.min.y * h as f32).round() as u32;
+                for x in (region.min.x * w as f32).round() as u32
+                    ..(region.max.x * w as f32).round() as u32
+                {
+                    actual[(y * w + x) as usize] = true;
+                }
+            }
+            assert_eq!(actual, expected, "{width}x{height}");
+        }
+    }
     #[test]
     fn bundled_pet_gif_restarts_at_first_frame_after_a_full_cycle() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
