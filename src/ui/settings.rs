@@ -1,5 +1,8 @@
 use super::{app::Pet, clock::ClockAction};
-use crate::backend::config::{CodexConfig, Config};
+use crate::backend::{
+    codex_config::LocalCodexConfig,
+    config::{CodexConfig, Config},
+};
 use eframe::egui::{self, vec2};
 use std::time::{Duration, Instant};
 
@@ -262,7 +265,7 @@ impl Pet {
             match Config::save_connection(&self.root, &connection) {
                 Ok(()) => {
                     self.reload_config();
-                    self.connection_draft = Some(self.config.codex.clone());
+                    self.connection_draft = Some(self.local_codex_config.draft(&self.config.codex));
                     self.connection_error.clear();
                 }
                 Err(error) => self.connection_error = error,
@@ -338,6 +341,37 @@ impl Pet {
                             } else if self.settings_page == 2 {
                                 (clock_auto_changed, clock_action) = self.clock_settings_ui(ui);
                             } else if self.settings_page == 1 {
+                                if self.connection_draft.is_none() {
+                                    if let Some(home) = &self.local_codex_home {
+                                        match LocalCodexConfig::read(home) {
+                                            Ok(local) => self.local_codex_config = local,
+                                            Err(error) => self.connection_error = error,
+                                        }
+                                    }
+                                    self.connection_draft = Some(self.local_codex_config.draft(&self.config.codex));
+                                }
+                                if ui.small_button("读取本机配置")
+                                    .on_hover_text("读取本机 Codex 的模型、API 地址及 Key；点击保存后才应用自定义 API。")
+                                    .clicked()
+                                    && let Some(home) = &self.local_codex_home
+                                {
+                                    match LocalCodexConfig::read(home) {
+                                        Ok(local) => {
+                                            self.local_codex_config = local;
+                                            // Explicitly importing prepares the fields without changing the active connection.
+                                            let custom_api = self.connection_draft.as_ref()
+                                                .is_some_and(|draft| draft.use_custom_api);
+                                            let mut saved = self.config.codex.clone();
+                                            saved.use_custom_api = false;
+                                            saved.model.clear();
+                                            let mut draft = self.local_codex_config.draft(&saved);
+                                            draft.use_custom_api = custom_api;
+                                            self.connection_draft = Some(draft);
+                                            self.connection_error.clear();
+                                        }
+                                        Err(error) => self.connection_error = error,
+                                    }
+                                }
                                 let draft = self.connection_draft
                                     .get_or_insert_with(|| self.config.codex.clone());
                                 egui::Frame::group(ui.style())
@@ -347,6 +381,10 @@ impl Pet {
                                     .show(ui, |ui| {
                                         ui.set_width(ui.available_width());
                                         ui.strong("模型与 API");
+                                        if !draft.use_custom_api {
+                                            ui.weak("沿用本机 Codex")
+                                                .on_hover_text("显示 CODEX_HOME（默认 ~/.codex）中的用户配置；未设置模型时由 Codex 决定。保存时保留继承方式。");
+                                        }
                                         ui.label("模型");
                                         ui.add(egui::TextEdit::singleline(&mut draft.model)
                                             .id(egui::Id::new("connection-model"))
@@ -361,19 +399,29 @@ impl Pet {
                                                 .desired_width(f32::INFINITY)
                                                 .hint_text("https://api.openai.com/v1"))
                                                 .on_hover_text("填写基础地址（通常以 /v1 结尾），不要填写 /responses。");
-                                            ui.label("API Key");
-                                            ui.add(egui::TextEdit::singleline(&mut draft.api_key)
-                                                .id(egui::Id::new("connection-key"))
-                                                .password(true)
-                                                .desired_width(f32::INFINITY))
-                                                .on_hover_text("仅用于 Lexington；保存在当前用户配置文件中。");
                                         });
+                                        let mut reveal_key = false;
+                                        ui.horizontal(|ui| {
+                                            ui.label("API Key");
+                                            let reveal = ui.add(egui::Button::new("按住显示")
+                                                .sense(egui::Sense::click_and_drag()))
+                                                .on_hover_text("按住暂时显示密钥，松开或窗口失焦后恢复隐藏。");
+                                            reveal_key = reveal.is_pointer_button_down_on()
+                                                && ui.input(|i| i.focused && i.pointer.primary_down());
+                                        });
+                                        ui.add_enabled(draft.use_custom_api,
+                                            egui::TextEdit::singleline(&mut draft.api_key)
+                                                .id(egui::Id::new("connection-key"))
+                                                .password(!reveal_key)
+                                                .hint_text("未读取到 API Key")
+                                                .desired_width(f32::INFINITY))
+                                                .on_hover_text("开启自定义 API 时必须填写；保存后仅用于 Lexington。");
                                         ui.horizontal(|ui| {
                                             if ui.button("保存").clicked() {
-                                                connection = Some(draft.clone());
+                                                connection = Some(self.local_codex_config.to_save(draft, &self.config.codex));
                                             }
                                             if ui.button("取消修改").clicked() {
-                                                *draft = self.config.codex.clone();
+                                                *draft = self.local_codex_config.draft(&self.config.codex);
                                                 self.connection_error.clear();
                                             }
                                         });

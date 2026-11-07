@@ -81,6 +81,8 @@ pub struct Pet {
     pub(super) settings_pointer_down: bool,
     pub(super) settings_drag_active: bool,
     pub(super) connection_draft: Option<crate::backend::config::CodexConfig>,
+    pub(super) local_codex_home: Option<PathBuf>,
+    pub(super) local_codex_config: crate::backend::codex_config::LocalCodexConfig,
     pub(super) connection_error: String,
 }
 impl Pet {
@@ -93,6 +95,14 @@ impl Pet {
         if let Some(storage) = cc.storage {
             app.restore_state(storage);
         }
+        app.local_codex_home = std::env::var_os("CODEX_HOME")
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .or_else(|| std::env::var_os("USERPROFILE"))
+                    .map(|home| PathBuf::from(home).join(".codex"))
+            });
         #[cfg(target_os = "linux")]
         {
             app.drag_window = platform::DragWindow::new(cc);
@@ -210,6 +220,8 @@ impl Pet {
             settings_pointer_down: false,
             settings_drag_active: false,
             connection_draft: None,
+            local_codex_home: None,
+            local_codex_config: Default::default(),
             connection_error: String::new(),
         };
         app.refresh(ctx);

@@ -222,6 +222,83 @@ fn settings_approval_checkbox_persists_without_restarting_and_controls_next_turn
     std::fs::remove_dir_all(root).unwrap();
 }
 #[test]
+fn api_key_is_visible_only_while_reveal_button_is_held_in_focused_window() {
+    let ctx = egui::Context::default();
+    let mut app = Pet::from_context(&ctx, true);
+    app.settings = true;
+    app.settings_page = 1;
+    app.connection_draft = Some(crate::backend::config::CodexConfig {
+        api_key: "fixture-reveal-secret".into(),
+        ..Default::default()
+    });
+    let mut target = None;
+    for stage in 0..16 {
+        let events = match stage {
+            10 => vec![
+                egui::Event::PointerMoved(target.expect("reveal button")),
+                egui::Event::PointerButton {
+                    pos: target.unwrap(),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+            ],
+            12 => vec![egui::Event::WindowFocused(false)],
+            13 => vec![
+                egui::Event::WindowFocused(true),
+                egui::Event::PointerButton {
+                    pos: target.unwrap(),
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Default::default(),
+                },
+            ],
+            14 => vec![egui::Event::PointerButton {
+                pos: target.unwrap(),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            }],
+            15 => vec![egui::Event::PointerButton {
+                pos: target.unwrap(),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+            _ => vec![],
+        };
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0., 0.), vec2(800., 600.))),
+                events,
+                focused: stage != 12,
+                ..Default::default()
+            },
+            |ctx| app.ui(ctx),
+        );
+        let mut visible = false;
+        let mut shapes: Vec<_> = output
+            .shapes
+            .iter()
+            .map(|s| (s.clip_rect, &s.shape))
+            .collect();
+        while let Some((clip, shape)) = shapes.pop() {
+            match shape {
+                egui::Shape::Vec(children) => shapes.extend(children.iter().map(|s| (clip, s))),
+                egui::Shape::Text(text) => {
+                    let point = text.pos + text.galley.size() / 2.;
+                    if text.galley.job.text == "按住显示" && clip.contains(point) {
+                        target = Some(point);
+                    }
+                    visible |= text.galley.job.text.contains("fixture-reveal-secret");
+                }
+                _ => (),
+            }
+        }
+        assert_eq!(visible, matches!(stage, 10 | 11 | 14), "stage {stage}");
+    }
+}
+#[test]
 fn config_hot_reload_keeps_valid_settings_and_defers_connection_changes_until_idle() {
     let root = std::env::temp_dir().join(format!("lexington-hot-config-{}", rand::random::<u64>()));
     crate::backend::config::Config::save_no_approval(&root, false).unwrap();
@@ -290,23 +367,43 @@ fn connection_form_masks_key_validates_save_and_defers_restart_while_busy() {
     crate::backend::config::Config::save_no_approval(&root, false).unwrap();
     let ctx = egui::Context::default();
     let mut app = Pet::from_root(&ctx, false, root.clone());
+    let local_home = root.join("codex-home");
+    std::fs::create_dir_all(&local_home).unwrap();
+    std::fs::write(
+        local_home.join("config.toml"),
+        "model='fixture-local-model'\nmodel_provider='fixture'\n[model_providers.fixture]\nbase_url='https://example.invalid/v1'\nexperimental_bearer_token='fixture-local-secret'\n",
+    ).unwrap();
+    app.local_codex_home = Some(local_home);
     app.codex = Some(crate::backend::codex::Client::mock("normal"));
     app.input = "interrupt".into();
     app.submit(&ctx);
     app.settings = true;
     app.settings_page = 1;
+    let original = std::fs::read(root.join("config/config.json")).unwrap();
     frame(&mut app, &ctx, vec![]);
-    for valid in [false, true] {
-        let draft = app.connection_draft.as_mut().unwrap();
-        draft.use_custom_api = true;
-        draft.model = "fixture-ui-model".into();
-        draft.base_url = if valid {
-            "http://127.0.0.1:9999/v1"
-        } else {
-            "not-a-url"
+    let inherited = app.connection_draft.as_ref().unwrap();
+    assert_eq!(inherited.model, "fixture-local-model");
+    assert_eq!(inherited.base_url, "https://example.invalid/v1");
+    assert_eq!(inherited.api_key, "fixture-local-secret");
+    assert!(!inherited.use_custom_api);
+    assert_eq!(
+        std::fs::read(root.join("config/config.json")).unwrap(),
+        original
+    );
+    for mode in ["inherited", "invalid", "custom"] {
+        let valid = mode == "custom";
+        if mode != "inherited" {
+            let draft = app.connection_draft.as_mut().unwrap();
+            draft.use_custom_api = true;
+            draft.model = "fixture-ui-model".into();
+            draft.base_url = if valid {
+                "http://127.0.0.1:9999/v1"
+            } else {
+                "not-a-url"
+            }
+            .into();
+            draft.api_key = "fixture-hidden-ui-key".into();
         }
-        .into();
-        draft.api_key = "fixture-hidden-ui-key".into();
         let mut save = None;
         for _ in 0..12 {
             let output = ctx.run(
@@ -327,7 +424,8 @@ fn connection_form_masks_key_validates_save_and_defers_restart_while_busy() {
                     egui::Shape::Vec(children) => shapes.extend(children.iter().map(|s| (clip, s))),
                     egui::Shape::Text(text) => {
                         assert!(
-                            !text.galley.job.text.contains("fixture-hidden-ui-key"),
+                            !text.galley.job.text.contains("fixture-hidden-ui-key")
+                                && !text.galley.job.text.contains("fixture-local-secret"),
                             "key must be masked"
                         );
                         if text.galley.job.text == "保存" {
@@ -362,7 +460,14 @@ fn connection_form_masks_key_validates_save_and_defers_restart_while_busy() {
             save.expect("visible connection save button"),
         );
         let saved = crate::backend::config::Config::read(&root).unwrap();
-        if valid {
+        if mode == "inherited" {
+            assert!(app.connection_error.is_empty());
+            assert!(!saved.codex.use_custom_api);
+            assert!(saved.codex.model.is_empty());
+            assert!(saved.codex.api_key.is_empty());
+            assert!(saved.codex.base_url.is_empty());
+            assert!(!app.codex_restart_pending);
+        } else if valid {
             assert!(app.connection_error.is_empty(), "{}", app.connection_error);
             assert_eq!(saved.codex.model, "fixture-ui-model");
             assert_eq!(saved.codex.api_key, "fixture-hidden-ui-key");

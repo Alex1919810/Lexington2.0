@@ -152,9 +152,11 @@ config/config.json
 
 聊天改为连接本机 Codex app-server，通过后台线程处理标准输入输出，不阻塞界面。沿用 Codex CLI 的登录、模型及权限配置，不再使用旧的 `llm` 字段；旧配置仍可加载，安装升级保留原配置。
 
-设置 → 连接 → **模型与 API**：可填写模型名称，开启“自定义 API”后填写基础地址（如 `https://api.openai.com/v1`）及 API Key，点击“保存”。当前支持兼容 **OpenAI Responses API** 的服务；只支持 Chat Completions 的接口不能直接使用。模型留空且关闭自定义 API 时沿用本机 Codex 配置；只填写模型也可覆盖本机默认模型。更改连接参数会自动重建会话，正在处理任务时等任务结束后切换；编辑表单过程中不会逐字保存，外部配置文件仍每 0.5 秒热加载。
+设置 → 连接 → **模型与 API**：可填写模型名称，开启“自定义 API”后填写基础地址（如 `https://api.openai.com/v1`）及 API Key，点击“保存”。当前支持兼容 **OpenAI Responses API** 的服务；只支持 Chat Completions 的接口不能直接使用。打开连接页会从 `$CODEX_HOME/config.toml`（默认 `~/.codex/config.toml`）填充模型、API 地址和遮蔽的 Key，支持所选 profile 和提供方；已有 Lexington 自定义 API 优先保留。“读取本机配置”可重新填充，点击保存才应用。模型留空且关闭自定义 API 时沿用本机 Codex 配置；只填写模型也可覆盖本机默认模型。更改连接参数会自动重建会话，正在处理任务时等任务结束后切换；编辑表单过程中不会逐字保存，外部配置文件仍每 0.5 秒热加载。
 
-Key 默认以密码形式显示，保存到当前安装目录 `config/config.json`，不是加密存储；Unix 保存后文件权限为 0600。启动自定义提供方时仅通过子进程环境变量传 Key，不写入命令行或用户的 `~/.codex/config.toml`，关闭自定义 API 后恢复使用本机提供方。切换不改变审批/沙箱权限；自定义模型仍需支持 Codex 使用的 Responses 工具调用。错误与回复中的完整 Key 会遮蔽。
+本机 Key 支持提供方的环境变量或内联凭据，以及 API Key 登录的 `auth.json`；OAuth 登录令牌不会当作 API Key 导入，无 Key 仍可保持继承 Codex 登录。仅查看或保存未改动的继承配置，不会复制本机密钥或固定继承的模型；不会修改 Codex 配置。
+
+Key 默认以密码形式显示，开启自定义 API 并保存后写入当前安装目录 `config/config.json`，不是加密存储；Unix 保存后文件权限为 0600。启动自定义提供方时仅通过子进程环境变量传 Key，不写入命令行或用户的 `~/.codex/config.toml`，关闭自定义 API 后恢复使用本机提供方。切换不改变审批/沙箱权限；自定义模型仍需支持 Codex 使用的 Responses 工具调用。错误与回复中的完整 Key 会遮蔽。
 
 `codex.executable` 可设为 CLI 的绝对路径；默认从 PATH 查找，Linux 桌面启动时还会查找 `~/.local/bin/codex` 和 `~/.cargo/bin/codex`。`codex.workingDirectory` 指定 Codex 操作的项目目录：绝对路径直接使用，相对路径以资源根目录为基准；`null` 默认使用资源根目录（安装版通常为 `~/.local/share/lexington`）。需要操作其他项目时应改为该项目的路径。
 

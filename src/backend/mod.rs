@@ -2,6 +2,7 @@ pub mod alarm;
 pub mod character;
 pub mod clock;
 pub mod codex;
+pub mod codex_config;
 pub mod config;
 pub mod handoff;
 pub mod resources;

@@ -45,6 +45,9 @@
 - 安装升级运行中的二进制必须先复制到安装目录临时文件再原子替换，不能直接 cp 截断旧文件（ETXTBSY）；配置仍保留。安装扩展不强制关闭文件管理器/浏览器/编辑器。
 
 - 模型/API 设置位于“连接 → 模型与 API”，codex.model 默认空、useCustomApi 默认 false，baseUrl/apiKey 默认空；自定义服务仅支持 Responses 协议，必须有模型、HTTP(S) 基础地址与 Key。保存表单一次性原子写入（Unix 0600，明文配置，UI password 遮蔽），不能逐字保存；无效设置拒绝覆盖，外部配置保持热加载。模型/API 变更等当前任务结束再重建，审批切换仍不重启；关闭设置丢弃未保存表单。
+- 连接表单用 backend/codex_config.rs 只读 CODEX_HOME/config.toml（默认 ~/.codex），支持所选 profile 和 provider；Key 来自 env_key 环境变量、experimental_bearer_token 或 OpenAI API Key 登录配置，不把 OAuth tokens 当作 API Key。解析错误禁止包含源文本；打开表单/手动重读只填草稿，关闭自定义 API 保存时不固定未修改的继承模型、不复制本机 Key，并保留原有未启用的自定义凭据。Pet::from_root 不读用户 Codex 配置，测试须注入临时 home/环境。
 - 已验证本机 Codex 0.166.0 接受进程级 -c model / model_provider=lexington_api 及 model_providers.lexington_api.*（base_url、wire_api=responses、env_key=LEXINGTON_MODEL_API_KEY、requires_openai_auth=false），thread/start 返回所选模型/提供方，无需修改 ~/.codex/config.toml。API Key 只能通过 Command.env 传入，禁入 argv/Debug/日志；关闭自定义 API 显式 env_remove，协议输出中的完整 Key 遮蔽。CLI 不支持仅有 Chat Completions 的服务。
 - 安装先运行 scripts/install-dependencies.sh / dependencies.py；Ubuntu/Debian 自动检查并授权安装缺失系统依赖（含 Nautilus 顶层菜单），缺 Rust 时安装最小稳定工具链；发布包含 install.sh，仅安装运行依赖。缺 Codex 时从官方 @openai/codex registry 下载固定 0.166.0 Linux 原生包、核验 SHA-512 并安全解包，保留 bin/codex-code-mode-host、codex-resources、codex-path 与 codex-package.json 完整布局，再链接 ~/.local/bin/codex，无 Node/npm 依赖；已有 CLI/登录保留，不自动登录。--skip-optional 可跳过可选系统包，取消可选授权仍保留脚本菜单，必需依赖失败终止安装。升级固定 CLI 版本前须回归协议。
 - scripts/test-dependencies.py 使用本地包夹具覆盖下载完整性、解包路径穿越、已有/缺失 CLI 与用户配置保留；不会写用户 HOME/安装真实依赖。模型/API UI 回归涵盖密码文本不泄露、非法地址不落盘、保存触发忙碌延迟重连；backend::codex 夹具检查 Key 不进 argv 并验证提供方关闭恢复继承。
+
+- 普通输入框提交只发送裁首尾空白的原文，不拼接路径、来源或外部请求模板；外部右键请求单独使用 handoff::Request::prompt。API Key 默认遮蔽，“按住显示”仅在按钮按住且设置窗口聚焦时临时明文，松开或失焦立即隐藏，继承配置也可查看，不持久化显示状态。
