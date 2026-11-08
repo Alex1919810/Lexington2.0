@@ -6,6 +6,7 @@ use std::path::Path;
 #[serde(default, rename_all = "camelCase")]
 pub struct RoleCard {
     pub context: super::ContextSettings,
+    pub vector_memory: super::VectorMemorySettings,
     #[serde(flatten)]
     pub extra: std::collections::BTreeMap<String, serde_json::Value>,
     pub name: String,
@@ -105,6 +106,7 @@ impl RoleCard {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        self.vector_memory.validate()?;
         if self.world_book.iter().any(|entry| {
             entry.sticky_turns > 32
                 || entry.cooldown_turns > 32

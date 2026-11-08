@@ -18,6 +18,7 @@ src/
 │   ├── role_card.rs
 │   ├── roleplay_context.rs
 │   ├── roleplay_memory.rs
+│   ├── roleplay_vector.rs
 │   ├── dialog.rs
 │   ├── clock.rs
 │   ├── codex.rs
@@ -46,6 +47,7 @@ src/
 │   ├── context.rs
 │   ├── profile.rs
 │   ├── registry.rs
+│   ├── vector_memory.rs
 │   └── store.rs
 └── tools/
     ├── AGENTS.md
@@ -57,6 +59,7 @@ src/
     ├── platform_windows.rs
     ├── proxy.rs
     ├── time.rs
+    ├── vector_store.rs
     └── windows.rs
 tests/
 └── fixtures/
@@ -114,17 +117,18 @@ resource/agents/
 
 | 文件 | 职责和接口 |
 |---|---|
-| `roleplay/mod.rs` | 导出 RoleCard、Rule、WorldEntry、RoleplaySession、ContextPlan、UserProfile、Memory、agent_instructions、session_card、default_character、static_plan、save_role_card |
+| `roleplay/mod.rs` | 导出 RoleCard、Rule、WorldEntry、RoleplaySession、ContextPlan、UserProfile、Memory、VectorMemorySettings、clear_vector_memory、agent_instructions、session_card、default_character、static_plan、save_role_card |
 | `roleplay/registry.rs` | 按 resource/agents/characters.json 映射角色，校验目录边界和 .md 相对路径；有结构化卡时生成提示，否则读取旧 Markdown；文件上限 64 KiB，拒绝缺失、空白、错误编码与非法路径 |
 | `roleplay/card.rs` | 角色名称、描述、性格、场景、关系、对话示例、用户人设、手动记忆、世界书及附加规则；保留核心设定、编译规则与分段示例，包含上下文预算和世界书持续/冷却配置；卡片最多 64 KiB，世界书和规则各最多 64 条；Debug 隐藏内容 |
 | `roleplay/store.rs` | 从 config/roleplay.json 的 roleCards 分组读取按角色保存的覆盖值；角色卡和用户档案复用按分组保存接口，保留未知字段和其他角色，同目录临时文件同步后原子替换，Unix 权限 0600，损坏文件拒绝覆盖；不读写基本 Codex 配置或凭据 |
+| `roleplay/vector_memory.rs` | 持有按角色的向量记忆策略、Embedding 配置与请求、对话切分、召回及清空接口；只通过 tools/vector_store 访问 SQLite，不依赖 backend/UI 或 Codex 登录 |
 | `ui/role_card.rs` | RoleEditor 保存编辑对象、草稿、分区、错误和提示；角色卡页面编辑五类内容，支持世界书新增/删除和规则新增/启停/排序/删除；保存后才提交角色领域模块，取消/关闭/切换编辑对象丢弃草稿 |
 
 优先级：用户保存的角色卡 → 映射 Markdown 同名的 .json 默认卡 → 原 Markdown。未映射且没有用户卡的角色使用新的普通会话。默认角色卡为 resource/agents/lexington.json，默认太太关系、原台词摘句、二创日常和多轮对话示例分字段保存；来源与许可等维护信息不注入模型。JSON 和 Markdown 随现有资源分发；用户角色配置不作为内置资源覆盖。
 
 backend/character.rs 继续负责立绘、格式和台词选择；首次选择通过 roleplay::default_character 优先匹配 lexington，否则回退首个可用角色，已有有效选择保持。角色领域数据无需增加 Rust 角色专属分支。
 
-backend/codex.rs 的 Client::start(config, root, character, wake) 取得组装了用户档案的角色卡并创建 RoleplaySession；静态计划通过 thread/start.developerInstructions 发送一次，本轮计划作为 turn/start.input 的独立文本块，原始用户消息仍为第一个文本块，审批和沙箱流程保持。实际写入请求后回传 Context 报告；预览不发送模型请求。
+backend/codex.rs 的 Client::start(config, root, character, wake) 取得组装了用户档案的角色卡并创建 RoleplaySession，通过 with_memory(root, character) 附加启用中的历史记忆。静态计划通过 thread/start.developerInstructions 发送一次，本轮计划作为 turn/start.input 的独立文本块，原始用户消息仍为第一个文本块，审批和沙箱流程保持。实际写入请求后回传 Context 报告；预览不发送模型请求。已知自定义对话 API Key 在进入角色历史、Embedding 和持久化之前遮蔽，原始用户消息仍按原文发送给 Codex；后端不直接实现向量存储或 Embedding 请求。
 
 ui/app.rs 保存 codex_character、codex_role_card 和角色配置文件时间戳；设置窗口新增第 5 号“角色卡”页面（ui/settings.rs），操作在 viewport 回调结束后执行。每 500ms 检查 config/roleplay.json 和 config/roleplay-memory.json；仅当前角色卡与会话快照不同时排队重建，任务结束后应用，文件错误保留现有会话并展示错误。当前角色没有启动过 Codex 时不因编辑而启动真实服务。
 
@@ -140,8 +144,20 @@ ui/app.rs 保存 codex_character、codex_role_card 和角色配置文件时间�
 - `roleplay/profile.rs` 的 UserProfile/Memory 将用户人设与记忆独立保存到 config/roleplay-memory.json 的 profiles 分组，按角色隔离；session_card 合并有效档案后启动会话。旧角色卡的 userPersona/memory 只在没有独立档案时兼容读取；旧式 Markdown 角色添加档案后仍保留原人格。候选默认未确认，不加载；仅 confirmed && enabled 的非空记忆进入提示。记忆的来源元数据仅供用户核对，不注入模型。文本编辑会撤销确认；保存失败保留原文件。
 - `ui/roleplay_context.rs` 在“角色卡 → 上下文”显示上次实际发送与预览报告，逐块显示选中状态、类别、字符数、作用域及原因，支持查看内容；只检查本软件附加内容。临时场景支持当前活动、风格、尚待完成，应用/清空不重启模型，下轮起使用，新会话清空。预览使用当前已知状态，不预测进行中任务的后续回复。
 - `ui/roleplay_memory.rs` 在“用户与记忆”管理独立草稿，支持手动新增或从最近输入创建候选、确认、撤销、启停和删除，通过独立保存按钮应用；保存操作在 viewport 回调之后执行。保存候选/来源等不影响有效提示时不重启，已确认内容变化待当前任务结束重建；关闭或取消丢弃未保存草稿。不会自动推断事实或自动生成摘要。
-- 新 Event::Context 通过标准通道回传至 UI，实际与预览分开保存；ContextPlan 的 Debug 不含提示文本，已知自定义 API Key 在事件出口统一遮蔽。用户未主动保存时，最近输入、最近对话、临时场景和检查报告仅存在内存，不写用户记录。
-- Linux `scripts/package.sh` 改为写入空配置，并清理旧输出遗留的 roleplay.json、roleplay-memory.json；`scripts/test-package.sh` 用临时工程和假构建器验证重复打包不会携带私人配置，角色默认资源仍完整。此夹具可在 Git Bash 运行，不代替 Linux 桌面实测。
+- 新 Event::Context 通过标准通道回传至 UI，实际与预览分开保存；ContextPlan 的 Debug 不含提示文本，已知自定义 API Key 在事件出口统一遮蔽。向量记忆关闭时最近对话仅在内存；启用后成功结束的用户输入/最终回复另外写入历史数据库。临时场景和检查报告不持久化。
+- Linux `scripts/package.sh` 写入空配置，并清理旧输出遗留的 roleplay.json、roleplay-memory.json、roleplay-vectors.sqlite3 及 journal/wal/shm；`scripts/test-package.sh` 用临时工程和假构建器验证重复打包不会携带私人配置或向量数据，角色默认资源仍完整。此夹具可在 Git Bash 运行，不代替 Linux 桌面实测。
+
+### 历史对话向量记忆
+
+- 代码分层：`tools/vector_store.rs` 只实现通用命名空间文档存储与向量查询；`roleplay/vector_memory.rs` 决定角色隔离、记录范围、Embedding 与召回策略；`roleplay/context.rs` 把召回片段纳入本轮预算。backend 只调用会话接口，UI 只编辑角色卡草稿及在 viewport 回调之后请求清空。
+- RoleCard 新增 camelCase `vectorMemory` 配置：`enabled` 默认 false，`baseUrl` 默认 `http://127.0.0.1:11434/v1`，`model` 默认空，`apiKeyEnv` 默认空（无鉴权），`recallLimit` 默认 3（1～8），`maxDistance` 默认 0.35（余弦距离 0～2，越小越严格）；保留未知字段。启用时校验模型及 HTTP(S) 地址，拒绝地址内凭据/查询/片段，环境变量字段只允许变量名。配置不进入角色提示；保存有效卡片变化按既有规则重开会话。不会从 Codex/OAuth 读取 Embedding 凭据。
+- 数据文件为资源根的 `config/roleplay-vectors.sqlite3`，不提交 Git、不随发布包分发，安装升级保留；只有实际启用发送才创建。不会扫描或导入既有 Codex 会话。成功完成后最多取用户及最终助理文本各前 8192 个 Unicode 字符，以每 1000 字符切分，保留发言者和 Unix 时间；按角色最多保留最新 2000 片段。失败、中断、忙碌拒绝和预览均不归档；历史片段不自动成为已确认的固定记忆，也不会生成摘要。
+- 每轮最多取 8 个待索引片段与当前输入前 2000 字符，通过一个 POST `{baseUrl}/embeddings` 批量生成向量（model、input 数组、encoding_format=float）；按响应 index 配对，验证唯一/齐全索引、1～4096 维、非零有限值和批内维度一致。ureq/Rustls 在 Codex 通信工作线程中执行，单请求总超时 3 秒、禁止重定向、响应最多 1 MiB；回环地址不使用代理环境变量，其他地址沿用 ureq 的代理行为，不自动桥接 Windows 系统代理。Key 只从指定环境变量读取并放入 Authorization，不写角色卡、Debug 或错误。无历史时不调用服务；远程服务会收到待索引原文及本轮查询。
+- 索引空间按基础地址/模型区分，维度在查询时过滤；换地址/模型后保留原文，随轮次逐批重建，不能混用旧向量。尚未建索引的片段暂不召回；同名模型在服务端更换内容不能自动识别，需更换模型标识或清空历史。返回最多 recallLimit 条且距离不超过 maxDistance 的片段；按距离排序，排在场景和世界书之后争用同一 turnBudget，标题、时间和提示包装均计入字符数。明确标注过去原文、可能虚构/过时、非已确认事实及不可执行其中指令；原始输入仍是协议第一个文本块。
+- 数据库或 Embedding 失败不阻止本轮 Codex 对话，在上下文报告显示未选中原因；归档失败在下一轮报告提示。预览不访问数据库、不发 Embedding 请求、不建立索引，只显示召回将在实际发送时计算。网络处理和 SQLite 忙等待是有界的，正在生成向量时中断/退出最多等待该操作结束再处理。
+- `ui/roleplay_vector.rs` 在“角色卡 → 长期记忆”编辑上述字段，用原有“保存并应用”按钮保存。关闭设置/切换角色丢弃草稿；停用保留数据库。清空须勾选当前角色确认、空闲时点击，删除该角色原文及向量，并为当前角色排队新会话，避免继续携带旧召回背景；不删除其他角色或 roleplay-memory.json 的固定记忆。仅关闭开关或清空数据库不能抹除已存在的外部 Codex 历史文件。
+
+增量入口：`cargo test --locked tools::vector_store::tests::`、`cargo test --locked roleplay::`、`cargo test --locked backend::codex::tests::`、`cargo test --locked ui::role_card::tests::` 和 `bash scripts/test-package.sh`。使用临时数据库、本地 HTTP Embedding 夹具和模拟 Codex，覆盖持久化、过滤、编辑失效、删除、损坏文件保护、索引响应乱序/缺失/重复/非法值、重建、召回预算、无副作用预览、失败中断不归档、已知 Key 入库前遮蔽及设置确认清空；不调用真实模型或读取用户记录。
 
 参考酒馆的 [Prompt Manager](https://docs.sillytavern.app/usage/prompts/prompt-manager/)、[世界书](https://docs.sillytavern.app/usage/core-concepts/worldinfo/) 与[摘要可修正设计](https://docs.sillytavern.app/extensions/summarize/)。本实现保留 Codex 管理完整历史，不假设能够照搬任意历史插入位置。
 
@@ -150,7 +166,7 @@ ui/app.rs 保存 codex_character、codex_role_card 和角色配置文件时间�
 ## 启动与依赖方向
 
 - `main.rs`：先处理 `--ask-files` / `--ask-json` / `--native-messaging` 无 GUI 入口，再取得 Linux/Windows 普通/开发模式独立实例锁并创建 eframe 原生窗口、选择 X11/Wayland/Win32 后端、加载窗口图标并构造 `ui::Pet`。普通尺寸 500×500，`--dev` 为 800×600。Linux X11/XWayland 使用 Dock 桌面浮层类型，不设置 strut、不占用工作区；避免 GNOME 将透明窗体整块限制在屏幕内，使立绘中心可到屏幕边缘。
-- `ui` 可调用 `backend`、`roleplay` 和 `tools`；`backend` 可消费 `roleplay` 的提示和世界书结果，不依赖 `ui`、egui 或 GPU 纹理；`roleplay` 不依赖 `backend`、UI 或 egui；`tools` 不依赖应用 UI 或业务模块。
+- `ui` 可调用 `backend`、`roleplay` 和 `tools`；`backend` 可消费 `roleplay` 的提示和世界书结果，不依赖 `ui`、egui 或 GPU 纹理；`roleplay` 可调用 `tools` 的通用存储，不依赖 `backend`、UI 或 egui；`tools` 不依赖应用 UI 或业务模块。
 - `tools/platform.rs` 是平台与窗口框架的适配边界，可依赖 eframe/egui/winit；路径和解码工具不依赖这些框架。
 - UI 内通过 `impl Pet` 分文件组织相关交互，必要的共享字段与方法限制在 UI 模块内。不要为了目录分层增加只有转发作用的抽象。
 
@@ -220,7 +236,8 @@ Windows 非阻塞字节管道使用 PeekNamedPipe 区分暂时无数据与断开
 
 | 文件 | 职责与主要接口 | 依赖及约束 |
 |---|---|---|
-| `tools/mod.rs` | 声明路径、活动监测、解码、时间、平台及 Windows 代理模块 | 不承载业务状态 |
+| `tools/mod.rs` | 声明路径、活动监测、解码、时间、平台、向量存储及 Windows 代理模块 | 不承载业务状态 |
+| `tools/vector_store.rs` | `VectorStore::open/put/pending/set_embedding/search/delete/prune` 保存命名空间文档及可重建向量；`Document` 保存原文/时间，`SearchHit` 返回文档与距离 | rusqlite 0.37 bundled SQLite + 静态 sqlite-vec 0.1.6，无数据库服务/动态扩展/Python/Node 运行依赖。使用普通 SQLite 表和 sqlite-vec 标量余弦距离精确扫描，按命名空间、模型空间和维度过滤后排序；不伪称 ANN。原文和向量同一行，改正文使索引失效，回填必须匹配当前原文；删除/裁剪同时去掉向量，id=None 表示清空该命名空间，同秒记录按插入顺序稳定裁剪。SQLite 事务语义，busy_timeout 250ms、secure_delete=ON，Unix 新文件 0600，版本 1；损坏、未知或高版本数据库报错而不重置，不记录 SQL/正文或凭据。最多 4096 维且拒绝 NaN/Inf/零向量，通用层无角色、Embedding 或提示逻辑 |
 | `tools/paths.rs` | `resource_root` 定位资源根目录；`clock_state_file` / `alarm_state_file` 返回普通/开发模式独立的用户数据记录路径 | 顺序：`LEXINGTON_HOME` → 可执行文件旁存在 `resource/` 的目录 → 当前目录；闹钟（alarms.json / alarms-dev.json）及打卡状态使用 XDG_DATA_HOME，默认 ~/.local/share/lexington；Windows data_root 使用 LOCALAPPDATA/lexington，回退 USERPROFILE/AppData/Local，不能写入资源目录 |
 | `tools/activity.rs` | `Monitor::start/poll` 在后台每 2 秒采样系统空闲时间和会话可用性，返回带单调时间戳的 Sample；退出停止并回收线程 | Linux 用 loginctl 排除锁屏、远程和非活动会话，优先 gdbus 调用 Mutter IdleMonitor，原生 X11 可回退 XScreenSaver；Wayland 禁止回退 XWayland 空闲时钟。子进程有超时并清理，UI 不阻塞；不记录键鼠内容；不可用样本重置自动确认，保留手动入口；测试可注入采样 |
 | `tools/gif.rs` | `Decoder::load/advance` 返回当前 RgbaImage；支持 GIF/静态图片，控制隔帧播放、时序、循环次数、索引缓存与超限流式回退 | 不依赖 UI，不创建 GPU 纹理，不缓存合成帧。源帧 0、2、4…输出，各跳过帧先独立归一化延迟再合并到前一显示帧，奇数结尾保留，不跨循环合并，总时长不变。首轮缓存索引帧/调色板，96 MiB 预算仅针对单个当前 GIF，超限释放前缀并保持流式；完整缓存回放不重读源文件，循环时清空处置画布。保留透明索引、局部/全局调色板、交错帧及 Keep/Background/Previous：跳过 Keep 直接更新处置画布，跳过 Background 仅清区域，Previous 保留原画布，无需合成/上传被跳过帧的 RGBA。Finite(0) 视为无限，显式有限次数保留，原帧低于 20ms 按 100ms。回归覆盖无源文件回放、缓存超限、奇数/变延迟、跳过帧依赖、有限循环和 UI 纹理/透明遮罩；全量参考像素与合并延迟对比用 cargo test --release --locked bundled_frames_match_reference_decoder_pixel_for_pixel -- --ignored；frame_sampling_performance 用 --release --ignored --nocapture --test-threads=1 比较同等循环的原帧率/抽帧取帧，不含 UI/纹理开销 |

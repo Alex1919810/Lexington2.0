@@ -19,6 +19,7 @@
 
 - 角色映射、角色卡和提示组装由平级 roleplay 模块负责；后端保持 Codex 进程/协议/会话/审批职责。组装后的角色提示作为 thread/start.developerInstructions 注入一次；匹配世界书作为本轮独立文本块携带，原始用户输入保留为第一个文本块。不能替换 baseInstructions 或扩大审批/沙箱权限。新增角色数据无需 Codex 分支。
 - 上下文规划在确认可以发送新任务时执行，实际发送后回传 Context 报告；预览只操作会话副本，不调用模型。失败/中断回滚角色会话快照，最终回复去重后进入最近历史；Context 内容同错误/回复一样遮蔽已知 API Key，不能写入日志。
+- 向量记忆的配置、存储调用与 Embedding 请求属于 roleplay；后端只绑定会话角色/根目录并沿用 begin/finish/preview。已知自定义对话 API Key 在用户输入和最终回复进入角色历史之前遮蔽，原始用户协议输入不改写。仅成功 finish 允许归档，失败/中断不得持久化本轮内容。
 
 - Windows Codex 仅运行原生 exe，显式 .cmd/.bat 在启动前拒绝；进程以挂起状态加入 kill-on-close Job 后再恢复，退出清理后代。协议夹具必须显式 UTF-8，目录身份比较用 samefile，不能依赖扩展路径前缀的字符串表示。
 - Windows 的 Codex 子进程通过 tools::proxy 桥接系统手动代理；继承登录和自定义 API 都适用，已有代理环境变量优先。系统代理变更需重启会话，不修改本机 Codex 配置或登录。

@@ -129,7 +129,8 @@ impl Client {
         wake: impl Fn() + Send + 'static,
     ) -> Result<Self, String> {
         let card = crate::roleplay::session_card(root, character)?;
-        let session = card.map(crate::roleplay::RoleplaySession::new);
+        let session = card
+            .map(|card| crate::roleplay::RoleplaySession::new(card).with_memory(root, character));
         let instructions = if let Some(session) = &session {
             Some(session.initial_plan().text(true))
         } else {
@@ -228,7 +229,7 @@ impl Client {
         crate::tools::proxy::inherit_system_proxy(&mut command);
         Ok(command)
     }
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn launch(
         command: Command,
         instructions: Option<String>,
@@ -341,6 +342,7 @@ impl Client {
                 session,
                 receiver,
                 &emit,
+                secret.as_deref(),
             );
             // Reap on every exit path, including failed initialization and broken pipes.
             drop(stdin);
@@ -425,7 +427,14 @@ fn communicate(
     mut session: Option<crate::roleplay::RoleplaySession>,
     receiver: mpsc::Receiver<Input>,
     emit: &impl Fn(Event),
+    secret: Option<&str>,
 ) -> Result<(), String> {
+    let sanitize = |text: &str| {
+        secret.map_or_else(
+            || text.to_owned(),
+            |secret| text.replace(secret, "[hidden]"),
+        )
+    };
     let mut pending = HashMap::new();
     let mut next = 1;
     request(
@@ -462,7 +471,9 @@ fn communicate(
                     approval_items.clear();
                     final_messages.clear();
                     before_turn = session.clone();
-                    let plan = session.as_mut().map(|session| session.begin(&text));
+                    let plan = session
+                        .as_mut()
+                        .map(|session| session.begin(&sanitize(&text)));
                     let world_context = plan
                         .as_ref()
                         .map(|plan| plan.text(false))
@@ -506,7 +517,7 @@ fn communicate(
         match input {
             Input::Preview(text) => {
                 if let Some(session) = &session {
-                    emit(Event::Context(Box::new(session.preview(&text))));
+                    emit(Event::Context(Box::new(session.preview(&sanitize(&text)))));
                 }
             }
             Input::Scene(scene) => {
@@ -696,13 +707,13 @@ fn communicate(
                             {
                                 session = before_turn.take();
                             } else if let Some(session) = &mut session {
-                                session.finish(
+                                session.finish(&sanitize(
                                     &final_messages
                                         .values()
                                         .cloned()
                                         .collect::<Vec<_>>()
                                         .join("\n"),
-                                );
+                                ));
                                 before_turn = None;
                             }
                             if params["turn"]["status"] == "failed" {
@@ -842,7 +853,12 @@ mod tests {
 
     #[test]
     fn context_preview_and_aborted_turns_do_not_mutate_future_world_state() {
+        let root =
+            std::env::temp_dir().join(format!("lexington-abort-memory-{}", rand::random::<u64>()));
         let mut card = crate::roleplay::RoleCard::default();
+        card.vector_memory.enabled = true;
+        card.vector_memory.model = "fixture".into();
+        card.vector_memory.base_url = "http://127.0.0.1:1/v1".into();
         card.context.scan_messages = 1;
         card.world_book.push(crate::roleplay::WorldEntry {
             keywords: "interrupt,fail".into(),
@@ -853,7 +869,7 @@ mod tests {
         let client = Client::mock_session(
             "context",
             None,
-            Some(crate::roleplay::RoleplaySession::new(card)),
+            Some(crate::roleplay::RoleplaySession::new(card).with_memory(&root, "a")),
         );
         client.preview_context("interrupt".into()).unwrap();
         let event = wait_for(
@@ -890,6 +906,20 @@ mod tests {
         });
         assert!(matches!(event, Event::Text {text, ..} if text == "turn-has-no-persona:3"));
         wait_for(&client, |event| matches!(event, Event::Finished { .. }));
+        drop(client);
+        let store = crate::tools::vector_store::VectorStore::open(
+            &root.join("config/roleplay-vectors.sqlite3"),
+        )
+        .unwrap();
+        let documents = store.pending("a", "fixture-inspection", 8).unwrap();
+        assert_eq!(documents.len(), 2);
+        assert!(
+            documents
+                .iter()
+                .all(|doc| !doc.text.contains("interrupt") && !doc.text.contains("fail"))
+        );
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -997,8 +1027,24 @@ mod tests {
                     command.env_remove(key);
                 }
             }
-            let client = Client::launch(command, None, || {}).unwrap();
-            client.submit("确认配置".into(), false).unwrap();
+            let session = custom.then(|| {
+                let mut card = crate::roleplay::RoleCard::default();
+                card.vector_memory.enabled = true;
+                card.vector_memory.model = "fixture".into();
+                card.vector_memory.base_url = "http://127.0.0.1:1/v1".into();
+                crate::roleplay::RoleplaySession::new(card).with_memory(&root, "a")
+            });
+            let client = Client::launch_session(command, None, session, || {}).unwrap();
+            client
+                .submit(
+                    if custom {
+                        format!("确认配置 {}", config.api_key)
+                    } else {
+                        "确认配置".into()
+                    },
+                    false,
+                )
+                .unwrap();
             wait_for(&client, |event| {
                 matches!(event, Event::Finished { interrupted: false })
             });
@@ -1006,6 +1052,18 @@ mod tests {
                 client.submit("echo-secret".into(), false).unwrap();
                 assert!(
                     matches!(wait_for(&client, |event| matches!(event, Event::Text { .. })), Event::Text { text, .. } if text == "[hidden]")
+                );
+                wait_for(&client, |event| matches!(event, Event::Finished { .. }));
+                let store = crate::tools::vector_store::VectorStore::open(
+                    &root.join("config/roleplay-vectors.sqlite3"),
+                )
+                .unwrap();
+                let documents = store.pending("a", "inspection", 8).unwrap();
+                assert_eq!(documents.len(), 4);
+                assert!(
+                    documents
+                        .iter()
+                        .all(|doc| !doc.text.contains(&config.api_key))
                 );
             }
         }

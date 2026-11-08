@@ -17,6 +17,9 @@ printf '{"apiKey":"fixture-private-config"}\n' > "$fixture/config/config.json"
 printf 'fixture-private-card\n' > "$fixture/config/roleplay.json"
 printf 'fixture-private-memory\n' > "$fixture/config/roleplay-memory.json"
 cp "$fixture/config/roleplay.json" "$fixture/config/roleplay-memory.json" "$fixture/dist/lexington/config/"
+for suffix in '' -journal -wal -shm; do
+    printf 'fixture-private-vector\n' > "$fixture/dist/lexington/config/roleplay-vectors.sqlite3$suffix"
+done
 cat > "$fixture/bin/cargo" <<'CARGO'
 #!/usr/bin/env bash
 exit 0
@@ -31,10 +34,14 @@ PATH="$fixture/bin:$PATH" bash "$fixture/scripts/package.sh" >/dev/null
 bundle="$fixture/dist/lexington"
 [[ "$(cat "$bundle/config/config.json")" == '{}' ]]
 [[ ! -e "$bundle/config/roleplay.json" && ! -e "$bundle/config/roleplay-memory.json" ]]
+for suffix in '' -journal -wal -shm; do
+    [[ ! -e "$bundle/config/roleplay-vectors.sqlite3$suffix" ]]
+done
 [[ -f "$bundle/resource/agents/fixture.md" ]]
 [[ -f "$fixture/config/roleplay-memory.json" ]]
 archive="$fixture/dist/lexington-linux-$(uname -m).tar.gz"
 [[ -f "$archive" ]]
 listing="$(tar -tzf "$archive")"
 [[ "$listing" != *'config/roleplay.json'* && "$listing" != *'config/roleplay-memory.json'* ]]
+[[ "$listing" != *'roleplay-vectors.sqlite3'* ]]
 printf 'Linux bundle privacy and role-resource fixture checks passed.\n'

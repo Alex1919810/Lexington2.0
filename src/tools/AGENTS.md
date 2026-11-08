@@ -14,6 +14,7 @@
 - Windows 穿透须逐帧比较实际 GWL_EXSTYLE 后按需更新，不能只缓存期望值；winit 在焦点或层级变化时可能重写样式。HWND 保存为指针宽度 WindowId，不能截断为 X11 的 u32。
 - Windows 本地时间使用 CRT localtime_s/_mktime64；活动采样只接受未锁定的活动本地控制台会话，不读取输入内容。采样失败应禁用自动确认，保留手动入口。
 - Windows GUI 启动的 CLI 可能不读取系统代理；桥接只通过子进程 Command.env 补充手动代理，显式代理环境变量（包括空值）优先，不修改全局环境或登录。WinHTTP 返回的代理、排除项和 PAC URL 均须 GlobalFree；仅有 PAC 时不能当成普通代理 URL。
+- 向量存储保持通用命名空间接口，不读取角色卡、不调用 Embedding。sqlite-vec 静态注册一次；原文为本体、向量为可重建索引，编辑正文使索引失效，回填必须核对原文。查询先限定命名空间/模型空间/维度；未知版本或损坏库报错，禁止自动重置。
 
 - 按改动选择 `cargo test --locked tools::gif::tests::`、`cargo test --locked tools::platform::tests::` 或具体用例；GIF/透明度变化补测对应 `ui::assets::tests::`，解码变化按模块文档运行 release 参考像素专项用例。
 - 平台窗口改动仅运行相关 native-smoke 模式，遵守 `scripts/AGENTS.md` 的隔离和串行要求。

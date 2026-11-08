@@ -37,6 +37,7 @@ yarn-error.log*
 # Rust
 /target/
 /.tools/
+/config/roleplay-vectors.sqlite3*
 
 # Native verification helpers
 __pycache__/

@@ -11,6 +11,8 @@ pub(super) struct RoleEditor {
     pub section: usize,
     pub error: String,
     pub notice: String,
+    pub pending_clear: Option<String>,
+    pub clear_confirmed: bool,
 }
 
 fn editor(ui: &mut egui::Ui, label: &str, text: &mut String) {
@@ -62,6 +64,8 @@ impl Pet {
         if previous != self.role_editor.character {
             self.role_editor.profile = None;
             self.role_editor.pending_profile = None;
+            self.role_editor.pending_clear = None;
+            self.role_editor.clear_confirmed = false;
             self.role_editor.draft = None;
             self.role_editor.error.clear();
             self.role_editor.notice.clear();
@@ -101,6 +105,8 @@ impl Pet {
                 )
                 .clicked();
             if ui.button("取消修改").clicked() {
+                self.role_editor.clear_confirmed = false;
+                self.role_editor.pending_clear = None;
                 self.role_editor.profile = None;
                 self.role_editor.draft = None;
                 self.role_editor.error.clear();
@@ -126,6 +132,7 @@ impl Pet {
                 "用户与记忆",
                 "附加规则",
                 "上下文",
+                "长期记忆",
             ]
             .iter()
             .enumerate()
@@ -133,6 +140,17 @@ impl Pet {
                 ui.selectable_value(&mut self.role_editor.section, index, *title);
             }
         });
+        if self.role_editor.section == 6 {
+            self.role_vector_ui(ui);
+            return save
+                .then(|| {
+                    self.role_editor
+                        .draft
+                        .clone()
+                        .map(|card| (self.role_editor.character.clone(), card))
+                })
+                .flatten();
+        }
         if self.role_editor.section == 5 || self.role_editor.section == 3 {
             if self.role_editor.section == 5 {
                 self.role_context_ui(ui);
@@ -313,6 +331,7 @@ mod tests {
             app.save_role_card(&character, &card);
         }
         app.apply_profile_action();
+        app.apply_vector_action();
         output
     }
 
@@ -462,6 +481,74 @@ mod tests {
                 .memories
                 .is_empty()
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn vector_settings_validate_save_and_purge_only_the_selected_character() {
+        let root =
+            std::env::temp_dir().join(format!("lexington-vector-ui-{}", rand::random::<u64>()));
+        let card = RoleCard {
+            name: "a".into(),
+            ..Default::default()
+        };
+        roleplay::save_role_card(&root, "a", &card).unwrap();
+        let ctx = egui::Context::default();
+        let mut app = Pet::from_root(&ctx, true, root.clone());
+        app.library.character = "a".into();
+        app.codex_character = Some("a".into());
+        app.codex_role_card = Some(card);
+        app.role_editor.section = 6;
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "启用历史对话向量记忆");
+        click(&mut app, &ctx, "保存并应用");
+        assert!(!app.role_editor.error.is_empty());
+        assert!(
+            !RoleCard::load(&root, "a")
+                .unwrap()
+                .unwrap()
+                .vector_memory
+                .enabled
+        );
+        app.role_editor.draft.as_mut().unwrap().vector_memory.model = "fixture".into();
+        click(&mut app, &ctx, "保存并应用");
+        assert!(app.role_editor.error.is_empty());
+        assert!(app.codex_restart_pending);
+        let saved = RoleCard::load(&root, "a").unwrap().unwrap();
+        assert!(saved.vector_memory.enabled);
+        assert!(!saved.instructions().contains("127.0.0.1"));
+        let store = crate::tools::vector_store::VectorStore::open(
+            &root.join("config/roleplay-vectors.sqlite3"),
+        )
+        .unwrap();
+        for character in ["a", "b"] {
+            store
+                .put(
+                    character,
+                    &crate::tools::vector_store::Document {
+                        id: "fixture".into(),
+                        text: "history".into(),
+                        created_at: 1,
+                    },
+                )
+                .unwrap();
+        }
+        click(&mut app, &ctx, "清空此角色的历史记忆");
+        assert_eq!(store.pending("a", "", 8).unwrap().len(), 1);
+        click(&mut app, &ctx, "确认删除当前编辑角色的历史向量记忆");
+        app.busy = true;
+        click(&mut app, &ctx, "清空此角色的历史记忆");
+        assert_eq!(store.pending("a", "", 8).unwrap().len(), 1);
+        app.busy = false;
+        click(&mut app, &ctx, "清空此角色的历史记忆");
+        assert!(store.pending("a", "", 8).unwrap().is_empty());
+        assert_eq!(store.pending("b", "", 8).unwrap().len(), 1);
+        assert!(!app.role_editor.clear_confirmed);
+        app.role_editor.clear_confirmed = true;
+        click(&mut app, &ctx, "取消修改");
+        assert!(!app.role_editor.clear_confirmed);
+        drop(store);
+        drop(app);
         std::fs::remove_dir_all(root).unwrap();
     }
 

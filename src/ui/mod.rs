@@ -9,6 +9,7 @@ mod pet;
 mod role_card;
 mod roleplay_context;
 mod roleplay_memory;
+mod roleplay_vector;
 mod settings;
 mod sidebar;
 mod style;
