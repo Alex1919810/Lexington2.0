@@ -36,6 +36,10 @@ PYTHON
 chmod +x "$fixture/bin/cargo" "$fixture/bin/python3"
 PATH="$fixture/bin:$PATH" bash "$fixture/scripts/package.sh" >/dev/null
 bundle="$fixture/dist/lexington"
+mkdir -p "$bundle/config/characters/private/png"
+printf 'private artwork\n' > "$bundle/config/characters/private/png/normal.png"
+PATH="$fixture/bin:$PATH" bash "$fixture/scripts/package.sh" >/dev/null
+[[ ! -e "$bundle/config/characters" ]]
 [[ "$(cat "$bundle/config/config.json")" == '{}' ]]
 [[ ! -e "$bundle/config/roleplay.json" && ! -e "$bundle/config/roleplay-memory.json" ]]
 for suffix in '' -journal -wal -shm; do
@@ -49,6 +53,7 @@ archive="$fixture/dist/lexington-linux-$(uname -m).tar.gz"
 listing="$(tar -tzf "$archive")"
 [[ "$listing" != *'config/roleplay.json'* && "$listing" != *'config/roleplay-memory.json'* ]]
 [[ "$listing" != *'roleplay-vectors.sqlite3'* ]]
+[[ "$listing" != *'config/characters/'* ]]
 [[ "$listing" == *'resource/models/bge-small-zh-v1.5/model.onnx'* ]]
 rm "$fixture/resource/models/bge-small-zh-v1.5/model.onnx"
 if PATH="$fixture/bin:$PATH" bash "$fixture/scripts/package.sh" >/dev/null 2>&1; then

@@ -20,3 +20,4 @@
 
 - 按改动选择 `cargo test --locked tools::gif::tests::`、`cargo test --locked tools::platform::tests::` 或具体用例；GIF/透明度变化补测对应 `ui::assets::tests::`，解码变化按模块文档运行 release 参考像素专项用例。
 - 平台窗口改动仅运行相关 native-smoke 模式，遵守 `scripts/AGENTS.md` 的隔离和串行要求。
+- 原生文件选择只返回路径，调用线程由 UI 管理；不在工具中加载角色卡、写入导入资产或创建纹理。测试注入选择结果，不能弹出真实选择器阻塞自动化。

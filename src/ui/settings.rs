@@ -282,6 +282,7 @@ impl Pet {
             self.save_role_card(&character, &card);
         }
         self.apply_profile_action();
+        self.apply_new_character_action(ctx);
         self.apply_vector_action();
         if actions.reload {
             self.refresh(ctx);

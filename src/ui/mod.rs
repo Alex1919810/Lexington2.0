@@ -6,6 +6,7 @@ mod clock;
 mod codex;
 mod dialog;
 mod input;
+mod new_character;
 mod pet;
 mod role_card;
 mod roleplay_context;

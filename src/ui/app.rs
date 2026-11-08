@@ -89,6 +89,7 @@ pub struct Pet {
     pub(super) local_codex_config: crate::backend::codex_config::LocalCodexConfig,
     pub(super) connection_error: String,
     pub(super) role_editor: super::role_card::RoleEditor,
+    pub(super) character_creation: super::new_character::CharacterCreation,
     pub(super) context_ui: super::roleplay_context::ContextUi,
     pub(super) character_memory_ui: super::character_memories::CharacterMemoryUi,
 }
@@ -236,6 +237,7 @@ impl Pet {
             local_codex_config: Default::default(),
             connection_error: String::new(),
             role_editor: Default::default(),
+            character_creation: Default::default(),
             context_ui: Default::default(),
             character_memory_ui: Default::default(),
         };
@@ -482,6 +484,7 @@ impl Pet {
             self.last_activity = Instant::now();
         }
         self.poll_codex();
+        self.poll_character_creation(ctx);
         self.poll_character_memories(ctx);
         if self.last_config_check.elapsed() >= Duration::from_millis(500) {
             self.last_config_check = Instant::now();

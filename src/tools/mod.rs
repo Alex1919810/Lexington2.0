@@ -1,5 +1,6 @@
 pub mod activity;
 pub mod embedding;
+pub mod file_dialog;
 pub mod gif;
 pub mod paths;
 pub mod platform;

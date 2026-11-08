@@ -4,6 +4,7 @@ use eframe::egui;
 
 #[derive(Default)]
 pub(super) struct RoleEditor {
+    pub creating: Option<super::new_character::NewCharacter>,
     pub profile: Option<crate::roleplay::UserProfile>,
     pub pending_profile: Option<(String, crate::roleplay::UserProfile)>,
     pub character: String,
@@ -46,6 +47,21 @@ impl Pet {
     }
 
     pub(super) fn role_card_ui(&mut self, ui: &mut egui::Ui) -> Option<(String, RoleCard)> {
+        if self.role_editor.creating.is_none()
+            && ui
+                .add_enabled(
+                    !self.character_creation.busy(),
+                    egui::Button::new("新建角色卡"),
+                )
+                .clicked()
+        {
+            self.role_editor.creating = Some(Default::default());
+            self.role_editor.error.clear();
+        }
+        if self.role_editor.creating.is_some() {
+            self.new_character_ui(ui);
+            return None;
+        }
         if self.role_editor.character.is_empty() {
             self.role_editor.character = self.library.character.clone();
         }
@@ -331,6 +347,8 @@ mod tests {
             app.save_role_card(&character, &card);
         }
         app.apply_profile_action();
+        app.apply_new_character_action(ctx);
+        app.poll_character_creation(ctx);
         app.apply_vector_action();
         output
     }

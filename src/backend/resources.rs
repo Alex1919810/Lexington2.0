@@ -23,8 +23,15 @@ pub struct Illustration {
 }
 pub fn illustrations(root: &Path) -> Vec<Illustration> {
     let mut result = Vec::new();
-    for dir in entries(&root.join("resource/illustration")) {
-        if !dir.is_dir() {
+    for dir in entries(&root.join("resource/illustration"))
+        .into_iter()
+        .chain(entries(&root.join("config/characters")))
+    {
+        if !dir.is_dir()
+            || dir
+                .file_name()
+                .is_none_or(|name| name.to_string_lossy().starts_with('.'))
+        {
             continue;
         }
         let character = dir.file_name().unwrap().to_string_lossy().into_owned();

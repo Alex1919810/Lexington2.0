@@ -16,6 +16,7 @@ src/
 │   ├── sidebar.rs
 │   ├── settings.rs
 │   ├── role_card.rs
+│   ├── new_character.rs
 │   ├── roleplay_context.rs
 │   ├── roleplay_memory.rs
 │   ├── roleplay_vector.rs
@@ -46,6 +47,7 @@ src/
 │   ├── mod.rs
 │   ├── card.rs
 │   ├── character_memory.rs
+│   ├── creation.rs
 │   ├── context.rs
 │   ├── profile.rs
 │   ├── registry.rs
@@ -57,6 +59,7 @@ src/
     ├── paths.rs
     ├── activity.rs
     ├── embedding.rs
+    ├── file_dialog.rs
     ├── gif.rs
     ├── platform.rs
     ├── platform_windows.rs
@@ -133,16 +136,18 @@ resource/runtime/windows-x86_64/
 
 | 文件 | 职责和接口 |
 |---|---|
-| `roleplay/mod.rs` | 导出 RoleCard、Rule、WorldEntry、RoleplaySession、ContextPlan、UserProfile、Memory、EmbeddingSource、VectorMemorySettings、clear_vector_memory、agent_instructions、session_card、default_character、static_plan、save_role_card |
+| `roleplay/mod.rs` | 导出 RoleCard、Rule、WorldEntry、RoleplaySession、ContextPlan、UserProfile、Memory、EmbeddingSource、VectorMemorySettings、clear_vector_memory、agent_instructions、session_card、default_character、static_plan、save_role_card、create_character |
 | `roleplay/registry.rs` | 按 resource/agents/characters.json 映射角色，校验目录边界和 .md 相对路径；有结构化卡时生成提示，否则读取旧 Markdown；文件上限 64 KiB，拒绝缺失、空白、错误编码与非法路径 |
 | `roleplay/card.rs` | 角色名称、描述、性格、场景、关系、对话示例、用户人设、手动记忆、世界书及附加规则；保留核心设定、编译规则与分段示例，包含上下文预算和世界书持续/冷却配置；卡片最多 64 KiB，世界书和规则各最多 64 条；Debug 隐藏内容 |
+| `roleplay/creation.rs` | create_character 校验名称、角色冲突、角色卡和至少一张 PNG/GIF，在 config/characters 内暂存完整卡片和图片后发布；load_created_card 提供用户角色卡读取；不覆盖已有角色、源图或全局角色配置 |
+| `ui/new_character.rs` | 新建表单、原生文件选择和拖入图片；viewport 回调后启动后台创建，由 Pet 持有任务并每帧完成刷新；无立绘时禁止创建，成功后编辑新卡，保持已有活动角色/聊天 |
 | `roleplay/store.rs` | 从 config/roleplay.json 的 roleCards 分组读取按角色保存的覆盖值；角色卡和用户档案复用按分组保存接口，保留未知字段和其他角色，同目录临时文件同步后原子替换，Unix 权限 0600，损坏文件拒绝覆盖；不读写基本 Codex 配置或凭据 |
 | `roleplay/vector_memory.rs` | 持有按角色的向量记忆策略、本地/远程 Embedding 配置与调用、对话切分、召回及清空接口；本地调用 tools/embedding，SQLite 调用 tools/vector_store，不依赖 backend/UI 或 Codex 登录 |
 | `roleplay/character_memory.rs` | 定义 Extraction、Episode；提供提炼指令/JSON Schema、字段和原文依据校验，以及按角色的 list/store_extracted/delete；人物事件仅供查看，不自动注入角色提示或固定档案 |
 | `ui/character_memories.rs` | 管理独立后台提炼队列和 Client 事件缓冲，仅成功结果交给 roleplay 校验保存；提供与设置平级的独立人物记忆 viewport、角色选择、事件浏览、搜索、筛选和删除；浏览状态独立于 RoleEditor，后台结果和状态不进入正常聊天，具体边界见人物事件记忆小节 |
-| `ui/role_card.rs` | RoleEditor 保存编辑对象、草稿、分区、错误和提示；角色卡页面编辑基础设定、世界书、规则、上下文、用户与记忆和长期记忆，支持世界书新增/删除和规则新增/启停/排序/删除；保存后才提交角色领域模块，取消/关闭/切换编辑对象丢弃草稿 |
+| `ui/role_card.rs` | RoleEditor 保存编辑对象、新建草稿、分区、错误和提示；提供新建角色入口，已有角色编辑草稿独立保留；角色卡页面编辑基础设定、世界书、规则、上下文、用户与记忆和长期记忆，支持世界书新增/删除和规则新增/启停/排序/删除；保存后才提交角色领域模块，取消/关闭/切换编辑对象丢弃草稿 |
 
-优先级：用户保存的角色卡 → 映射 Markdown 同名的 .json 默认卡 → 原 Markdown。未映射且没有用户卡的角色使用新的普通会话。默认角色卡为 resource/agents/lexington.json，默认太太关系、原台词摘句、二创日常和多轮对话示例分字段保存；来源与许可等维护信息不注入模型。JSON 和 Markdown 随现有资源分发；用户角色配置不作为内置资源覆盖。
+优先级：config/roleplay.json 的用户覆盖 → config/characters/<角色>/card.json 的新建角色卡 → 映射 Markdown 同名的 .json 默认卡 → 原 Markdown。未映射且没有用户卡的角色使用新的普通会话。默认角色卡为 resource/agents/lexington.json，默认太太关系、原台词摘句、二创日常和多轮对话示例分字段保存；来源与许可等维护信息不注入模型。JSON 和 Markdown 随现有资源分发；用户角色配置不作为内置资源覆盖。
 
 backend/character.rs 继续负责立绘、格式和台词选择；首次选择通过 roleplay::default_character 优先匹配 lexington，否则回退首个可用角色，已有有效选择保持。角色领域数据无需增加 Rust 角色专属分支。
 
@@ -164,6 +169,16 @@ ui/app.rs 保存 codex_character、codex_role_card 和角色配置文件时间�
 - `ui/roleplay_memory.rs` 在“用户与记忆”管理独立草稿，支持手动新增或从最近输入创建候选、确认、撤销、启停和删除，通过独立保存按钮应用；保存操作在 viewport 回调之后执行。保存候选/来源等不影响有效提示时不重启，已确认内容变化待当前任务结束重建；关闭或取消丢弃未保存草稿。该固定记忆编辑器不会自动推断事实或生成摘要；自动事件提炼由独立人物记忆页提供。
 - 新 Event::Context 通过标准通道回传至 UI，实际与预览分开保存；ContextPlan 的 Debug 不含提示文本，已知自定义 API Key 在事件出口统一遮蔽。向量记忆关闭时最近对话仅在内存；启用后成功结束的用户输入/最终回复另外写入历史数据库。临时场景和检查报告不持久化。
 - Linux `scripts/package.sh` 写入空配置，并清理旧输出遗留的 roleplay.json、roleplay-memory.json、roleplay-vectors.sqlite3 及 journal/wal/shm；`scripts/test-package.sh` 用临时工程和假构建器验证重复打包不会携带私人配置或向量数据，角色默认资源仍完整。此夹具可在 Git Bash 运行，不代替 Linux 桌面实测。
+
+### 新建角色卡与立绘导入
+
+- 入口为“设置 → 角色卡 → 新建角色卡”，填写名称与身份描述，使用原生多选文件对话框或拖入 PNG/GIF；支持移除所选图片。至少选择一张立绘才可创建，领域接口再次验证；每次 1～32 张，单张最多 64 MiB、总计最多 256 MiB、每张最多 16 × 1024 × 1024 像素。校验格式/尺寸及现有 tools/gif 解码器可读取首帧，不改解码时序或纹理流程，不保证提前验证 GIF 所有后续帧。
+- 名称裁首尾空白后作为角色标识；最多 200 字节，拒绝控制字符、路径/Windows 非法文件名字符、隐藏名、尾点/空格及常用系统保留名。内置和个人角色目录按 ASCII 不区分大小写检查冲突，同时拒绝已有角色卡或映射；原文件名与正常/战损后缀保留，单格式内同名文件拒绝导入。
+- 每个新角色独立保存在 config/characters/<名称>/card.json 和 png/、gif/，不改 resource 布局或 characters.json，不覆盖 config/roleplay.json。全部图片复制、限额和首帧验证、紧凑 JSON 保存及 sync 完成后才将 .creating-* 临时目录 rename 为角色目录；失败自动清理暂存，扫描忽略隐藏目录。新建卡片通过 RoleCard::load 的既有接口加载；后续编辑保存仍写 roleplay.json 的覆盖分组，身份关系和提示不继承其他角色。
+- 文件选择和实际导入在工作线程完成，设置 viewport 回调后才启动；CharacterCreation 的任务通道由 Pet 持有，关闭设置只丢弃未提交草稿，已请求创建仍可完成并刷新角色列表。有原活动角色时保持选择/聊天；原无角色时可显示首次导入的立绘，测试构造不会启动真实 Codex。设置仍打开时转入新卡编辑，可继续设置关系、世界书和规则；以后切换显示角色沿用原有新建 Codex 会话流程。
+- 新增个人目录被 Git 忽略，升级安装保留 config；发布包只含空配置，不包含个人卡片/立绘。Linux 重复打包先核对解析后的清理路径位于项目 dist 内，再清除旧生成包的 config/characters，避免旧发布目录中的个人数据进入新包。原生文件选择参考 [rfd 官方说明](https://github.com/PolyMeilex/rfd/tree/0.17.2)；Linux 最小桌面若无可用 Portal/Zenity，仍可拖入文件，Linux 原生对话框尚未实机验证。
+
+增量验证：roleplay::creation::tests:: 覆盖无图、损坏图、PNG/GIF、非法名称、重名保护、失败无半成品、未知字段/源图保留、编辑覆盖及坏配置拒绝；ui::new_character::tests:: 使用模拟选择结果验证入口、无图禁止、创建后可选择与关闭设置后完成。补测 roleplay::、backend::character::tests::、ui::role_card::tests:: 和 sidebar_switches_damage_and_format_and_refresh_preserves_selection；scripts/test-package.sh 验证重复打包排除个人立绘，均不调用真实模型或原生文件选择器。
 
 ### 历史对话向量记忆
 
@@ -213,7 +228,7 @@ Windows 同样启用 UI 的 Inbox、原生位置保存/恢复、显示器检测�
 | 文件 | 职责与主要接口 | 依赖及约束 |
 |---|---|---|
 | `ui/mod.rs` | 声明 UI 子模块（含天气），对入口导出 `Pet` | 具体组件保持在 UI 模块内部 |
-| `ui/app.rs` | 定义 `Pet` 与 `eframe::App`；初始化、刷新资源与纹理、每帧编排、自动关闭/外部点击关闭对话、右键菜单、关于、截图、窗口状态和侧栏模式持久化。主要接口：`Pet::new`、`refresh`、`reload_config`、`load_picture`、`ui`；启动加载独立打卡/闹钟记录、活动监测、Codex Client 与外部 Inbox，逐帧调用独立设置、人物记忆及提醒 viewport，并在空闲时消费外部请求 | 持有 CharacterState、ClockState、AlarmUi、WeatherUi、Monitor、Client、Inbox 和 UI 状态；每帧 poll_weather 仅收取结果或提交显式排队的查询，空闲不请求网络；设置拖动单独保存原生按下锚点/目标窗口、鼠标状态和是否获准拖动，关闭后清空；测试构造不启动真实 CLI/监测或访问用户记录。每帧收集可见立绘/控件/菜单及 Embedded 窗口的 input_regions，不包含独立 viewport、全屏 pet Area 或历史缓存。右键菜单在绘制闭包中收集当前内容加 Frame 边距，仅菜单打开时加入；egui 0.31 不能依赖 context_menu 返回值。X11 仅鼠标按下聚焦，启动/悬停不抢焦点。独立保存普通/开发模式逻辑位置（windowPosition/devWindowPosition），仅恢复位置，尺寸固定 500×500/800×600，禁用 eframe 尺寸及 egui 缓存持久化；原生位置按 DPI 换算，可见立绘需与任一活动显示器相交至少 24×24，透明边距可出屏，无效位置回默认主屏。截图释放 input 锁后发 viewport 命令。配置每 500ms 检查时间/长度，成功才替换，失败保留旧值；普通设置保持会话，程序/工作目录/模型/自定义 API 参数改变待空闲重建；connection_draft 独立保存未提交表单，关闭设置时丢弃草稿；new 解析 CODEX_HOME / HOME/.codex，from_root 不读取用户 Codex 配置，测试须显式注入临时路径 |
+| `ui/app.rs` | 定义 `Pet` 与 `eframe::App`；初始化、刷新资源与纹理、每帧编排、自动关闭/外部点击关闭对话、右键菜单、关于、截图、窗口状态和侧栏模式持久化。主要接口：`Pet::new`、`refresh`、`reload_config`、`load_picture`、`ui`；启动加载独立打卡/闹钟记录、活动监测、Codex Client 与外部 Inbox，逐帧调用独立设置、人物记忆及提醒 viewport，并在空闲时消费外部请求 | 持有 CharacterState、ClockState、AlarmUi、WeatherUi、Monitor、Client、Inbox、CharacterCreation 和 UI 状态；每帧 poll_character_creation 完成异步导入，任务独立于设置草稿存活；每帧 poll_weather 仅收取结果或提交显式排队的查询，空闲不请求网络；设置拖动单独保存原生按下锚点/目标窗口、鼠标状态和是否获准拖动，关闭后清空；测试构造不启动真实 CLI/监测或访问用户记录。每帧收集可见立绘/控件/菜单及 Embedded 窗口的 input_regions，不包含独立 viewport、全屏 pet Area 或历史缓存。右键菜单在绘制闭包中收集当前内容加 Frame 边距，仅菜单打开时加入；egui 0.31 不能依赖 context_menu 返回值。X11 仅鼠标按下聚焦，启动/悬停不抢焦点。独立保存普通/开发模式逻辑位置（windowPosition/devWindowPosition），仅恢复位置，尺寸固定 500×500/800×600，禁用 eframe 尺寸及 egui 缓存持久化；原生位置按 DPI 换算，可见立绘需与任一活动显示器相交至少 24×24，透明边距可出屏，无效位置回默认主屏。截图释放 input 锁后发 viewport 命令。配置每 500ms 检查时间/长度，成功才替换，失败保留旧值；普通设置保持会话，程序/工作目录/模型/自定义 API 参数改变待空闲重建；connection_draft 独立保存未提交表单，关闭设置时丢弃草稿；new 解析 CODEX_HOME / HOME/.codex，from_root 不读取用户 Codex 配置，测试须显式注入临时路径 |
 | `ui/pet.rs` | `pet_ui` 绘制立绘/默认宠物和阴影，设置宠物、对话、输入层的共同变换，处理圆形命中、点击与拖动；默认宠物几何和变换测试也在此 | 使用 `Picture` 和平台拖动；将当前帧的归一化 alpha 覆盖区域映射到立绘实际位置并应用共同变换，默认宠物按身体轮廓生成输入区域，阴影不拦截点击；返回尺寸、变换和点击结果供 app 编排。容器 450×450，侧栏不参与共同缩放；拖动阈值 5 个逻辑像素；按下时由平台层读取原生屏幕指针/窗口坐标捕获锚点，不使用 egui 可能过时的窗口局部指针 |
 | `ui/settings.rs` | `settings_ui` 创建独立 464×390 原生 viewport；`settings_contents` 复用两栏设置内容，包含常规/连接/打卡/闹钟/天气、模型/API/密码 Key 表单、本机配置自动填充/手动重读与保存/取消修改、开关保存、资源刷新和会话重启 | 无边框、不透明、Dock/置顶；初次打开按桌宠所在显示器适配位置，仅初始化时 with_position，后续自由拖动。标题栏及正文空白均可拖动，后台拖动控件先于正文注册；按下命中其他可点击/拖动控件时禁止本次窗体拖动，正文关闭拖拽滚动，保留滚轮和滚动条。X11/Windows 新按下时用 screen_pointer/window_at_pointer 核对进程与设置窗口标题、捕获原生屏幕位置，经 move_window 发送原生绝对移动；保留候选锚点等待可能晚一帧到达的 egui 正文命中结果，松开/关闭清除。不能依赖缓存 outer_rect 或跨阈值后的 StartDrag；Wayland/其他平台走 StartDrag。映射后 800ms 激活，关闭仅销毁子 viewport；不把独立设置矩形加入桌宠 XShape。Embedded 后端回退 Foreground Window 并记录输入区域；14px 文本局部应用，路径截断/悬停/复制，内容滚动。常规/打卡/连接/天气操作在 viewport 回调结束后执行；连接表单点击保存才验证并原子写入，成功调用 reload_config 触发空闲重连；Key 默认 password TextEdit 遮蔽，按住显示按钮时暂时明文（含继承配置），松开/失焦隐藏，不保存显示状态，错误独立保留；连接页首次打开读取 LocalCodexConfig，已启用的自定义 API 保留；手动重读仅更新草稿并保留自定义 API 开关，关闭再开重新读取；取消恢复已保存值及本机默认值，保存继承配置不固定未修改的本机模型、不复制本机 Key；写入成功才改内存，未知配置/旧密钥保留；重启会话忙碌时禁用 |
 | `ui/sidebar.rs` | `sidebar` 绘制六个按钮、悬停提示与动画，报告本帧是否处理点击；↻ 调用 `toggle_damage` 切换同服装正常/战损，▶ 调用 `next_illustration` 在当前状态队列循环；`clock` 将持久化后的手动打卡结果转为对话，仅成功开始计时后排队查询天气，取消不查询，失败可从打卡设置查看 | 用 `damage_counterpart` 判断切换按钮是否可用，缺少同角色/格式/服装配对时禁用；战损时 ↻ 为橙色，悬停提示显示切换目标和下一张所属队列。选择变更后通过 app 重载纹理；按钮 40×40、间隔 10，仅按钮自身（随悬停缩放）加入输入区域、间隙穿透；侧栏点击须阻止同帧外部点击关闭 |
@@ -234,7 +249,7 @@ Windows 同样启用 UI 的 Inbox、原生位置保存/恢复、显示器检测�
 | `backend/mod.rs` | 声明后端子模块（含天气、外部上下文 handoff 和本机 Codex 配置读取），集中保留配置、审批/自动打卡开关无损保存、确认时长边界及错误保护、扫描的测试及共享临时目录夹具 | 协议测试位于 codex.rs，资源扫描和配置测试不需要外部服务 |
 | `backend/handoff.rs` | `Request::validate/prompt` 定义选区/路径/来源/行号与分析提示；Linux `Endpoint::bind/start` / `Inbox::poll` 提供用户级单实例、本地入队通道；`deliver` 自动启动桌宠并交付一次；`native_host` 实现浏览器本机协议 | 无 UI 依赖。Unix socket 位于 XDG_RUNTIME_DIR 下 lexington-UID（开发模式 -dev），缺失时用临时目录；目录须 0700/当前用户且非软链接，flock 独占锁下清理旧 socket，0600 socket 加 SO_PEERCRED 校验当前用户。长度帧 ≤1 MiB、队列 16 条、最多 32 个绝对路径，读取/写入超时，后台线程只唤醒 UI；ACK 表示入队，发出后不自动重试避免重复；无 HTTP/TCP/剪贴板监测。普通/开发各一个实例；Windows 由 handoff_windows.rs 提供同协议的私有命名管道；其他平台外部交付明确不支持。含排队/满队列/残留恢复/不安全路径/分帧及校验测试 |
 | `backend/config.rs` | 定义 `Config`、`DialogConfig`、`CodexConfig`、`ClockConfig`、`WeatherConfig`（CodexConfig 的 Debug 隐藏 Key，validate_connection 校验模型/基础地址/Key，connection_changed 排除审批开关）；`Config::load` 启动读取失败时默认回退，`read` 返回读取/解析错误供热加载保留旧值；补默认值并限制尺寸和计时范围；`Config::save_no_approval` / `save_auto_clock` / `save_connection` / `save_weather` 通过共享无损原子保存入口修改相应字段，连接字段 model/useCustomApi/baseUrl/apiKey 同次原子写入 | 标准库文件读取、serde 与 url（校验 API 地址）；保持 `config/config.json` 的 camelCase 兼容及错误时默认回退，未知旧 `llm` 字段忽略，不记录密钥；Codex 程序默认 codex，工作目录默认资源根目录；`noApproval` 默认 false；自动打卡默认开启，confirmationSeconds 默认 180，限制 30～600 秒。保存开关以 JSON 对象保留未知字段和旧密钥，损坏配置拒绝覆盖；同目录临时文件写入并同步后原子替换，Unix 新文件权限 0600；weather.city 默认 null，选定城市以 name/latitude/longitude/timezone 原子保存；读写校验经纬度与名称/时区，保留未知字段，不影响 Codex 连接；模型/地址/Key 裁掉首尾空白，基础地址去尾斜线；自定义模式必须提供模型、无内嵌账号/查询/片段的 HTTP(S) URL 和有效 Key，无效热加载保留旧值；API Key 为用户配置文件明文存储，不能记录到日志/Debug |
-| `backend/resources.rs` | 定义 `Illustration`（含服装名 `outfit` 和战损标记 `damaged`）；`illustrations` 扫描排序立绘并解析配对元数据，`background` 选择首张支持的背景，`texts` 读取非空角色台词 | 标准库文件读取和 serde_json；只解析文件名最后的 `_Normal` / `_Damage` 后缀，ASCII 大小写不敏感；无后缀按正常处理，其完整文件名主体作为服装名。保留 `resource/` 布局，按目录识别角色与格式，拒绝台词路径穿越，不解码图片 |
+| `backend/resources.rs` | 定义 `Illustration`（含服装名 `outfit` 和战损标记 `damaged`）；`illustrations` 扫描 resource/illustration 与 config/characters 的立绘并解析配对元数据；跳过隐藏暂存目录，`background` 选择首张支持的背景，`texts` 读取非空角色台词 | 标准库文件读取和 serde_json；只解析文件名最后的 `_Normal` / `_Damage` 后缀，ASCII 大小写不敏感；无后缀按正常处理，其完整文件名主体作为服装名。保留 `resource/` 布局，按目录识别角色与格式，拒绝台词路径穿越，不解码图片 |
 | `backend/character.rs` | `CharacterState` 持有资源列表、角色、格式、正常/战损状态、选中索引与台词；`filtered` 返回当前角色/格式/状态的队列，`damage_counterpart` 查同服装的相反状态，`toggle_damage` 双向切换；`refresh` 保留当前路径并恢复失效选择，`next_illustration` 循环当前队列，`toggle_format`/`next_character` 切换格式/角色，`selected_path` 提供路径 | 仅依赖资源扫描模块和标准库；默认 GIF + 正常。配对严格限制同角色、同格式、服装名 ASCII 大小写不敏感，缺少对应版本时不切换；格式切换尽量保留同服装。选取回退顺序为当前格式/当前状态 → 另一格式/当前状态 → 当前格式/另一状态 → 另一格式/另一状态。含现有 15 对资源双向匹配、独立队列循环、后缀大小写、缺失配对及删除恢复测试；只选择路径，纹理和默认宠物由 UI 处理 |
 | `backend/codex_config.rs` | `LocalCodexConfig::read` 读取本机用户级 TOML 的模型、所选 profile 和提供方地址/凭据；`draft` 填充展示值，`to_save` 保持继承语义 | 依赖 toml、serde_json 和 CodexConfig；只读 config.toml/auth.json，不解析项目/管理员配置层。Key 读取 provider env_key 环境变量、experimental_bearer_token，OpenAI 登录再读 OPENAI_API_KEY 环境/登录文件；忽略 OAuth tokens。缺文件允许，错误不带 TOML 源码或凭据，不派生 Debug；单测注入环境和临时目录，覆盖来源、profile、继承/显式优先及解析错误不泄密 |
 | `backend/codex.rs` | `Client::start/start_structured/submit(text, no_approval)/interrupt/reply/poll` 管理 app-server 子进程、stdio JSON 消息与事件通道；`Event`/`Prompt` 表达回复、审批、问题及连接状态 | 依赖配置、serde_json、tempfile 和标准库，不依赖 UI 或 HTTP 客户端；start_structured 提供独立结构化后台任务，权限、临时目录与工具限制见人物事件记忆小节。ProtocolSetup 传递指令、角色会话、密钥遮蔽值和可选 schema，正常对话路径保持原协议。自定义模型/提供方通过 -c 覆盖（JSON 字符串编码兼容 TOML），provider=lexington_api、wire_api=responses、requires_openai_auth=false；Key 仅传 LEXINGTON_MODEL_API_KEY 子进程环境，关闭模式显式移除变量，不修改用户 Codex 配置；初始化/流式事件中的完整 Key 统一遮蔽。启动 initialize → initialized → thread/start，输入可等待初始化，忙碌提示使用 Lexington 名称；同一角色会话复用一个 thread，切换角色新建 thread；保留 thread/start 返回的原始 approvalPolicy，逐轮明确传入 never 或原始策略，兼容字符串和 granular 对象，防止 turn/start 的持久覆盖导致关闭开关后仍无需审批；不覆盖沙箱。后台线程隔离阻塞读取，唤醒回调仅通知 UI。ACK 超时 30 秒，生成不限时；按 thread/turn 及请求 ID 关联，忽略过期 ACK；文本增量与最终 item 分开处理。缓存 item/started 中命令与文件 diff 用于审批，不支持的服务器请求返回 -32601。退出、重启或连接失败须终止并回收子进程；Unix 通过独立进程组与 libc 清理启动器及后代，先关 stdin 再回收并 join 读线程，防止后代持有 stdout 导致退出卡住；Windows 隐藏且挂起启动原生 exe，加入 kill-on-close Job Object 后恢复主线程，退出清理整棵进程树；默认补查 PATH、用户 CLI 目录及 npm 原生 vendor 的 codex/、bin/ 布局，不执行 .cmd/Node；command 构建独立以验证参数和环境隔离。不记录协议原文/凭据 |
@@ -272,7 +287,8 @@ Windows 非阻塞字节管道使用 PeekNamedPipe 区分暂时无数据与断开
 
 | 文件 | 职责与主要接口 | 依赖及约束 |
 |---|---|---|
-| `tools/mod.rs` | 声明路径、活动监测、解码、时间、平台、Embedding、向量存储及 Windows 代理模块 | 不承载业务状态 |
+| `tools/mod.rs` | 声明路径、活动监测、解码、原生文件选择、时间、平台、Embedding、向量存储及 Windows 代理模块 | 不承载业务状态 |
+| `tools/file_dialog.rs` | pick_illustrations 返回用户选择的 PNG/GIF 本地路径，取消返回 None | rfd 0.17.2，仅启用 xdg-portal；Windows 原生文件对话框，Linux 使用 libdbus/XDG Desktop Portal 或 Zenity，不增加 WebView/JS/GTK 编译链。UI 工作线程调用，本工具不读图、不创建纹理、不访问角色配置 |
 | `tools/embedding.rs` | `LocalEmbedding::load/split/embed_documents/embed_query` 封装离线中文向量推理；`check` 提供固定文本的离线安装检查 | fastembed 7.6.1 关闭默认特性、HF 下载和 GPU；CLS + L2 归一化输出 512 维。动态 INT8 每次仅推理一条序列，避免不同批量量化范围影响向量；tokenizer 关闭截断/填充后按原文 byte offset 切分，模型每次最多 512 token。默认 2 个 CPU 线程，限制 1～4、关闭 ORT spinning/telemetry。Windows 通过绝对路径加载经内置清单 SHA256 校验的 1.24.4 CPU DLL，忽略外部 ORT_DYLIB_PATH；Linux 静态链接。首次需要时加载并检查模型/分词文件哈希，错误只给通用提示、不输出正文或原生错误，不读取角色、数据库或凭据；不做任何网络请求 |
 | `tools/vector_store.rs` | `VectorStore::open/put/pending/set_embedding/search/delete/prune/load_json/save_json` 保存命名空间文档、可重建向量和独立 JSON records；`Document` 保存原文/时间，`SearchHit` 返回文档与距离 | rusqlite 0.37 bundled SQLite + 静态 sqlite-vec 0.1.6，无数据库服务/动态扩展/Python/Node 运行依赖。使用普通 SQLite 表和 sqlite-vec 标量余弦距离精确扫描，按命名空间、模型空间和维度过滤后排序；不伪称 ANN。原文和向量同一行，改正文使索引失效，回填必须匹配当前原文；删除/裁剪同时去掉向量，id=None 表示清空该命名空间，同秒记录按插入顺序稳定裁剪。SQLite 事务语义，busy_timeout 250ms、secure_delete=ON，Unix 新文件 0600，版本 2（从版本 1 事务新增 records 表并保留旧向量）；JSON 单条最多 8 MiB，namespace/id 非空且最多 200 字节，解析错误不重置，向量删除不影响 records；损坏、未知或高版本数据库报错而不重置，不记录 SQL/正文或凭据。最多 4096 维且拒绝 NaN/Inf/零向量，通用层无角色、Embedding 或提示逻辑 |
 | `tools/paths.rs` | `resource_root` 定位资源根目录；`clock_state_file` / `alarm_state_file` 返回普通/开发模式独立的用户数据记录路径 | 顺序：`LEXINGTON_HOME` → 可执行文件旁存在 `resource/` 的目录 → 当前目录；闹钟（alarms.json / alarms-dev.json）及打卡状态使用 XDG_DATA_HOME，默认 ~/.local/share/lexington；Windows data_root 使用 LOCALAPPDATA/lexington，回退 USERPROFILE/AppData/Local，不能写入资源目录 |

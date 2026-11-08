@@ -38,6 +38,7 @@ yarn-error.log*
 /target/
 /.tools/
 /config/roleplay-vectors.sqlite3*
+/config/characters/
 
 # Native verification helpers
 __pycache__/

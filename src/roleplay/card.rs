@@ -84,6 +84,9 @@ impl RoleCard {
         if let Some(card) = super::store::load_card(root, character)? {
             return Ok(Some(card));
         }
+        if let Some(card) = super::creation::load_created_card(root, character)? {
+            return Ok(Some(card));
+        }
         let Some(path) = character::agent_path(root, character)? else {
             return Ok(None);
         };

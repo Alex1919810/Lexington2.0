@@ -14,6 +14,11 @@ mkdir -p "$bundle/config"
 printf '{}\n' > "$bundle/config/config.json"
 # Generated bundles must never retain private role cards or memories from an older run.
 rm -f "$bundle/config/roleplay.json" "$bundle/config/roleplay-memory.json" "$bundle/config/roleplay-vectors.sqlite3" "$bundle/config/roleplay-vectors.sqlite3-journal" "$bundle/config/roleplay-vectors.sqlite3-wal" "$bundle/config/roleplay-vectors.sqlite3-shm"
+private_characters="$bundle/config/characters"
+case "$(realpath -m -- "$private_characters")" in
+    "$project_root"/dist/*) rm -rf -- "$private_characters" ;;
+    *) printf 'Refusing to clean character data outside build output.\n' >&2; exit 1 ;;
+esac
 cp README.md "$bundle/README.md"
 python3 scripts/integrations.py build --output "$project_root/dist/integrations"
 cp -R integrations "$bundle/"
