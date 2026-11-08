@@ -14,6 +14,7 @@
 - [角色扮演](src/roleplay/AGENTS.md)：角色卡、世界书、提示与用户角色配置。
 - [工具](src/tools/AGENTS.md)：GIF、X11、活动采样和平台限制。
 - [脚本](scripts/AGENTS.md)：安装/打包、快捷方式、专项测试环境。
+- [项目技能](.agents/skills/AGENTS.md)：开发用技能独立存放；[unified-live2d](.agents/skills/unified-live2d/SKILL.md) 用于统一角色素材制作、局部动作、预览与原生接入。
 
 ## 验证与交付
 

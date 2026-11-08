@@ -1,0 +1,4 @@
+interface:
+  display_name: "统一 Live2D 风格角色制作"
+  short_description: "统一角色基准、呼吸摇摆、头发飘动与局部动作，保持轮廓和动作衔接"
+  default_prompt: "使用 $unified-live2d 把这张立绘制作成共用待机、局部动作独立、可按部位触发的统一角色素材与预览。"

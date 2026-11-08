@@ -5,6 +5,23 @@
 ## 目录结构
 
 ```text
+.agents/skills/
+├── AGENTS.md
+└── unified-live2d/
+    ├── SKILL.md
+    ├── agents/
+    │   └── openai.yaml
+    ├── references/
+    │   ├── actor-contract.md
+    │   ├── authoring.md
+    │   ├── eyes.md
+    │   ├── hair.md
+    │   ├── lexington.md
+    │   └── quality.md
+    └── scripts/
+        ├── actor_core.py
+        ├── audit_actor.py
+        └── reference_blink.py
 src/
 ├── main.rs
 ├── ui/
@@ -140,7 +157,14 @@ resource/illustration/lexington/live2d/WeddingDress_Normal/
     └── breath_dx.f32 / breath_dy.f32
 ```
 
-侧栏顺序调整同时同步 `scripts/native-smoke.py` 的 clock 模式：打卡按钮距首个按钮中心偏移 300 像素；pin 模式及 PNG/GIF 按钮坐标保持。脚本语法检查不代表已在 Linux 原生桌面复测。
+## 项目开发技能
+
+- 项目技能独立位于 `.agents/skills/`，维护约定见其中的 AGENTS.md；Codex 仓库技能目录约定参考 [OpenAI 官方文档](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills)。这是开发工作流，不注入 Lexington 角色或普通聊天，也不由桌宠启动和安装流程加载。
+- `unified-live2d/SKILL.md` 保存从原画建立统一基准、共享呼吸/摇摆/头发时钟、独立局部动作、热点和原生接入的制作流程；`agents/openai.yaml` 保留中文显示名称、简介和 `$unified-live2d` 默认调用提示。来自当前用户的统一角色制作技能，仓库内为可移植副本，不链接个人目录。
+- `references/authoring.md` 负责分层与原画保形，`actor-contract.md` 负责通用模型/轨道/命中契约，`hair.md` 和 `eyes.md` 负责对应局部通道，`quality.md` 负责静态/运动/编码验收；`lexington.md` 连接本项目模块规则、原生格式、换装目录与透明输出验证，避免把通用预览模型误当作任意 Cubism 或当前原生运行模型。
+- `scripts/actor_core.py` 提供 normalize/sample、通道事件排队、固定 pole 两骨 IK、根矩阵及移动热区的离线参考；`audit_actor.py` 校验通用/draft 模型、受限相对资源引用、轨道归位、网格和可选 GIF 调色板/端点；`reference_blink.py` 提供参考眼睑/眼白的局部眨眼合成。核心数学只用 Python 标准库；PNG/GIF 审计需要 Pillow，眨眼合成需要 NumPy/OpenCV。这些依赖仅属于离线工具，不加入应用运行链。
+- 使用技能目录内的相对引用，不提交 __pycache__、虚拟环境、个人路径或临时预览。通用审计器只支持 unified-actor-1 / lexington-parametric-actor-draft-1；当前 lexington-native-actor-1 仍由本项目 Rust 加载和运行验证，不能用审计器的通过结果宣称原生交互已验收。
+- 增量验证：skill-creator quick_validate 检查入口/frontmatter；`python .agents/skills/unified-live2d/scripts/actor_core.py --self-test` 检查时钟、轨道端点、叠加、限队列、固定 IK 和移动热区；三个脚本通过 py_compile；audit_actor 使用原婚纱 draft 素材验证 18 个资源和两项动作，明确不验证运行集成。本次未修改 Rust 代码，不重复运行 Rust 测试。
 
 ## 桌面透明合成与白边修复
 
@@ -152,6 +176,8 @@ resource/illustration/lexington/live2d/WeddingDress_Normal/
 - 本机 Windows 原生窗口链路另用独立 LEXINGTON_HOME/CODEX_HOME/HOME/USERPROFILE/LOCALAPPDATA/APPDATA/XDG_DATA_HOME、禁用自动打卡和不可用 Codex 路径，配置仅含婚纱 Live2D 素材，运行 --dev --screenshot 自动保存后退出；不注入鼠标输入、不读取真实用户记录。实际 GL 截图在深色/白色底合成检查发丝、花瓣与裙摆，透明像素 RGB 为 0；GPU 校验、截图读回单元测试及 fmt/Clippy 通过。Linux 桌面合成尚未实机验收。
 
 ## 原生 Live2D 风格角色
+
+侧栏顺序调整同时同步 `scripts/native-smoke.py` 的 clock 模式：打卡按钮距首个按钮中心偏移 300 像素；pin 模式及 PNG/GIF 按钮坐标保持。脚本语法检查不代表已在 Linux 原生桌面复测。
 
 - 侧栏在正常/Q版立绘切换按钮下方放置 L 按钮，其后依次为角色切换、打卡；存在当前角色的素材时可切换，当前模式高亮。默认仍为 GIF。目录为 resource/illustration/<角色>/live2d/<换装>_Normal/actor.json，个人角色可在 config/characters/<角色>/live2d 使用相同结构；_Damage 可选。换装前缀与 PNG/GIF 去掉最终状态后缀后的名称一致，例如 Lexington 的 WeddingDress_Normal。只扫描 actor.json 的模型目录；▶ 只遍历当前格式/状态，战损按钮仍需对应资源。
 - backend/resources 只发现路径和角色/换装/状态；CharacterState::can_toggle_live2d/toggle_live2d 保持角色，优先同换装、再匹配状态，无对应换装则选择该角色已有模型。退出 L 优先同换装 PNG，再回退 GIF；普通格式按钮仍切换 GIF/PNG。同角色格式切换保持 Codex 会话。select_first 的三格式回退处理仅有 PNG 或仅有 Live2D 的下一角色，刷新保留当前模型。
