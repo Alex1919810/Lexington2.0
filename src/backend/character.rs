@@ -50,12 +50,23 @@ impl CharacterState {
         self.selected.map(|i| self.illustrations[i].path.as_path())
     }
     pub fn select_first(&mut self) {
-        let other = if self.format == "gif" { "png" } else { "gif" };
+        let other = if self.format == "gif" || self.format == "live2d" {
+            "png"
+        } else {
+            "gif"
+        };
+        let third = if self.format == "live2d" {
+            "gif"
+        } else {
+            "live2d"
+        };
         self.selected = [
             (self.format.as_str(), self.damaged),
             (other, self.damaged),
+            (third, self.damaged),
             (self.format.as_str(), !self.damaged),
             (other, !self.damaged),
+            (third, !self.damaged),
         ]
         .into_iter()
         .find_map(|(format, damaged)| {
@@ -125,6 +136,48 @@ impl CharacterState {
             self.selected = Some(i);
         }
     }
+    pub fn can_toggle_live2d(&self) -> bool {
+        self.illustrations
+            .iter()
+            .any(|ill| ill.character == self.character && ill.format == "live2d")
+    }
+    pub fn toggle_live2d(&mut self) {
+        let current = self
+            .selected
+            .and_then(|i| self.illustrations.get(i))
+            .cloned();
+        let format = if self.format == "live2d" {
+            if self
+                .illustrations
+                .iter()
+                .any(|i| i.character == self.character && i.format == "png")
+            {
+                "png"
+            } else {
+                "gif"
+            }
+        } else {
+            "live2d"
+        };
+        if let Some((index, ill)) = self
+            .illustrations
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| i.character == self.character && i.format == format)
+            .min_by_key(|(_, i)| {
+                (
+                    !current
+                        .as_ref()
+                        .is_some_and(|c| c.outfit.eq_ignore_ascii_case(&i.outfit)),
+                    i.damaged != self.damaged,
+                )
+            })
+        {
+            self.selected = Some(index);
+            self.format = ill.format.clone();
+            self.damaged = ill.damaged;
+        }
+    }
     pub fn next_character(&mut self, root: &Path) {
         let names = self.characters();
         let index = names.iter().position(|s| s == &self.character).unwrap_or(0);
@@ -141,6 +194,54 @@ mod tests {
     use super::*;
     use crate::roleplay::agent_instructions;
     use std::fs;
+    #[test]
+    fn live2d_matches_outfit_prefix_preserves_session_character_and_falls_back_to_raster() {
+        let mut library = CharacterState::default();
+        library.refresh(Path::new(env!("CARGO_MANIFEST_DIR")));
+        library.format = "png".into();
+        library.select_first();
+        library.selected = library.illustrations.iter().position(|i| {
+            i.character == "lexington"
+                && i.outfit == "WeddingDress"
+                && i.format == "png"
+                && !i.damaged
+        });
+        assert!(library.can_toggle_live2d());
+        library.toggle_live2d();
+        assert_eq!(library.format, "live2d");
+        assert_eq!(
+            library.illustrations[library.selected.unwrap()].outfit,
+            "WeddingDress"
+        );
+        assert_eq!(library.character, "lexington");
+        assert!(library.damage_counterpart().is_none());
+        let path = library.selected_path().unwrap().to_owned();
+        library.refresh(Path::new(env!("CARGO_MANIFEST_DIR")));
+        assert_eq!(library.selected_path(), Some(path.as_path()));
+        library.toggle_live2d();
+        assert_eq!(library.format, "png");
+        assert_eq!(
+            library.illustrations[library.selected.unwrap()].outfit,
+            "WeddingDress"
+        );
+        let fixture = tempfile::tempdir().unwrap();
+        let live = fixture
+            .path()
+            .join("resource/illustration/a/live2d/WeddingDress_Normal");
+        let png = fixture.path().join("resource/illustration/b/png");
+        fs::create_dir_all(&live).unwrap();
+        fs::create_dir_all(&png).unwrap();
+        fs::write(live.join("actor.json"), "{}").unwrap();
+        fs::write(png.join("Normal_Normal.png"), []).unwrap();
+        library = CharacterState::default();
+        library.refresh(fixture.path());
+        library.toggle_live2d();
+        assert_eq!(library.format, "live2d");
+        library.next_character(fixture.path());
+        assert_eq!(library.character, "b");
+        assert_eq!(library.format, "png");
+        assert!(library.selected.is_some());
+    }
 
     #[test]
     fn character_agents_resolve_independently_and_reject_invalid_markdown() {

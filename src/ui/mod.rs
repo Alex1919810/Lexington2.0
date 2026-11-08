@@ -15,9 +15,11 @@ mod roleplay_vector;
 mod settings;
 mod sidebar;
 mod style;
+mod transparency;
 mod weather;
 
 pub use app::Pet;
+pub use transparency::check as check_transparency;
 
 #[cfg(test)]
 mod tests;

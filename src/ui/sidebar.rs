@@ -11,7 +11,7 @@ impl Pet {
         } else {
             screen.width() / 2. - 315.
         };
-        let bounds = Rect::from_min_size(pos2(x, screen.center().y - 155.), vec2(50., 310.));
+        let bounds = Rect::from_min_size(pos2(x, screen.center().y - 155.), vec2(50., 360.));
         let hovered = ctx.input(|i| i.pointer.hover_pos().is_some_and(|p| bounds.contains(p)));
         let alpha = ctx.animate_value_with_time(
             egui::Id::new("sidebar-alpha"),
@@ -35,6 +35,7 @@ impl Pet {
                     },
                     "👤",
                     "⏰",
+                    "L",
                 ];
                 let can_toggle_damage = self.library.damage_counterpart().is_some();
                 let tips = [
@@ -46,31 +47,31 @@ impl Pet {
                     } else {
                         "切换为对应的战损立绘"
                     },
-                    if self.library.damaged {
-                        "下一张战损立绘"
-                    } else {
-                        "下一张正常立绘"
-                    },
-                    "切换 GIF/PNG 格式",
-                    "切换角色（结束当前 Codex 任务并新建会话）",
+                    "下一张立绘",
+                    "切换正常/Q版立绘",
+                    "切换角色",
                     if self.clock_state.running() {
                         "点击终止计时"
                     } else {
                         "上班打卡"
                     },
+                    "切换live2d",
                 ];
-                for n in 0..6 {
+                for n in [0, 1, 2, 3, 6, 4, 5] {
                     let enabled = match n {
                         1 => can_toggle_damage,
                         2 => self.library.selected.is_some(),
                         3 | 4 => !self.library.illustrations.is_empty(),
+                        6 => self.library.can_toggle_live2d(),
                         _ => true,
                     };
                     let color = if n == 0 {
                         Color32::from_rgba_unmultiplied(150, 100, 255, 204)
                     } else if n == 1 && self.library.damaged {
                         Color32::from_rgba_unmultiplied(255, 152, 0, 204)
-                    } else if n == 5 && self.clock_state.running() {
+                    } else if (n == 5 && self.clock_state.running())
+                        || (n == 6 && self.library.format == "live2d")
+                    {
                         Color32::from_rgba_unmultiplied(76, 175, 80, 204)
                     } else {
                         Color32::from_rgba_unmultiplied(100, 150, 255, 204)
@@ -162,6 +163,10 @@ impl Pet {
                                 self.load_picture(ctx);
                             }
                             5 => self.clock(),
+                            6 => {
+                                self.library.toggle_live2d();
+                                self.load_picture(ctx);
+                            }
                             _ => {}
                         }
                     }

@@ -582,7 +582,7 @@ fn native_pointer_events_drive_sidebar_and_pet_click_cycle() {
     assert!(!app.pinned);
     click(&mut app, &ctx, pos2(110., 325.));
     assert_eq!(app.library.format, "png");
-    click(&mut app, &ctx, pos2(110., 425.));
+    click(&mut app, &ctx, pos2(110., 475.));
     assert!(app.clock_state.running());
     assert_eq!(app.text, "打卡成功！");
     app.text.clear();
@@ -935,10 +935,10 @@ fn sidebar_cancel_keeps_new_message_when_dialog_already_open() {
     let mut app = Pet::from_context(&ctx, true);
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![]);
-    click(&mut app, &ctx, pos2(110., 425.));
+    click(&mut app, &ctx, pos2(110., 475.));
     frame(&mut app, &ctx, vec![]);
     assert_eq!(app.text, "打卡成功！");
-    click(&mut app, &ctx, pos2(110., 425.));
+    click(&mut app, &ctx, pos2(110., 475.));
     assert_eq!(app.text, "打卡已终止");
     assert!(!app.clock_state.running());
     click(&mut app, &ctx, pos2(750., 30.));
@@ -1099,7 +1099,7 @@ fn empty_library_character_format_fallback_and_resource_reload() {
     assert_eq!(app.library.format, "png");
     assert_eq!(app.library.texts, ["a的台词"]);
     assert!(app.picture.is_some());
-    click(&mut app, &ctx, pos2(110., 375.));
+    click(&mut app, &ctx, pos2(110., 425.));
     assert_eq!(app.library.character, "b");
     assert_eq!(app.library.format, "gif");
     assert_eq!(app.library.texts, ["b的台词"]);

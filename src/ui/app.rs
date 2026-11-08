@@ -92,6 +92,7 @@ pub struct Pet {
     pub(super) character_creation: super::new_character::CharacterCreation,
     pub(super) context_ui: super::roleplay_context::ContextUi,
     pub(super) character_memory_ui: super::character_memories::CharacterMemoryUi,
+    transparency: Option<std::sync::Arc<super::transparency::Transparency>>,
 }
 impl Pet {
     pub fn new(
@@ -100,6 +101,11 @@ impl Pet {
     ) -> Self {
         platform::configure(cc);
         let mut app = Self::from_context(&cc.egui_ctx, true);
+        app.transparency = cc.gl.clone().and_then(|gl| {
+            super::transparency::Transparency::new(gl)
+                .map_err(|_| eprintln!("透明输出初始化失败。"))
+                .ok()
+        });
         app.character_memory_ui.running = true;
         if let Some(storage) = cc.storage {
             app.restore_state(storage);
@@ -240,6 +246,7 @@ impl Pet {
             character_creation: Default::default(),
             context_ui: Default::default(),
             character_memory_ui: Default::default(),
+            transparency: None,
         };
         app.refresh(ctx);
         app
@@ -319,6 +326,11 @@ impl Pet {
     }
 }
 impl eframe::App for Pet {
+    fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
+        if let Some(pass) = self.transparency.take() {
+            pass.destroy();
+        }
+    }
     fn clear_color(&self, _: &egui::Visuals) -> [f32; 4] {
         [0.; 4]
     }
@@ -467,7 +479,13 @@ impl Pet {
             let bytes: Vec<u8> = image
                 .pixels
                 .iter()
-                .flat_map(|p| p.to_srgba_unmultiplied())
+                .flat_map(|p| {
+                    if self.transparency.is_some() {
+                        super::transparency::screenshot_rgba(*p)
+                    } else {
+                        p.to_srgba_unmultiplied()
+                    }
+                })
                 .collect();
             if let Err(error) = image::save_buffer(
                 path,
@@ -546,6 +564,9 @@ impl Pet {
         self.codex_prompt_ui(ctx);
         self.clock_notice_ui(ctx);
         self.alarm_popup_ui(ctx);
+        if let Some(pass) = &self.transparency {
+            pass.paint(ctx);
+        }
         #[cfg(any(target_os = "linux", windows))]
         if let Some(window) = &mut self.drag_window {
             window.set_input_regions(&self.input_regions, screen, ctx.pixels_per_point());

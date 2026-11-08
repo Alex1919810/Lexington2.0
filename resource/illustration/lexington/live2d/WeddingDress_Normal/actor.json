@@ -1,0 +1,300 @@
+{
+  "format": "lexington-native-actor-1",
+  "canvas": [
+    480,
+    720
+  ],
+  "original": "assets/original.png",
+  "plate": "assets/plate.png",
+  "layers": [
+    {
+      "path": "assets/left_upper.png",
+      "origin": [
+        197,
+        245
+      ]
+    },
+    {
+      "path": "assets/right_upper.png",
+      "origin": [
+        273,
+        190
+      ]
+    },
+    {
+      "path": "assets/left_lower.png",
+      "origin": [
+        195,
+        273
+      ]
+    },
+    {
+      "path": "assets/right_lower.png",
+      "origin": [
+        266,
+        269
+      ]
+    },
+    {
+      "path": "assets/bouquet.png",
+      "origin": [
+        174,
+        291
+      ]
+    }
+  ],
+  "restore_masks": [
+    "assets/shoulder.png",
+    "assets/bodice.png"
+  ],
+  "bones": {
+    "left": [
+      [
+        207.0,
+        215.0
+      ],
+      [
+        209.0,
+        278.0
+      ],
+      [
+        210.0,
+        310.0
+      ]
+    ],
+    "right": [
+      [
+        283.0,
+        212.0
+      ],
+      [
+        303.0,
+        275.0
+      ],
+      [
+        276.0,
+        310.0
+      ]
+    ],
+    "poles": [
+      1,
+      -1
+    ]
+  },
+  "head_until": 190,
+  "breath_roi": [
+    145,
+    190,
+    340,
+    375
+  ],
+  "breath_fields": [
+    "assets/breath_dx.f32",
+    "assets/breath_dy.f32"
+  ],
+  "hair_roi": [
+    52,
+    150,
+    228,
+    360
+  ],
+  "hair_mask": "assets/hair-mask.png",
+  "hair_occlusion": "assets/hair-occlusion.png",
+  "hair_front": "assets/hair-front.f32",
+  "hair_body_occlusion": [
+    200,
+    195,
+    355
+  ],
+  "shared_idle": {
+    "clock": "monotonic global seconds; never reset on action trigger",
+    "wave": "sin(2*pi*t/period)^3; values below 1e-4 quantized to zero",
+    "breathing": {
+      "period": 3,
+      "max_dy_px": 1.2,
+      "chest_scale_amplitude": 0.006,
+      "applies_to": "body only; protect arm/flower pixels"
+    },
+    "sway": {
+      "period": 6,
+      "rotation_degrees": 0.2,
+      "translation_x_px": 0.6,
+      "applies_to": "whole actor once, after all local layers",
+      "rotation_clockwise_degrees_per_wave": 0.2,
+      "translation_x_px_per_wave": 0.6
+    },
+    "hair": {
+      "period": 6,
+      "clock": "uninterrupted global seconds shared by all local actions",
+      "method": "rigid rotation of original visible hair texture; no masked displacement field",
+      "pivot": [
+        221,
+        163
+      ],
+      "primary_angle_clockwise_degrees": 1.75,
+      "secondary_angle_clockwise_degrees": 0.24,
+      "primary": "sin(2*pi*t/6)^3",
+      "secondary": "sin(2*pi*t/6 - 0.45)^3 * sin(pi*t/6)^2",
+      "zero_threshold": 0.0001,
+      "scale": 1,
+      "scope": "loose left hair; stationary scalp overlap and foreground occlusion"
+    }
+  },
+  "root_pivot": [
+    240,
+    680
+  ],
+  "channels": {
+    "eye_openness": {
+      "default": 1,
+      "range": [
+        0,
+        1
+      ]
+    },
+    "bouquet_lift_px": {
+      "default": 0,
+      "range": [
+        0,
+        10
+      ]
+    }
+  },
+  "actions": {
+    "blink": {
+      "duration": 0.64,
+      "tracks": {
+        "eye_openness": [
+          [
+            0,
+            1,
+            "smooth"
+          ],
+          [
+            0.26,
+            0,
+            "linear"
+          ],
+          [
+            0.36,
+            0,
+            "smooth"
+          ],
+          [
+            0.64,
+            1,
+            "linear"
+          ]
+        ]
+      }
+    },
+    "bouquet": {
+      "duration": 3.8,
+      "tracks": {
+        "bouquet_lift_px": [
+          [
+            0,
+            0,
+            "quintic_squared"
+          ],
+          [
+            1.5,
+            10,
+            "linear"
+          ],
+          [
+            2.1,
+            10,
+            "quintic_complement_squared"
+          ],
+          [
+            3.8,
+            0,
+            "linear"
+          ]
+        ]
+      }
+    }
+  },
+  "hit_regions": [
+    {
+      "id": "head",
+      "shape": "ellipse",
+      "center": [
+        258,
+        145
+      ],
+      "radii": [
+        44,
+        56
+      ],
+      "action": "blink"
+    },
+    {
+      "id": "bouquet",
+      "shape": "polygon",
+      "points": [
+        [
+          191,
+          288
+        ],
+        [
+          234,
+          284
+        ],
+        [
+          276,
+          291
+        ],
+        [
+          290,
+          318
+        ],
+        [
+          286,
+          368
+        ],
+        [
+          260,
+          390
+        ],
+        [
+          237,
+          446
+        ],
+        [
+          216,
+          443
+        ],
+        [
+          176,
+          371
+        ],
+        [
+          165,
+          341
+        ],
+        [
+          173,
+          310
+        ]
+      ],
+      "local_transform": "translate(0,-bouquet_lift_px)",
+      "action": "bouquet"
+    }
+  ],
+  "eyes": {
+    "atlas": "assets/eye-atlas-33.png",
+    "mask": "assets/eye-cover-mask.png",
+    "cell": [
+      89,
+      92
+    ],
+    "columns": 8,
+    "states": 33,
+    "origin": [
+      218,
+      99
+    ]
+  }
+}

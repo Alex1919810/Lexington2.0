@@ -16,3 +16,4 @@
 - 发布包配置使用空对象，不打包 config/roleplay.json、config/roleplay-memory.json 或 roleplay-vectors.sqlite3 及 journal/wal/shm；重复 Linux 打包还须清除旧生成目录遗留的私人配置与数据库。`bash scripts/test-package.sh` 使用假构建器和临时资源检查此行为，不访问真实配置。
 - 内置 Embedding 的模型、tokenizer、哈希清单及许可必须随 resource 分发，打包缺文件即失败；Windows x64 还携带经校验的原生 CPU DLL 及其许可/第三方声明，不引入 Python/Node 运行链。安装/无源码发布包测试用假模型与假 DLL 验证完整复制；显式 `--check-embedding` 仅用固定文本验收随包本地模型，不读取用户记录或启动对话模型。
 - 个人角色卡及立绘保存在 config/characters，升级须保留，发布包须排除；重复 Linux 打包清除旧生成包内的该目录前，先核对解析后的目标位于项目 dist 内，不删除源配置。
+- import-live2d.py 只作离线原包格式转换，输出目录须不存在，不执行 ZIP 内脚本；其 NumPy/Pillow/OpenCV 工具环境不可加入原生应用运行链。Live2D 原生 PNG/JSON/f32 随 resource 分发，数值资源禁止换行转换。

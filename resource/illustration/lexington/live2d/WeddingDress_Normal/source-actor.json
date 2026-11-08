@@ -1,0 +1,258 @@
+{
+  "format": "lexington-parametric-actor-draft-1",
+  "canvas": [
+    480,
+    720
+  ],
+  "neutral": "neutral.png",
+  "root_pivot": [
+    240,
+    680
+  ],
+  "shared_idle": {
+    "clock": "monotonic global seconds; never reset on action trigger",
+    "wave": "sin(2*pi*t/period)^3; values below 1e-4 quantized to zero",
+    "breathing": {
+      "period": 3,
+      "max_dy_px": 1.2,
+      "chest_scale_amplitude": 0.006,
+      "applies_to": "body only; protect arm/flower pixels"
+    },
+    "sway": {
+      "period": 6,
+      "rotation_degrees": 0.2,
+      "translation_x_px": 0.6,
+      "applies_to": "whole actor once, after all local layers",
+      "rotation_clockwise_degrees_per_wave": 0.2,
+      "translation_x_px_per_wave": 0.6
+    },
+    "hair": {
+      "period": 6,
+      "clock": "uninterrupted global seconds shared by all local actions",
+      "method": "rigid rotation of original visible hair texture; no masked displacement field",
+      "pivot": [
+        221,
+        163
+      ],
+      "primary_angle_clockwise_degrees": 1.75,
+      "secondary_angle_clockwise_degrees": 0.24,
+      "primary": "sin(2*pi*t/6)^3",
+      "secondary": "sin(2*pi*t/6 - 0.45)^3 * sin(pi*t/6)^2",
+      "zero_threshold": 0.0001,
+      "scale": 1,
+      "scope": "loose left hair; stationary scalp overlap and foreground occlusion"
+    }
+  },
+  "channels": {
+    "eye_openness": {
+      "default": 1,
+      "range": [
+        0,
+        1
+      ]
+    },
+    "bouquet_lift_px": {
+      "default": 0,
+      "range": [
+        0,
+        10
+      ]
+    }
+  },
+  "actions": {
+    "blink": {
+      "channel": "eye_openness",
+      "duration": 0.64,
+      "close": 0.26,
+      "hold": 0.1,
+      "open": 0.28,
+      "start": 1,
+      "end": 1
+    },
+    "bouquet": {
+      "channel": "bouquet_lift_px",
+      "duration": 3.8,
+      "rise": 1.5,
+      "hold": 0.6,
+      "fall": 1.7,
+      "amplitude": 10,
+      "easing": "quintic smoothstep squared",
+      "start": 0,
+      "end": 0
+    }
+  },
+  "trigger_policy": {
+    "different_channels": "may run together",
+    "same_channel": "queue at most one replay; do not reset a running pose",
+    "interrupt_extension": "if interruptions are added, blend current parameter value/velocity, never crossfade full character images"
+  },
+  "bones": {
+    "left": [
+      [
+        207.0,
+        215.0
+      ],
+      [
+        209.0,
+        278.0
+      ],
+      [
+        210.0,
+        310.0
+      ]
+    ],
+    "right": [
+      [
+        283.0,
+        212.0
+      ],
+      [
+        303.0,
+        275.0
+      ],
+      [
+        276.0,
+        310.0
+      ]
+    ],
+    "ik_poles": {
+      "left": 1,
+      "right": -1
+    },
+    "scale": 1
+  },
+  "assets": {
+    "background": "assets/clean-local-plate.png",
+    "source_rgba": "assets/original-reference.png",
+    "arm_layers": [
+      "assets/left-upper-arm.png",
+      "assets/left-forearm.png",
+      "assets/right-upper-arm.png",
+      "assets/right-forearm.png"
+    ],
+    "bouquet": "assets/bouquet.png",
+    "bodice_replace_mask": "assets/bodice-replace-mask.png",
+    "shoulder_replace_mask": "assets/shoulder-replace-mask.png",
+    "eye_atlas": {
+      "path": "assets/eye-atlas-33.png",
+      "cell": [
+        89,
+        92
+      ],
+      "columns": 8,
+      "states": 33,
+      "openness": "index/32",
+      "face_box": [
+        218,
+        99,
+        307,
+        191
+      ],
+      "coverage": "assets/eye-cover-mask.png",
+      "composite": "replace RGB through coverage, preserve destination alpha; skip patch at openness=1"
+    },
+    "body_breath_mesh": "assets/body-breath-mesh.json",
+    "reference_rig_state": {
+      "path": "assets/reference-rig-state.npz"
+    },
+    "closed_eye_reference": {
+      "path": "assets/closed-eye-reference.png"
+    },
+    "hair_layer": {
+      "path": "assets/hair-loose-layer.png"
+    },
+    "hair_source_mask": {
+      "path": "assets/hair-source-mask.png"
+    },
+    "hair_exact_mask": {
+      "path": "assets/hair-layer-mask.npz"
+    }
+  },
+  "hit_regions": [
+    {
+      "id": "head",
+      "shape": "ellipse",
+      "center": [
+        258,
+        145
+      ],
+      "radii": [
+        44,
+        56
+      ],
+      "action": "blink"
+    },
+    {
+      "id": "bouquet",
+      "shape": "polygon",
+      "points": [
+        [
+          191,
+          288
+        ],
+        [
+          234,
+          284
+        ],
+        [
+          276,
+          291
+        ],
+        [
+          290,
+          318
+        ],
+        [
+          286,
+          368
+        ],
+        [
+          260,
+          390
+        ],
+        [
+          237,
+          446
+        ],
+        [
+          216,
+          443
+        ],
+        [
+          176,
+          371
+        ],
+        [
+          165,
+          341
+        ],
+        [
+          173,
+          310
+        ]
+      ],
+      "local_transform": "translate(0,-bouquet_lift_px)",
+      "action": "bouquet"
+    }
+  ],
+  "hit_test": "inverse root/screen transform first; then test current model-space hit polygons",
+  "native_target": "eframe/egui + glow; runtime integration not implemented in this preview",
+  "preview_rules": "v4 uses original-texture rigid hair swing. Shared body/hair clock and local action times are preserved. No Cubism or runtime integration claimed.",
+  "reference_composition_order": [
+    "background",
+    "upper arms",
+    "source RGBA replace through shoulder mask",
+    "source RGBA replace through bodice mask",
+    "forearms",
+    "bouquet",
+    "torso-only breathing with arm/flower protection",
+    "rigid original-hair layer and stationary root, then restore current foreground occlusion",
+    "eye RGB replace through eye cover mask",
+    "single global root transform"
+  ],
+  "local_neutral_pose": {
+    "eye_openness": 1,
+    "bouquet_lift_px": 0
+  },
+  "reference_renderer": "render_actor.py + rig_core.py + reference_blink.py; offline dependencies numpy, opencv-python-headless, Pillow"
+}

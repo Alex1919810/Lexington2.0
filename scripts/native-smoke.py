@@ -248,7 +248,7 @@ def main():
             if sidebar_x < 0:
                 sidebar_x = 10
             warp(int(original[0] + sidebar_x + 25),
-                 original[1] + original_size[1] // 2 - 125 + (250 if args.mode == "clock" else 0))
+                 original[1] + original_size[1] // 2 - 125 + (300 if args.mode == "clock" else 0))
             button(True)
             button(False)
         elif args.mode == "input":

@@ -35,8 +35,27 @@ pub fn illustrations(root: &Path) -> Vec<Illustration> {
             continue;
         }
         let character = dir.file_name().unwrap().to_string_lossy().into_owned();
-        for format in ["gif", "png"] {
+        for format in ["gif", "png", "live2d"] {
             for path in entries(&dir.join(format)) {
+                if format == "live2d" {
+                    if path.is_dir() && path.join("actor.json").is_file() {
+                        let variant = path.file_name().unwrap().to_string_lossy();
+                        let (outfit, state) = variant
+                            .rsplit_once('_')
+                            .filter(|(_, s)| {
+                                s.eq_ignore_ascii_case("normal") || s.eq_ignore_ascii_case("damage")
+                            })
+                            .unwrap_or((&variant, "normal"));
+                        result.push(Illustration {
+                            path: path.join("actor.json"),
+                            character: character.clone(),
+                            format: format.into(),
+                            outfit: outfit.into(),
+                            damaged: state.eq_ignore_ascii_case("damage"),
+                        });
+                    }
+                    continue;
+                }
                 if path.is_file()
                     && path
                         .extension()

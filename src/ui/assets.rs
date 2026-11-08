@@ -1,20 +1,43 @@
 use crate::tools::gif::Decoder;
 use eframe::egui::{self, ColorImage, TextureHandle};
 use std::path::Path;
+use std::time::{Duration, Instant};
+enum Animation {
+    Raster(Box<Decoder>),
+    Live {
+        actor: Box<crate::tools::live2d::Actor>,
+        started: Instant,
+        rendered: Duration,
+    },
+}
 
 // Linear mipmaps match downscaled browser artwork and bubble backgrounds.
 const TEXTURE_OPTIONS: egui::TextureOptions =
     egui::TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear));
 
 pub struct Picture {
-    decoder: Decoder,
+    decoder: Animation,
     texture: TextureHandle,
     size: egui::Vec2,
     pub(super) opaque_regions: Vec<egui::Rect>,
 }
 impl Picture {
     pub fn load(ctx: &egui::Context, path: &Path) -> Result<Self, String> {
-        let (decoder, image) = Decoder::load(path)?;
+        let (decoder, image) = if path.file_name().is_some_and(|name| name == "actor.json") {
+            let mut actor = crate::tools::live2d::Actor::load(path)?;
+            let image = actor.render(0.);
+            (
+                Animation::Live {
+                    actor: Box::new(actor),
+                    started: Instant::now(),
+                    rendered: Duration::ZERO,
+                },
+                image,
+            )
+        } else {
+            let (decoder, image) = Decoder::load(path)?;
+            (Animation::Raster(Box::new(decoder)), image)
+        };
         let size = egui::vec2(image.width() as f32, image.height() as f32);
         let opaque_regions = opaque_regions(&image);
         let texture =
@@ -30,11 +53,40 @@ impl Picture {
         self.size
     }
     pub fn texture(&mut self) -> &TextureHandle {
-        if let Some(image) = self.decoder.advance() {
+        let image = match &mut self.decoder {
+            Animation::Raster(decoder) => decoder.advance(),
+            Animation::Live {
+                actor,
+                started,
+                rendered,
+            } => {
+                let elapsed = started.elapsed();
+                if elapsed.saturating_sub(*rendered) >= Duration::from_secs_f64(1. / 30.) {
+                    *rendered = elapsed;
+                    Some(actor.render(elapsed.as_secs_f64()))
+                } else {
+                    None
+                }
+            }
+        };
+        if let Some(image) = image {
             self.opaque_regions = opaque_regions(&image);
             self.texture.set(color_image(&image), TEXTURE_OPTIONS);
         }
         &self.texture
+    }
+    pub fn is_live2d(&self) -> bool {
+        matches!(self.decoder, Animation::Live { .. })
+    }
+    pub fn click_part(&mut self, point: [f32; 2]) -> bool {
+        if let Animation::Live {
+            actor, rendered, ..
+        } = &mut self.decoder
+        {
+            actor.click(point, rendered.as_secs_f64())
+        } else {
+            false
+        }
     }
 }
 // Retain only compact alpha coverage, not another RGBA frame. A cell is at most
@@ -114,6 +166,16 @@ pub(super) fn icons(ctx: &egui::Context) -> Vec<TextureHandle> {
 }
 
 #[cfg(test)]
+impl Animation {
+    fn raster(&mut self) -> &mut Decoder {
+        match self {
+            Self::Raster(decoder) => decoder,
+            _ => panic!("expected raster fixture"),
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::tools::gif::delay;
@@ -122,6 +184,63 @@ mod tests {
         io::BufReader,
         time::{Duration, Instant},
     };
+    #[test]
+    fn live2d_sidebar_and_transformed_body_clicks_trigger_only_local_actions() {
+        use crate::ui::app::Pet;
+        let ctx = egui::Context::default();
+        ctx.style_mut(|s| s.animation_time = 0.);
+        let mut app = Pet::from_context(&ctx, true);
+        let run = |app: &mut Pet, events| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800., 600.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.ui(ctx),
+            );
+        };
+        run(&mut app, vec![]);
+        run(&mut app, vec![]);
+        let click = |app: &mut Pet, p: egui::Pos2| {
+            run(app, vec![egui::Event::PointerMoved(p)]);
+            for pressed in [true, false] {
+                run(
+                    app,
+                    vec![egui::Event::PointerButton {
+                        pos: p,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    }],
+                );
+            }
+        };
+        click(&mut app, egui::pos2(110., 375.));
+        assert_eq!(app.library.format, "live2d");
+        assert!(app.codex.is_none());
+        // Freeze time for deterministic displayed-root and hit-test agreement.
+        if let Animation::Live {
+            started, rendered, ..
+        } = &mut app.picture.as_mut().unwrap().decoder
+        {
+            *started = Instant::now() + Duration::from_secs(60);
+            *rendered = Duration::ZERO;
+        }
+        // Hover scales 1.05 and lifts -5; root at time zero is neutral.
+        click(&mut app, egui::pos2(411.8125, 153.90625));
+        click(&mut app, egui::pos2(400., 301.5625));
+        if let Animation::Live { actor, .. } = &app.picture.as_ref().unwrap().decoder {
+            assert!(actor.parameters(0.3)["eye_openness"] < 0.001);
+            assert!(actor.parameters(0.3)["bouquet_lift_px"] > 0.);
+        } else {
+            panic!("Live2D actor not selected");
+        }
+        assert!(app.text.is_empty());
+    }
     #[test]
     fn compact_alpha_grid_matches_pixel_max_for_uneven_dimensions() {
         for (width, height) in [(1, 1), (17, 9), (257, 263), (511, 389), (1024, 1024)] {
@@ -180,10 +299,10 @@ mod tests {
             panic!("RGBA texture expected")
         };
         for frame_index in 1..=frame_count {
-            pic.decoder.next_frame = Instant::now() - Duration::from_millis(1);
+            pic.decoder.raster().next_frame = Instant::now() - Duration::from_millis(1);
             pic.texture();
             assert!(
-                pic.decoder.animation.is_some(),
+                pic.decoder.raster().animation.is_some(),
                 "stopped after frame {frame_index}"
             );
             assert_eq!(pic.texture.id(), texture_id);
@@ -255,7 +374,7 @@ mod tests {
         .enumerate()
         {
             if index > 0 {
-                pic.decoder.next_frame = Instant::now() - Duration::from_millis(1);
+                pic.decoder.raster().next_frame = Instant::now() - Duration::from_millis(1);
                 pic.texture();
             }
             let delta = ctx.tex_manager().write().take_delta();
@@ -313,18 +432,18 @@ mod tests {
             }
             let ctx = egui::Context::default();
             let mut pic = Picture::load(&ctx, &path).unwrap();
-            assert_eq!(pic.decoder.repeats_left, expected);
+            assert_eq!(pic.decoder.raster().repeats_left, expected);
             let texture_id = pic.texture.id();
             // Check frame contents across four cycles, including the transition
             // back to frame zero and exhaustion of an explicit repeat count.
             for frame_index in 0..8 {
                 if frame_index > 0 {
-                    pic.decoder.next_frame = Instant::now() - Duration::from_millis(1);
+                    pic.decoder.raster().next_frame = Instant::now() - Duration::from_millis(1);
                     pic.texture();
                 }
                 let playing = expected.is_none_or(|n| frame_index < (usize::from(n) + 1) * 2);
                 assert_eq!(
-                    pic.decoder.animation.is_some(),
+                    pic.decoder.raster().animation.is_some(),
                     playing,
                     "frame {frame_index}"
                 );

@@ -27,7 +27,19 @@ impl Pet {
             if hover { -5. } else { 0. },
             0.3,
         );
-        let transform = transform(base, (time * 2.).sin() as f32 * 5. + lift, scale);
+        let live = self.picture.as_ref().is_some_and(|p| p.is_live2d());
+        let transform = transform(
+            base,
+            if live {
+                lift
+            } else {
+                (time * 2.).sin() as f32 * 5. + lift
+            },
+            scale,
+        );
+        if live {
+            ctx.request_repaint_after(Duration::from_secs_f64(1. / 30.));
+        }
         for (order, id) in [
             (egui::Order::Background, "pet"),
             (egui::Order::Foreground, "dialog"),
@@ -95,11 +107,19 @@ impl Pet {
                 self.context_menu(ctx, &menu);
                 // Match the original circular hit region (radius = displayed image height * 0.3).
                 let radius = size.y * 0.3;
-                let hit_rect = Rect::from_center_size(center, vec2(radius * 2., radius * 2.));
+                let hit_rect = if live {
+                    pet_rect
+                } else {
+                    Rect::from_center_size(center, vec2(radius * 2., radius * 2.))
+                };
                 let inside = ui.input(|i| {
-                    i.pointer
-                        .interact_pos()
-                        .is_some_and(|p| (transform.inverse() * p).distance(center) <= radius)
+                    i.pointer.interact_pos().is_some_and(|p| {
+                        if live {
+                            hit_rect.contains(transform.inverse() * p)
+                        } else {
+                            (transform.inverse() * p).distance(center) <= radius
+                        }
+                    })
                 });
                 let response =
                     ui.interact(hit_rect, egui::Id::new("pet-drag"), Sense::click_and_drag());
@@ -122,8 +142,11 @@ impl Pet {
                         .press_origin()
                         .zip(i.pointer.interact_pos())
                         .is_some_and(|(start, end)| {
-                            (transform.inverse() * start).distance(center) <= radius
-                                && start.distance(end) > 5.
+                            (if live {
+                                hit_rect.contains(transform.inverse() * start)
+                            } else {
+                                (transform.inverse() * start).distance(center) <= radius
+                            }) && start.distance(end) > 5.
                         })
                 });
                 if response.dragged_by(egui::PointerButton::Primary) && moved && !self.drag_sent {
@@ -141,9 +164,20 @@ impl Pet {
                     && self
                         .pet_pressed
                         .is_some_and(|at| at.elapsed() < Duration::from_millis(300));
+                if clicked
+                    && live
+                    && let Some(point) = ctx.input(|i| i.pointer.interact_pos())
+                {
+                    let local = (transform.inverse() * point - pet_rect.min) / size;
+                    if let Some(pic) = self.picture.as_mut() {
+                        let dimensions = pic.size();
+                        pic.click_part([local.x * dimensions.x, local.y * dimensions.y]);
+                    }
+                    // Live actors respond only through their configured body-part actions.
+                }
                 self.context_menu(ctx, &response);
             });
-        if clicked {
+        if clicked && !live {
             self.click_pet();
         }
         (size, transform, clicked)

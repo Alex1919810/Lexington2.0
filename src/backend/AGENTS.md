@@ -31,3 +31,4 @@
 
 - 天气仅在显式请求时通过 ureq/Rustls 查询 Open-Meteo，不接入 Codex；缓存按城市/日期区分，响应有大小及总超时限制，退出丢弃队列并回收工作线程。城市保存在 weather.city，沿用配置无损原子写入。
 - 立绘扫描同时包含 resource/illustration 与 config/characters，忽略隐藏暂存目录；两处沿用相同格式、服装与战损解析，不读取角色设定或写入导入数据。
+- Live2D 使用角色 live2d/<换装>_Normal（或 _Damage）/actor.json，换装配对沿用最终后缀规则；只发现模型路径，不渲染。切换格式优先同换装且保持角色会话，三格式回退必须覆盖由 Live2D 切到仅有 PNG 的角色。
