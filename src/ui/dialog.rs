@@ -13,6 +13,15 @@ impl Pet {
     }
     pub(super) fn click_pet(&mut self) {
         if self.text.is_empty() {
+            // Preset lines are fallback content, including after an AI bubble was dismissed.
+            if self.busy
+                || self
+                    .codex_messages
+                    .iter()
+                    .any(|(_, text)| !text.trim().is_empty())
+            {
+                return;
+            }
             if !self.library.texts.is_empty() {
                 self.say(
                     self.library.texts[rand::random_range(0..self.library.texts.len())].clone(),
@@ -89,5 +98,59 @@ impl Pet {
                 * result.inner,
         );
         Some(result.inner)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::codex::Client;
+    use std::time::Duration;
+
+    #[test]
+    fn preset_lines_do_not_replace_pending_or_dismissed_ai_output() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = Pet::from_root(&ctx, true, root.path().into());
+        app.library.texts = vec!["预设台词夹具".into()];
+        app.click_pet();
+        assert_eq!(app.text, "预设台词夹具");
+        app.click_pet();
+        app.click_pet();
+        assert!(app.text.is_empty());
+        app.codex = Some(Client::mock("normal"));
+        app.input = "AI 回复夹具".into();
+        app.submit(&ctx);
+        assert!(app.busy);
+        app.click_pet();
+        assert!(app.text.is_empty());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.busy && Instant::now() < deadline {
+            app.poll_codex();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!app.busy);
+        assert!(app.text.contains("AI 回复夹具"));
+        let reply = app.text.clone();
+        app.click_pet();
+        assert_eq!(app.text, reply);
+        app.click_pet();
+        assert!(app.text.is_empty());
+        for _ in 0..3 {
+            app.click_pet();
+            assert!(app.text.is_empty());
+        }
+        // A failed next turn with no AI text still permits the ordinary fallback.
+        app.input = "fail".into();
+        app.submit(&ctx);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.busy && Instant::now() < deadline {
+            app.poll_codex();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!app.busy);
+        assert!(app.error.contains("模拟请求失败"));
+        app.click_pet();
+        assert_eq!(app.text, "预设台词夹具");
     }
 }
