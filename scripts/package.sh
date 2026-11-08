@@ -6,7 +6,11 @@ cargo build --release --locked
 bundle="$project_root/dist/lexington"
 mkdir -p "$bundle"
 cp target/release/lexington "$bundle/lexington"
-cp -R resource config "$bundle/"
+cp -R resource "$bundle/"
+mkdir -p "$bundle/config"
+printf '{}\n' > "$bundle/config/config.json"
+# Generated bundles must never retain private role cards or memories from an older run.
+rm -f "$bundle/config/roleplay.json" "$bundle/config/roleplay-memory.json"
 cp README.md "$bundle/README.md"
 python3 scripts/integrations.py build --output "$project_root/dist/integrations"
 cp -R integrations "$bundle/"

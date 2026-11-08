@@ -30,7 +30,7 @@ pub struct Pet {
     pub(super) codex_restart_pending: bool,
     pub(super) codex_character: Option<String>,
     pub(super) codex_role_card: Option<crate::roleplay::RoleCard>,
-    pub(super) roleplay_stamp: Option<(SystemTime, u64)>,
+    pub(super) roleplay_stamp: [Option<(SystemTime, u64)>; 2],
     pub(super) library: CharacterState,
     pub(super) picture: Option<Picture>,
     pub(super) icons: Vec<egui::TextureHandle>,
@@ -89,6 +89,7 @@ pub struct Pet {
     pub(super) local_codex_config: crate::backend::codex_config::LocalCodexConfig,
     pub(super) connection_error: String,
     pub(super) role_editor: super::role_card::RoleEditor,
+    pub(super) context_ui: super::roleplay_context::ContextUi,
 }
 impl Pet {
     pub fn new(
@@ -164,7 +165,7 @@ impl Pet {
             codex_restart_pending: false,
             codex_character: None,
             codex_role_card: None,
-            roleplay_stamp: None,
+            roleplay_stamp: [None, None],
             library: CharacterState::default(),
             picture: None,
             icons: super::assets::icons(ctx),
@@ -233,6 +234,7 @@ impl Pet {
             local_codex_config: Default::default(),
             connection_error: String::new(),
             role_editor: Default::default(),
+            context_ui: Default::default(),
         };
         app.refresh(ctx);
         app

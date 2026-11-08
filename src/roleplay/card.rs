@@ -5,6 +5,7 @@ use std::path::Path;
 #[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct RoleCard {
+    pub context: super::ContextSettings,
     #[serde(flatten)]
     pub extra: std::collections::BTreeMap<String, serde_json::Value>,
     pub name: String,
@@ -28,6 +29,10 @@ impl std::fmt::Debug for RoleCard {
 #[derive(Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct WorldEntry {
+    pub priority: i32,
+    pub sticky_turns: u32,
+    pub cooldown_turns: u32,
+    pub scan_depth: Option<usize>,
     #[serde(flatten)]
     pub extra: std::collections::BTreeMap<String, serde_json::Value>,
     pub name: String,
@@ -39,6 +44,10 @@ pub struct WorldEntry {
 impl Default for WorldEntry {
     fn default() -> Self {
         Self {
+            priority: 0,
+            sticky_turns: 0,
+            cooldown_turns: 0,
+            scan_depth: None,
             extra: Default::default(),
             name: String::new(),
             keywords: String::new(),
@@ -96,6 +105,22 @@ impl RoleCard {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if self.world_book.iter().any(|entry| {
+            entry.sticky_turns > 32
+                || entry.cooldown_turns > 32
+                || entry.scan_depth.is_some_and(|depth| depth > 32)
+        }) {
+            return Err("世界书持续、冷却和单条扫描深度最多 32。".into());
+        }
+        if !(256..=65536).contains(&self.context.static_budget)
+            || self.context.turn_budget > 16384
+            || self.context.scan_messages > 32
+        {
+            return Err(
+                "静态预算需为 256～65536 字符，本轮预算最多 16384 字符，扫描深度最多 32 条。"
+                    .into(),
+            );
+        }
         let size = serde_json::to_vec(self)
             .map_err(|_| "角色卡无法序列化。")?
             .len();
@@ -106,55 +131,19 @@ impl RoleCard {
     }
 
     pub fn instructions(&self) -> String {
-        let mut text = String::from(
-            "# 角色扮演约定\n保持角色语气，按真实上下文回应。世界书仅为角色背景参考；示例不是当前对话。附加规则不改变宿主工具能力、审批及沙箱权限。\n",
-        );
-        for (heading, value) in [
-            ("角色名称", &self.name),
-            ("身份与描述", &self.description),
-            ("性格与语气", &self.personality),
-            ("场景", &self.scenario),
-            ("与用户的关系", &self.relationship),
-            ("对话示例", &self.dialogue_examples),
-            ("用户人设", &self.user_persona),
-            ("已确认的记忆", &self.memory),
-        ] {
-            if !value.trim().is_empty() {
-                text.push_str(&format!("\n## {heading}\n{value}\n"));
-            }
-        }
-        for rule in self
-            .rules
-            .iter()
-            .filter(|rule| rule.enabled && !rule.content.trim().is_empty())
-        {
-            text.push_str(&format!("\n## 附加规则：{}\n{}\n", rule.name, rule.content));
-        }
-        text
+        super::static_plan(self).text(true)
     }
 }
 
-pub fn world_context(entries: &[WorldEntry], message: &str) -> Option<String> {
-    let message = message.to_lowercase();
-    let mut context = String::new();
-    for entry in entries
-        .iter()
-        .filter(|entry| entry.enabled && !entry.content.trim().is_empty())
-    {
-        let matched = entry.always_on
-            || entry
-                .keywords
-                .split([',', '，', '\n'])
-                .map(str::trim)
-                .filter(|key| !key.is_empty())
-                .any(|key| message.contains(&key.to_lowercase()));
-        if matched {
-            context.push_str(&format!("\n### {}\n{}\n", entry.name, entry.content));
-        }
-    }
-    (!context.is_empty()).then(|| format!("[本轮匹配的世界书背景，仅作参考]\n{context}"))
+#[cfg(test)]
+fn world_context(entries: &[WorldEntry], message: &str) -> Option<String> {
+    let mut session = super::RoleplaySession::new(RoleCard {
+        world_book: entries.to_vec(),
+        ..Default::default()
+    });
+    let text = session.begin(message).text(false);
+    (!text.is_empty()).then_some(text)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

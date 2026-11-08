@@ -16,6 +16,8 @@ src/
 │   ├── sidebar.rs
 │   ├── settings.rs
 │   ├── role_card.rs
+│   ├── roleplay_context.rs
+│   ├── roleplay_memory.rs
 │   ├── dialog.rs
 │   ├── clock.rs
 │   ├── codex.rs
@@ -41,6 +43,8 @@ src/
 │   ├── AGENTS.md
 │   ├── mod.rs
 │   ├── card.rs
+│   ├── context.rs
+│   ├── profile.rs
 │   ├── registry.rs
 │   └── store.rs
 └── tools/
@@ -74,6 +78,7 @@ scripts/
 ├── install-windows.ps1
 ├── package-windows.ps1
 ├── test-windows.ps1
+├── test-package.sh
 ├── windows-smoke.py
 ├── install-dependencies.sh
 ├── dependencies.py
@@ -108,23 +113,38 @@ resource/agents/
 
 | 文件 | 职责和接口 |
 |---|---|
-| `roleplay/mod.rs` | 导出 RoleCard、Rule、WorldEntry、agent_instructions、default_character、world_context、save_role_card |
+| `roleplay/mod.rs` | 导出 RoleCard、Rule、WorldEntry、RoleplaySession、ContextPlan、UserProfile、Memory、agent_instructions、session_card、default_character、static_plan、save_role_card |
 | `roleplay/registry.rs` | 按 resource/agents/characters.json 映射角色，校验目录边界和 .md 相对路径；有结构化卡时生成提示，否则读取旧 Markdown；文件上限 64 KiB，拒绝缺失、空白、错误编码与非法路径 |
-| `roleplay/card.rs` | 角色名称、描述、性格、场景、关系、对话示例、用户人设、手动记忆、世界书及附加规则；编译启用规则，世界书按本轮消息关键词匹配，支持始终启用与停用；卡片最多 64 KiB，世界书和规则各最多 64 条；Debug 隐藏内容 |
-| `roleplay/store.rs` | 从 config/roleplay.json 的 roleCards 分组读取按角色保存的覆盖值；保存保留未知字段和其他角色，同目录临时文件同步后原子替换，Unix 权限 0600，损坏文件拒绝覆盖；不读写基本 Codex 配置或凭据 |
+| `roleplay/card.rs` | 角色名称、描述、性格、场景、关系、对话示例、用户人设、手动记忆、世界书及附加规则；保留核心设定、编译规则与分段示例，包含上下文预算和世界书持续/冷却配置；卡片最多 64 KiB，世界书和规则各最多 64 条；Debug 隐藏内容 |
+| `roleplay/store.rs` | 从 config/roleplay.json 的 roleCards 分组读取按角色保存的覆盖值；角色卡和用户档案复用按分组保存接口，保留未知字段和其他角色，同目录临时文件同步后原子替换，Unix 权限 0600，损坏文件拒绝覆盖；不读写基本 Codex 配置或凭据 |
 | `ui/role_card.rs` | RoleEditor 保存编辑对象、草稿、分区、错误和提示；角色卡页面编辑五类内容，支持世界书新增/删除和规则新增/启停/排序/删除；保存后才提交角色领域模块，取消/关闭/切换编辑对象丢弃草稿 |
 
 优先级：用户保存的角色卡 → 映射 Markdown 同名的 .json 默认卡 → 原 Markdown。未映射且没有用户卡的角色使用新的普通会话。默认角色卡为 resource/agents/lexington.json，默认太太关系、原台词摘句、二创日常和多轮对话示例分字段保存；来源与许可等维护信息不注入模型。JSON 和 Markdown 随现有资源分发；用户角色配置不作为内置资源覆盖。
 
 backend/character.rs 继续负责立绘、格式和台词选择；首次选择通过 roleplay::default_character 优先匹配 lexington，否则回退首个可用角色，已有有效选择保持。角色领域数据无需增加 Rust 角色专属分支。
 
-backend/codex.rs 的 Client::start(config, root, character, wake) 取得角色提示及世界书快照：提示通过 thread/start.developerInstructions 发送一次；世界书匹配结果作为 turn/start.input 的独立文本块，原始用户消息仍为第一个文本块，审批和沙箱流程保持。关键词用逗号或换行分隔，大小写不敏感，只匹配本轮用户/外部输入；旧轮已进入历史的背景不会被自动抹除。记忆手动维护，不自动总结。
+backend/codex.rs 的 Client::start(config, root, character, wake) 取得组装了用户档案的角色卡并创建 RoleplaySession；静态计划通过 thread/start.developerInstructions 发送一次，本轮计划作为 turn/start.input 的独立文本块，原始用户消息仍为第一个文本块，审批和沙箱流程保持。实际写入请求后回传 Context 报告；预览不发送模型请求。
 
-ui/app.rs 保存 codex_character、codex_role_card 和角色配置文件时间戳；设置窗口新增第 5 号“角色卡”页面（ui/settings.rs），操作在 viewport 回调结束后执行。每 500ms 检查 config/roleplay.json；仅当前角色卡与会话快照不同时排队重建，任务结束后应用，文件错误保留现有会话并展示错误。当前角色没有启动过 Codex 时不因编辑而启动真实服务。
+ui/app.rs 保存 codex_character、codex_role_card 和角色配置文件时间戳；设置窗口新增第 5 号“角色卡”页面（ui/settings.rs），操作在 viewport 回调结束后执行。每 500ms 检查 config/roleplay.json 和 config/roleplay-memory.json；仅当前角色卡与会话快照不同时排队重建，任务结束后应用，文件错误保留现有会话并展示错误。当前角色没有启动过 Codex 时不因编辑而启动真实服务。
 
 切换显示角色（ui/sidebar.rs 或资源刷新回退）立即结束旧任务并创建新会话，清理回复、气泡、审批及重启标记，保留未发送草稿；同角色换装、战损与格式变化保持会话。ui/codex.rs 在启动时记录新的角色卡和文件快照。手动重启重新读取默认资源；默认资源编辑不自动热加载。
 
 定向验证：`cargo test --locked role_card` 覆盖结构化默认/覆盖、配置保留与损坏保护、世界书匹配、真实协议分块、设置规则操作及保存/取消/延后重启。相关回归使用 `cargo test --locked backend::codex::tests::`、`cargo test --locked backend::character::tests::` 和 `cargo test --locked ui::tests::`。测试仅用临时资源与模拟服务。
+
+### 上下文规划 场景与记忆
+
+- `roleplay/context.rs` 定义 PromptBlock、ContextPlan、ContextSettings、SceneState 和 RoleplaySession。静态提示按核心、规则、记忆、场景、分段示例构建；核心身份、性格、关系、用户人设与已启用规则完整保留，其余内容按字符预算选取。超额核心完整保留并在检查页提示。预算统计含标题和本轮背景标记，不等同于模型 token 或完整 Codex 历史预算。
+- 世界书扫描本轮输入与最近成功对话（最多 32 条，每条最多 8192 字符）；支持全局/单条深度、优先级、始终启用、持续与冷却，扫描深度 0 关闭关键词扫描。优先级高的条目先分配本轮预算；超额条目记录拒绝原因，不触发持续效果。持续 N 轮指首次触发后的 N 轮，不因重复命中续期；随后冷却 N 轮。默认 Lexington 扫描 6 条，持续 2 轮，冷却 1 轮。
+- RoleplaySession 在后端通信线程中使用。接受发送时先保存快照、生成计划；成功结束后将用户输入和按 item ID 去重的最终回复加入最近历史。任务失败或中断恢复快照，被拒绝或初始化前取消的输入不推进轮次。预览克隆会话后规划，不改变历史、轮数与时效，也不调用模型。静态计划只在 thread/start 携带，本轮场景和世界书另行携带；已进入 Codex 历史的旧背景不由本程序删除。
+- `roleplay/profile.rs` 的 UserProfile/Memory 将用户人设与记忆独立保存到 config/roleplay-memory.json 的 profiles 分组，按角色隔离；session_card 合并有效档案后启动会话。旧角色卡的 userPersona/memory 只在没有独立档案时兼容读取；旧式 Markdown 角色添加档案后仍保留原人格。候选默认未确认，不加载；仅 confirmed && enabled 的非空记忆进入提示。记忆的来源元数据仅供用户核对，不注入模型。文本编辑会撤销确认；保存失败保留原文件。
+- `ui/roleplay_context.rs` 在“角色卡 → 上下文”显示上次实际发送与预览报告，逐块显示选中状态、类别、字符数、作用域及原因，支持查看内容；只检查本软件附加内容。临时场景支持当前活动、风格、尚待完成，应用/清空不重启模型，下轮起使用，新会话清空。预览使用当前已知状态，不预测进行中任务的后续回复。
+- `ui/roleplay_memory.rs` 在“用户与记忆”管理独立草稿，支持手动新增或从最近输入创建候选、确认、撤销、启停和删除，通过独立保存按钮应用；保存操作在 viewport 回调之后执行。保存候选/来源等不影响有效提示时不重启，已确认内容变化待当前任务结束重建；关闭或取消丢弃未保存草稿。不会自动推断事实或自动生成摘要。
+- 新 Event::Context 通过标准通道回传至 UI，实际与预览分开保存；ContextPlan 的 Debug 不含提示文本，已知自定义 API Key 在事件出口统一遮蔽。用户未主动保存时，最近输入、最近对话、临时场景和检查报告仅存在内存，不写用户记录。
+- Linux `scripts/package.sh` 改为写入空配置，并清理旧输出遗留的 roleplay.json、roleplay-memory.json；`scripts/test-package.sh` 用临时工程和假构建器验证重复打包不会携带私人配置，角色默认资源仍完整。此夹具可在 Git Bash 运行，不代替 Linux 桌面实测。
+
+参考酒馆的 [Prompt Manager](https://docs.sillytavern.app/usage/prompts/prompt-manager/)、[世界书](https://docs.sillytavern.app/usage/core-concepts/worldinfo/) 与[摘要可修正设计](https://docs.sillytavern.app/extensions/summarize/)。本实现保留 Codex 管理完整历史，不假设能够照搬任意历史插入位置。
+
+定向验证：`cargo test --locked roleplay::`、`cargo test --locked backend::codex::tests::`、`cargo test --locked ui::tests::`、`cargo test --locked ui::role_card::tests::`，以及 `bash scripts/test-package.sh`。场景包括预算及溢出原因、最近助理消息触发、持续/冷却、预览无副作用、失败/中断回滚、记忆确认与撤销、旧式迁移、规则与设置交互。均使用临时配置和模拟服务，不连接真实模型。
 
 ## 启动与依赖方向
 

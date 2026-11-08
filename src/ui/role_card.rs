@@ -4,6 +4,8 @@ use eframe::egui;
 
 #[derive(Default)]
 pub(super) struct RoleEditor {
+    pub profile: Option<crate::roleplay::UserProfile>,
+    pub pending_profile: Option<(String, crate::roleplay::UserProfile)>,
     pub character: String,
     pub draft: Option<RoleCard>,
     pub section: usize,
@@ -21,15 +23,17 @@ fn editor(ui: &mut egui::Ui, label: &str, text: &mut String) {
 }
 
 impl Pet {
-    pub(super) fn roleplay_file_stamp(&self) -> Option<(std::time::SystemTime, u64)> {
-        std::fs::metadata(self.root.join("config/roleplay.json"))
-            .ok()
-            .and_then(|metadata| metadata.modified().ok().map(|time| (time, metadata.len())))
+    pub(super) fn roleplay_file_stamp(&self) -> [Option<(std::time::SystemTime, u64)>; 2] {
+        ["roleplay.json", "roleplay-memory.json"].map(|name| {
+            std::fs::metadata(self.root.join("config").join(name))
+                .ok()
+                .and_then(|metadata| metadata.modified().ok().map(|time| (time, metadata.len())))
+        })
     }
 
     pub(super) fn reload_roleplay(&mut self) {
         self.roleplay_stamp = self.roleplay_file_stamp();
-        match RoleCard::load(&self.root, &self.library.character) {
+        match roleplay::session_card(&self.root, &self.library.character) {
             Ok(card) => {
                 self.codex_restart_pending |=
                     self.codex_character.is_some() && card != self.codex_role_card;
@@ -56,6 +60,8 @@ impl Pet {
                 }
             });
         if previous != self.role_editor.character {
+            self.role_editor.profile = None;
+            self.role_editor.pending_profile = None;
             self.role_editor.draft = None;
             self.role_editor.error.clear();
             self.role_editor.notice.clear();
@@ -90,11 +96,12 @@ impl Pet {
         ui.horizontal_wrapped(|ui| {
             save = ui
                 .add_enabled(
-                    self.role_editor.draft.is_some(),
+                    self.role_editor.draft.is_some() && self.role_editor.section != 3,
                     egui::Button::new("保存并应用"),
                 )
                 .clicked();
             if ui.button("取消修改").clicked() {
+                self.role_editor.profile = None;
                 self.role_editor.draft = None;
                 self.role_editor.error.clear();
                 self.role_editor.notice.clear();
@@ -112,13 +119,35 @@ impl Pet {
             ui.label(&self.role_editor.notice);
         }
         ui.horizontal_wrapped(|ui| {
-            for (index, title) in ["角色卡", "对话示例", "世界书", "用户与记忆", "附加规则"]
-                .iter()
-                .enumerate()
+            for (index, title) in [
+                "角色卡",
+                "对话示例",
+                "世界书",
+                "用户与记忆",
+                "附加规则",
+                "上下文",
+            ]
+            .iter()
+            .enumerate()
             {
                 ui.selectable_value(&mut self.role_editor.section, index, *title);
             }
         });
+        if self.role_editor.section == 5 || self.role_editor.section == 3 {
+            if self.role_editor.section == 5 {
+                self.role_context_ui(ui);
+            } else {
+                self.role_memory_ui(ui);
+            }
+            return save
+                .then(|| {
+                    (
+                        self.role_editor.character.clone(),
+                        self.role_editor.draft.clone(),
+                    )
+                })
+                .and_then(|(name, card)| card.map(|card| (name, card)));
+        }
         let card = self.role_editor.draft.as_mut()?;
         match self.role_editor.section {
             0 => {
@@ -134,7 +163,15 @@ impl Pet {
                 editor(ui, "对话示例与代表台词", &mut card.dialogue_examples);
             }
             2 => {
-                ui.small("关键词用逗号或换行分隔，匹配本轮消息；始终启用的条目每轮携带。");
+                ui.small("扫描最近对话；始终启用、关键词命中和持续效果均受本轮预算限制。");
+                ui.horizontal(|ui| {
+                    ui.label("默认扫描条数");
+                    ui.add(egui::DragValue::new(&mut card.context.scan_messages).range(0..=32));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("本轮字符预算");
+                    ui.add(egui::DragValue::new(&mut card.context.turn_budget).range(0..=16384));
+                });
                 if ui
                     .add_enabled(
                         card.world_book.len() < 64,
@@ -147,6 +184,7 @@ impl Pet {
                         ..Default::default()
                     });
                 }
+                let default_depth = card.context.scan_messages;
                 let mut remove = None;
                 for (index, entry) in card.world_book.iter_mut().enumerate() {
                     ui.push_id(("world", index), |ui| {
@@ -162,6 +200,21 @@ impl Pet {
                         ui.text_edit_singleline(&mut entry.name);
                         ui.label("触发关键词");
                         ui.text_edit_singleline(&mut entry.keywords);
+                        let mut custom_depth = entry.scan_depth.is_some();
+                        if ui.checkbox(&mut custom_depth, "单独设置扫描条数").changed() {
+                            entry.scan_depth = custom_depth.then_some(default_depth);
+                        }
+                        if let Some(depth) = &mut entry.scan_depth {
+                            ui.add(egui::DragValue::new(depth).range(0..=32));
+                        }
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("优先级");
+                            ui.add(egui::DragValue::new(&mut entry.priority).range(-100..=100));
+                            ui.label("持续轮数");
+                            ui.add(egui::DragValue::new(&mut entry.sticky_turns).range(0..=32));
+                            ui.label("冷却轮数");
+                            ui.add(egui::DragValue::new(&mut entry.cooldown_turns).range(0..=32));
+                        });
                         editor(ui, "背景内容", &mut entry.content);
                     });
                 }
@@ -169,12 +222,13 @@ impl Pet {
                     card.world_book.remove(index);
                 }
             }
-            3 => {
-                editor(ui, "用户人设（称呼、身份、偏好）", &mut card.user_persona);
-                ui.small("记忆由你手动维护，不会自动总结或记录聊天。");
-                editor(ui, "已确认的记忆与约定", &mut card.memory);
-            }
             _ => {
+                ui.horizontal(|ui| {
+                    ui.label("静态字符预算");
+                    ui.add(
+                        egui::DragValue::new(&mut card.context.static_budget).range(256..=65536),
+                    );
+                });
                 ui.small("启用的规则按列表顺序加载；规则不能增加软件权限。");
                 if ui
                     .add_enabled(card.rules.len() < 64, egui::Button::new("新增规则"))
@@ -258,6 +312,7 @@ mod tests {
         if let Some((character, card)) = action {
             app.save_role_card(&character, &card);
         }
+        app.apply_profile_action();
         output
     }
 
@@ -354,6 +409,115 @@ mod tests {
         app.settings = false;
         app.settings_ui(&ctx);
         assert!(app.role_editor.draft.is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn role_memory_ui_candidates_require_explicit_confirmation_and_can_be_revoked() {
+        let root =
+            std::env::temp_dir().join(format!("lexington-memory-ui-{}", rand::random::<u64>()));
+        let card = RoleCard {
+            name: "a".into(),
+            ..Default::default()
+        };
+        roleplay::save_role_card(&root, "a", &card).unwrap();
+        let ctx = egui::Context::default();
+        let mut app = Pet::from_root(&ctx, true, root.clone());
+        app.library.character = "a".into();
+        app.codex_character = Some("a".into());
+        app.codex_role_card = Some(card);
+        app.role_editor.section = 3;
+        app.context_ui.last_input = "我喜欢温热的茶".into();
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "从最近输入创建候选");
+        click(&mut app, &ctx, "保存用户与记忆");
+        assert!(!app.codex_restart_pending);
+        let profile = crate::roleplay::UserProfile::load(&root, "a", None).unwrap();
+        assert_eq!(profile.memories.len(), 1);
+        assert!(!profile.memories[0].confirmed);
+        click(&mut app, &ctx, "确认记忆");
+        click(&mut app, &ctx, "保存用户与记忆");
+        assert!(app.codex_restart_pending);
+        assert!(
+            crate::roleplay::session_card(&root, "a")
+                .unwrap()
+                .unwrap()
+                .instructions()
+                .contains("温热的茶")
+        );
+        click(&mut app, &ctx, "撤销确认");
+        click(&mut app, &ctx, "保存用户与记忆");
+        assert!(
+            !crate::roleplay::session_card(&root, "a")
+                .unwrap()
+                .unwrap()
+                .instructions()
+                .contains("温热的茶")
+        );
+        click(&mut app, &ctx, "删除记忆");
+        click(&mut app, &ctx, "保存用户与记忆");
+        assert!(
+            crate::roleplay::UserProfile::load(&root, "a", None)
+                .unwrap()
+                .memories
+                .is_empty()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn context_inspector_previews_without_model_turns_and_sends_applied_scene() {
+        let root =
+            std::env::temp_dir().join(format!("lexington-context-ui-{}", rand::random::<u64>()));
+        let mut card = RoleCard::default();
+        card.world_book.push(WorldEntry {
+            name: "tea".into(),
+            keywords: "tea".into(),
+            content: "tea background".into(),
+            ..Default::default()
+        });
+        roleplay::save_role_card(&root, "a", &card).unwrap();
+        let ctx = egui::Context::default();
+        let mut app = Pet::from_root(&ctx, true, root.clone());
+        app.library.character = "a".into();
+        app.codex = Some(crate::backend::codex::Client::mock_session(
+            "context",
+            None,
+            Some(crate::roleplay::RoleplaySession::new(card)),
+        ));
+        app.role_editor.section = 5;
+        frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, "临时场景（新会话清空）");
+        app.context_ui.scene.style = "warm conversation".into();
+        click(&mut app, &ctx, "应用临时场景");
+        app.context_ui.preview_input = "world-tea".into();
+        click(&mut app, &ctx, "预览上下文（不调用模型）");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.context_ui.preview.is_none() && std::time::Instant::now() < deadline {
+            app.poll_codex();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let preview = app.context_ui.preview.as_ref().unwrap();
+        assert!(preview.preview && preview.turn == 1);
+        assert!(
+            preview.text(false).contains("tea background")
+                && preview.text(false).contains("warm conversation")
+        );
+        assert!(app.text.is_empty() && !app.busy);
+        click(&mut app, &ctx, "预览结果");
+        app.input = "world-tea".into();
+        app.submit(&ctx);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.busy && std::time::Instant::now() < deadline {
+            app.poll_codex();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!app.busy);
+        assert_eq!(app.context_ui.last.as_ref().unwrap().turn, 1);
+        assert!(app.text.contains("warm conversation"));
+        click(&mut app, &ctx, "清空临时场景");
+        assert!(app.context_ui.scene.style.is_empty());
+        drop(app);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

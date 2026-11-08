@@ -281,6 +281,7 @@ impl Pet {
         if let Some((character, card)) = actions.role_card {
             self.save_role_card(&character, &card);
         }
+        self.apply_profile_action();
         if actions.reload {
             self.refresh(ctx);
         }

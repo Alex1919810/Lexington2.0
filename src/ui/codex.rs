@@ -10,11 +10,12 @@ pub(super) struct PendingPrompt {
 }
 impl Pet {
     pub(super) fn start_codex(&mut self, ctx: &egui::Context) {
+        self.context_ui = Default::default();
         self.codex_restart_pending = false;
         // Drop the previous process before replacing it, so restarts cannot leave orphan servers.
         self.codex = None;
         self.codex_character = Some(self.library.character.clone());
-        self.codex_role_card = crate::roleplay::RoleCard::load(&self.root, &self.library.character)
+        self.codex_role_card = crate::roleplay::session_card(&self.root, &self.library.character)
             .ok()
             .flatten();
         self.roleplay_stamp = self.roleplay_file_stamp();
@@ -45,6 +46,13 @@ impl Pet {
         let mut changed = false;
         while let Some(event) = self.codex.as_ref().and_then(Client::poll) {
             match event {
+                Event::Context(plan) => {
+                    if plan.preview {
+                        self.context_ui.preview = Some(*plan);
+                    } else {
+                        self.context_ui.last = Some(*plan);
+                    }
+                }
                 Event::Ready => {
                     if !self.busy {
                         self.codex_status = "已连接".into();

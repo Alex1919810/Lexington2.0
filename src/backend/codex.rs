@@ -12,6 +12,7 @@ use std::{
 
 #[derive(Debug)]
 pub enum Event {
+    Context(Box<crate::roleplay::ContextPlan>),
     Ready,
     Text {
         id: String,
@@ -43,7 +44,9 @@ pub struct Question {
 }
 
 enum Input {
-    Submit(String, bool, Option<String>),
+    Submit(String, bool),
+    Preview(String),
+    Scene(crate::roleplay::SceneState),
     Interrupt,
     Reply(Value, Value),
     Incoming(Value),
@@ -53,7 +56,6 @@ enum Input {
 
 /// One app-server process and one conversation for the lifetime of the desktop app.
 pub struct Client {
-    world_book: Vec<crate::roleplay::WorldEntry>,
     input: mpsc::Sender<Input>,
     events: mpsc::Receiver<Event>,
     child: Arc<Mutex<Process>>,
@@ -126,15 +128,14 @@ impl Client {
         character: &str,
         wake: impl Fn() + Send + 'static,
     ) -> Result<Self, String> {
-        let card = crate::roleplay::RoleCard::load(root, character)?;
-        let instructions = if let Some(card) = &card {
-            Some(card.instructions())
+        let card = crate::roleplay::session_card(root, character)?;
+        let session = card.map(crate::roleplay::RoleplaySession::new);
+        let instructions = if let Some(session) = &session {
+            Some(session.initial_plan().text(true))
         } else {
             crate::roleplay::agent_instructions(root, character)?
         };
-        let mut client = Self::launch(Self::command(config, root)?, instructions, wake)?;
-        client.world_book = card.map_or_else(Vec::new, |card| card.world_book);
-        Ok(client)
+        Self::launch_session(Self::command(config, root)?, instructions, session, wake)
     }
     fn command(config: &CodexConfig, root: &Path) -> Result<Command, String> {
         config.validate_connection()?;
@@ -225,9 +226,18 @@ impl Client {
         }
         Ok(command)
     }
+    #[cfg(test)]
     fn launch(
+        command: Command,
+        instructions: Option<String>,
+        wake: impl Fn() + Send + 'static,
+    ) -> Result<Self, String> {
+        Self::launch_session(command, instructions, None, wake)
+    }
+    fn launch_session(
         mut command: Command,
         instructions: Option<String>,
+        session: Option<crate::roleplay::RoleplaySession>,
         wake: impl Fn() + Send + 'static,
     ) -> Result<Self, String> {
         let secret = command
@@ -307,6 +317,7 @@ impl Client {
                 // Provider errors can echo request details. Keep credentials out of UI/logs.
                 if let Some(secret) = &secret {
                     match &mut event {
+                        Event::Context(plan) => plan.redact(secret),
                         Event::Failed(text)
                         | Event::Stopped(text)
                         | Event::Notice(text)
@@ -325,6 +336,7 @@ impl Client {
                 &mut stdin,
                 &directory,
                 instructions.as_deref(),
+                session,
                 receiver,
                 &emit,
             );
@@ -337,7 +349,6 @@ impl Client {
             }
         });
         Ok(Self {
-            world_book: Vec::new(),
             input,
             events: output,
             child,
@@ -346,15 +357,27 @@ impl Client {
     }
     pub fn submit(&self, text: String, no_approval: bool) -> Result<(), String> {
         self.input
-            .send(Input::Submit(
-                text.clone(),
-                no_approval,
-                crate::roleplay::world_context(&self.world_book, &text),
-            ))
+            .send(Input::Submit(text, no_approval))
             .map_err(|_| "Codex 已停止，请在设置中重启会话。".into())
     }
     pub fn interrupt(&self) {
         let _ = self.input.send(Input::Interrupt);
+    }
+    pub fn preview_context(&self, text: String) -> Result<(), String> {
+        self.input
+            .send(Input::Preview(text))
+            .map_err(|_| "Codex 会话已停止。".into())
+    }
+    pub fn set_scene(&self, scene: crate::roleplay::SceneState) -> Result<(), String> {
+        if [&scene.activity, &scene.style, &scene.next_step]
+            .iter()
+            .any(|text| text.chars().count() > 1024)
+        {
+            return Err("每项临时场景最多 1024 字符。".into());
+        }
+        self.input
+            .send(Input::Scene(scene))
+            .map_err(|_| "Codex 会话已停止。".into())
     }
     pub fn reply(&self, id: Value, result: Value) {
         let _ = self.input.send(Input::Reply(id, result));
@@ -397,6 +420,7 @@ fn communicate(
     writer: &mut impl Write,
     directory: &Path,
     instructions: Option<&str>,
+    mut session: Option<crate::roleplay::RoleplaySession>,
     receiver: mpsc::Receiver<Input>,
     emit: &impl Fn(Event),
 ) -> Result<(), String> {
@@ -414,9 +438,11 @@ fn communicate(
     let mut turn_id: Option<String> = None;
     let mut active_request = None;
     let mut approval_items = HashMap::<String, Value>::new();
-    let mut queued = None;
+    let mut queued: Option<(String, bool)> = None;
     let mut active = false;
     let mut interrupt = false;
+    let mut before_turn = None;
+    let mut final_messages = std::collections::BTreeMap::<String, String>::new();
     loop {
         if pending
             .values()
@@ -425,16 +451,25 @@ fn communicate(
             return Err("Codex 连接超时，请检查登录状态并在设置中重启会话。".into());
         }
         if let Some(thread) = &thread_id {
-            if !active && let Some((text, no_approval, world_context)) = queued.take() {
+            if !active && let Some((text, no_approval)) = queued.take() {
                 if interrupt {
                     interrupt = false;
                     emit(Event::Finished { interrupted: true });
                 } else {
                     active_request = Some(next);
                     approval_items.clear();
+                    final_messages.clear();
+                    before_turn = session.clone();
+                    let plan = session.as_mut().map(|session| session.begin(&text));
+                    let world_context = plan
+                        .as_ref()
+                        .map(|plan| plan.text(false))
+                        .filter(|text| !text.is_empty());
                     let mut input = vec![json!({"type":"text","text":text})];
                     if let Some(context) = world_context {
-                        input.push(json!({"type":"text","text":context}));
+                        input.push(
+                            json!({"type":"text","text":format!("[本轮角色背景参考]\n{context}")}),
+                        );
                     }
                     request(
                         writer,
@@ -444,6 +479,9 @@ fn communicate(
                         json!({"threadId":thread,"input":input,
                             "approvalPolicy": if no_approval { json!("never") } else { original_approval_policy.clone() }}),
                     )?;
+                    if let Some(plan) = plan {
+                        emit(Event::Context(Box::new(plan)));
+                    }
                     active = true;
                 }
             }
@@ -464,13 +502,26 @@ fn communicate(
             Err(_) => return Ok(()),
         };
         match input {
+            Input::Preview(text) => {
+                if let Some(session) = &session {
+                    emit(Event::Context(Box::new(session.preview(&text))));
+                }
+            }
+            Input::Scene(scene) => {
+                if let Some(session) = &mut session {
+                    session.scene = scene.clone();
+                }
+                if let Some(before) = &mut before_turn {
+                    before.scene = scene;
+                }
+            }
             Input::Shutdown => return Ok(()),
             Input::End(error) => return Err(error),
-            Input::Submit(text, no_approval, world_context) => {
+            Input::Submit(text, no_approval) => {
                 if active || queued.is_some() {
                     emit(Event::Notice("Lexington正在思考，请稍候。".into()));
                 } else {
-                    queued = Some((text, no_approval, world_context));
+                    queued = Some((text, no_approval));
                 }
             }
             Input::Interrupt => {
@@ -607,6 +658,7 @@ fn communicate(
                                 && let (Some(id), Some(text)) =
                                     (item["id"].as_str(), item["text"].as_str())
                             {
+                                final_messages.insert(id.into(), text.into());
                                 emit(Event::Text {
                                     id: id.into(),
                                     text: text.into(),
@@ -615,6 +667,9 @@ fn communicate(
                             }
                         }
                         "turn/completed" => {
+                            if !active {
+                                continue;
+                            }
                             if turn_id
                                 .as_deref()
                                 .is_some_and(|id| params["turn"]["id"].as_str() != Some(id))
@@ -626,12 +681,27 @@ fn communicate(
                                     && let (Some(id), Some(text)) =
                                         (item["id"].as_str(), item["text"].as_str())
                                 {
+                                    final_messages.insert(id.into(), text.into());
                                     emit(Event::Text {
                                         id: id.into(),
                                         text: text.into(),
                                         replace: true,
                                     });
                                 }
+                            }
+                            if params["turn"]["status"] == "failed"
+                                || params["turn"]["status"] == "interrupted"
+                            {
+                                session = before_turn.take();
+                            } else if let Some(session) = &mut session {
+                                session.finish(
+                                    &final_messages
+                                        .values()
+                                        .cloned()
+                                        .collect::<Vec<_>>()
+                                        .join("\n"),
+                                );
+                                before_turn = None;
                             }
                             if params["turn"]["status"] == "failed" {
                                 emit(Event::Failed(
@@ -674,6 +744,7 @@ fn communicate(
                             .to_owned();
                         match method {
                             "turn/start" => {
+                                session = before_turn.take();
                                 active = false;
                                 active_request = None;
                                 turn_id = None;
@@ -693,6 +764,9 @@ fn communicate(
                                 params["developerInstructions"] = instructions.into();
                             }
                             request(writer, &mut pending, &mut next, "thread/start", params)?;
+                            if let Some(session) = &session {
+                                emit(Event::Context(Box::new(session.initial_plan())));
+                            }
                         }
                         "thread/start" => {
                             // turn/start overrides persist, so retain the local baseline to restore it.
@@ -731,6 +805,18 @@ impl Client {
         Self::mock_with_instructions(mode, None)
     }
     pub(crate) fn mock_with_instructions(mode: &str, instructions: Option<String>) -> Self {
+        Self::mock_session(mode, instructions, None)
+    }
+    pub(crate) fn mock_session(
+        mode: &str,
+        instructions: Option<String>,
+        session: Option<crate::roleplay::RoleplaySession>,
+    ) -> Self {
+        let instructions = instructions.or_else(|| {
+            session
+                .as_ref()
+                .map(|session| session.initial_plan().text(true))
+        });
         let mut command = Command::new(
             std::env::var_os("LEXINGTON_TEST_PYTHON")
                 .unwrap_or_else(|| if cfg!(windows) { "python" } else { "python3" }.into()),
@@ -745,7 +831,7 @@ impl Client {
                 mode,
             ])
             .current_dir(std::env::temp_dir().canonicalize().unwrap());
-        Self::launch(command, instructions, || {}).unwrap()
+        Self::launch_session(command, instructions, session, || {}).unwrap()
     }
 }
 #[cfg(test)]
@@ -753,13 +839,71 @@ mod tests {
     use super::*;
 
     #[test]
+    fn context_preview_and_aborted_turns_do_not_mutate_future_world_state() {
+        let mut card = crate::roleplay::RoleCard::default();
+        card.context.scan_messages = 1;
+        card.world_book.push(crate::roleplay::WorldEntry {
+            keywords: "interrupt,fail".into(),
+            content: "activated background".into(),
+            sticky_turns: 3,
+            ..Default::default()
+        });
+        let client = Client::mock_session(
+            "context",
+            None,
+            Some(crate::roleplay::RoleplaySession::new(card)),
+        );
+        client.preview_context("interrupt".into()).unwrap();
+        let event = wait_for(
+            &client,
+            |event| matches!(event, Event::Context(plan) if plan.preview),
+        );
+        assert!(
+            matches!(event, Event::Context(plan) if plan.turn == 1 && plan.text(false).contains("activated background"))
+        );
+        client.submit("interrupt".into(), false).unwrap();
+        wait_for(&client, |event| matches!(event, Event::Text { .. }));
+        client.submit("interrupt".into(), false).unwrap(); // Rejected while active.
+        client.interrupt();
+        wait_for(&client, |event| {
+            matches!(event, Event::Finished { interrupted: true })
+        });
+        for fail in [false, true] {
+            if fail {
+                client.submit("fail".into(), false).unwrap();
+                wait_for(&client, |event| matches!(event, Event::Failed(_)));
+            }
+            client.preview_context("ordinary".into()).unwrap();
+            let event = wait_for(
+                &client,
+                |event| matches!(event, Event::Context(plan) if plan.preview),
+            );
+            assert!(
+                matches!(event, Event::Context(plan) if plan.turn == 1 && !plan.text(false).contains("activated background"))
+            );
+        }
+        client.submit("persona-status".into(), false).unwrap();
+        let event = wait_for(&client, |event| {
+            matches!(event, Event::Text { replace: true, .. })
+        });
+        assert!(matches!(event, Event::Text {text, ..} if text == "turn-has-no-persona:3"));
+        wait_for(&client, |event| matches!(event, Event::Finished { .. }));
+    }
+
+    #[test]
     fn role_card_world_book_is_separate_from_the_original_message_on_the_wire() {
-        let mut client = Client::mock("normal");
-        client.world_book = vec![crate::roleplay::WorldEntry {
+        let mut card = crate::roleplay::RoleCard::default();
+        card.context.scan_messages = 1;
+        card.world_book = vec![crate::roleplay::WorldEntry {
             keywords: "world-match".into(),
             content: "匹配的背景".into(),
             ..Default::default()
         }];
+        let client = Client::mock_session(
+            "context",
+            None,
+            Some(crate::roleplay::RoleplaySession::new(card)),
+        );
         for (message, count) in [("world-match", 2), ("world-miss", 1)] {
             client.submit(message.into(), false).unwrap();
             let event = wait_for(&client, |event| {

@@ -24,12 +24,44 @@ pub(super) fn load_card(root: &Path, character: &str) -> Result<Option<RoleCard>
     Ok(card)
 }
 
+pub(super) fn read_document(root: &Path, filename: &str) -> Result<serde_json::Value, String> {
+    let bytes = match fs::read(root.join("config").join(filename)) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(serde_json::json!({}));
+        }
+        Err(_) => return Err("无法读取角色配置。".into()),
+    };
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| "角色配置格式错误。")?;
+    if !value.is_object() {
+        return Err("角色配置必须为对象。".into());
+    }
+    Ok(value)
+}
+
 pub fn save_role_card(root: &Path, character: &str, card: &RoleCard) -> Result<(), String> {
+    card.validate()?;
+    save_section(
+        root,
+        "roleplay.json",
+        "roleCards",
+        character,
+        serde_json::to_value(card).map_err(|_| "角色卡无法保存。")?,
+    )
+}
+
+pub(super) fn save_section(
+    root: &Path,
+    filename: &str,
+    section: &str,
+    character: &str,
+    value: serde_json::Value,
+) -> Result<(), String> {
     if character.trim().is_empty() || character.len() > 200 {
         return Err("角色标识无效。".into());
     }
-    card.validate()?;
-    let path = root.join("config/roleplay.json");
+    let path = root.join("config").join(filename);
     let mut document: serde_json::Value = match fs::read(&path) {
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| "角色配置格式错误，未保存。")?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
@@ -38,14 +70,11 @@ pub fn save_role_card(root: &Path, character: &str, card: &RoleCard) -> Result<(
     document
         .as_object_mut()
         .ok_or("角色配置必须为对象。")?
-        .entry("roleCards")
+        .entry(section)
         .or_insert_with(|| serde_json::json!({}))
         .as_object_mut()
         .ok_or("角色卡分组必须为对象。")?
-        .insert(
-            character.into(),
-            serde_json::to_value(card).map_err(|_| "角色卡无法保存。")?,
-        );
+        .insert(character.into(), value);
     let mut bytes = serde_json::to_vec_pretty(&document).map_err(|_| "角色配置无法保存。")?;
     bytes.push(b'\n');
     fs::create_dir_all(root.join("config")).map_err(|_| "无法创建角色配置目录。")?;

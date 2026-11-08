@@ -24,6 +24,10 @@ impl Pet {
         }
     }
     fn send_message(&mut self, ctx: &egui::Context, text: String, external: bool) {
+        let mut remembered_input = text.clone();
+        if !self.config.codex.api_key.is_empty() {
+            remembered_input = remembered_input.replace(&self.config.codex.api_key, "[hidden]");
+        }
         let result = self
             .codex
             .as_ref()
@@ -31,6 +35,7 @@ impl Pet {
             .and_then(|codex| codex.submit(text, self.config.codex.no_approval));
         match result {
             Ok(()) => {
+                self.context_ui.last_input = remembered_input;
                 self.busy = true;
                 self.external_turn = external;
                 self.codex_status = "Lexington正在思考".into();
