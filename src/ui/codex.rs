@@ -75,6 +75,9 @@ impl Pet {
                     changed = true;
                 }
                 Event::Finished { interrupted } => {
+                    if !interrupted {
+                        self.queue_character_memory();
+                    }
                     self.busy = false;
                     self.codex_status = if interrupted {
                         "已停止"

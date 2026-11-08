@@ -87,10 +87,57 @@ impl VectorStore {
                 COMMIT;",
                 )
                 .map_err(storage_error)?;
-        } else if version != 1 {
+        } else if !matches!(version, 1 | 2) {
             return Err("向量数据库版本不受支持，未覆盖。".into());
         }
+        if version < 2 {
+            connection.execute_batch("BEGIN IMMEDIATE;
+                CREATE TABLE records(namespace TEXT NOT NULL,id TEXT NOT NULL,json TEXT NOT NULL,PRIMARY KEY(namespace,id));
+                PRAGMA user_version=2;
+                COMMIT;").map_err(storage_error)?;
+        }
         Ok(Self(connection))
+    }
+
+    pub fn load_json(
+        &self,
+        namespace: &str,
+        id: &str,
+    ) -> Result<Option<serde_json::Value>, String> {
+        use rusqlite::OptionalExtension;
+        let value: Option<String> = self
+            .0
+            .query_row(
+                "SELECT json FROM records WHERE namespace=?1 AND id=?2",
+                params![namespace, id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        value
+            .map(|text| {
+                serde_json::from_str(&text).map_err(|_| "本地记录格式错误，未覆盖。".into())
+            })
+            .transpose()
+    }
+
+    pub fn save_json(
+        &self,
+        namespace: &str,
+        id: &str,
+        value: &serde_json::Value,
+    ) -> Result<(), String> {
+        let json = serde_json::to_string(value).map_err(|_| "本地记录无法序列化。")?;
+        if namespace.is_empty()
+            || namespace.len() > 200
+            || id.is_empty()
+            || id.len() > 200
+            || json.len() > 8 * 1024 * 1024
+        {
+            return Err("本地记录标识或大小无效。".into());
+        }
+        self.0.execute("INSERT INTO records(namespace,id,json) VALUES (?1,?2,?3) ON CONFLICT(namespace,id) DO UPDATE SET json=excluded.json",params![namespace,id,json]).map_err(storage_error)?;
+        Ok(())
     }
 
     pub fn put(&self, namespace: &str, document: &Document) -> Result<(), String> {
@@ -220,6 +267,42 @@ fn encode_vector(vector: &[f32]) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn version_one_migration_preserves_vectors_and_json_namespaces() {
+        let root = std::env::temp_dir().join(format!(
+            "lexington-vector-migration-{}",
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("legacy.sqlite3");
+        let old = Connection::open(&path).unwrap();
+        old.execute_batch("CREATE TABLE documents(namespace TEXT NOT NULL,id TEXT NOT NULL,text TEXT NOT NULL,created_at INTEGER NOT NULL,space TEXT,dimensions INTEGER,embedding BLOB,PRIMARY KEY(namespace,id)); PRAGMA user_version=1; INSERT INTO documents VALUES ('a','old','old original',1,'old-model',2,X'0000803F00000000');").unwrap();
+        drop(old);
+        let store = VectorStore::open(&path).unwrap();
+        assert_eq!(
+            store.search("a", "old-model", &[1., 0.], 1, 0.1).unwrap()[0]
+                .document
+                .text,
+            "old original"
+        );
+        store
+            .save_json("a", "events", &serde_json::json!({"fixture":7}))
+            .unwrap();
+        assert_eq!(
+            store.load_json("a", "events").unwrap().unwrap()["fixture"],
+            7
+        );
+        assert!(store.load_json("b", "events").unwrap().is_none());
+        assert_eq!(
+            store
+                .0
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn persistence_namespace_model_edit_delete_and_validation() {

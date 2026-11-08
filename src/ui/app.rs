@@ -90,6 +90,7 @@ pub struct Pet {
     pub(super) connection_error: String,
     pub(super) role_editor: super::role_card::RoleEditor,
     pub(super) context_ui: super::roleplay_context::ContextUi,
+    pub(super) character_memory_ui: super::character_memories::CharacterMemoryUi,
 }
 impl Pet {
     pub fn new(
@@ -98,6 +99,7 @@ impl Pet {
     ) -> Self {
         platform::configure(cc);
         let mut app = Self::from_context(&cc.egui_ctx, true);
+        app.character_memory_ui.running = true;
         if let Some(storage) = cc.storage {
             app.restore_state(storage);
         }
@@ -235,6 +237,7 @@ impl Pet {
             connection_error: String::new(),
             role_editor: Default::default(),
             context_ui: Default::default(),
+            character_memory_ui: Default::default(),
         };
         app.refresh(ctx);
         app
@@ -287,6 +290,10 @@ impl Pet {
         response.context_menu(|ui| {
             if ui.button("设置").clicked() {
                 self.settings = true;
+                ui.close_menu();
+            }
+            if ui.button("人物记忆").clicked() {
+                self.open_character_memories();
                 ui.close_menu();
             }
             ui.separator();
@@ -475,6 +482,7 @@ impl Pet {
             self.last_activity = Instant::now();
         }
         self.poll_codex();
+        self.poll_character_memories(ctx);
         if self.last_config_check.elapsed() >= Duration::from_millis(500) {
             self.last_config_check = Instant::now();
             let stamp = std::fs::metadata(self.root.join("config/config.json"))
@@ -531,6 +539,7 @@ impl Pet {
             self.input_regions.push(window.response.rect);
         }
         self.settings_ui(ctx);
+        self.character_memories_window(ctx);
         self.codex_prompt_ui(ctx);
         self.clock_notice_ui(ctx);
         self.alarm_popup_ui(ctx);

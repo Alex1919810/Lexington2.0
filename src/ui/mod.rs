@@ -1,6 +1,7 @@
 mod alarm;
 mod app;
 mod assets;
+mod character_memories;
 mod clock;
 mod codex;
 mod dialog;

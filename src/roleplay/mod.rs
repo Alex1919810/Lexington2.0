@@ -1,4 +1,5 @@
 mod card;
+pub mod character_memory;
 mod context;
 mod profile;
 mod registry;

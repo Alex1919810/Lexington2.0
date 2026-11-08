@@ -60,6 +60,14 @@ pub struct Client {
     events: mpsc::Receiver<Event>,
     child: Arc<Mutex<Process>>,
     worker: Option<JoinHandle<()>>,
+    temporary_directory: Option<tempfile::TempDir>,
+}
+
+struct ProtocolSetup {
+    instructions: Option<String>,
+    session: Option<crate::roleplay::RoleplaySession>,
+    secret: Option<String>,
+    schema: Option<Value>,
 }
 #[cfg(windows)]
 fn windows_executable() -> Option<std::path::PathBuf> {
@@ -122,6 +130,40 @@ impl Process {
     }
 }
 impl Client {
+    pub fn start_structured(
+        config: &CodexConfig,
+        root: &Path,
+        instructions: String,
+        schema: Value,
+        wake: impl Fn() + Send + 'static,
+    ) -> Result<Self, String> {
+        let temporary = tempfile::Builder::new()
+            .prefix("lexington-memory-")
+            .tempdir()
+            .map_err(|_| "无法创建后台提炼工作目录。")?;
+        let mut isolated = config.clone();
+        isolated.working_directory = Some(temporary.path().into());
+        let mut command = Self::command(&isolated, root)?;
+        for setting in [
+            "features.shell_tool=false",
+            "features.apps=false",
+            "features.plugins=false",
+            "features.multi_agent=false",
+            "features.browser_use=false",
+            "features.computer_use=false",
+            "features.image_generation=false",
+            "features.skill_search=false",
+            "features.tool_suggest=false",
+            "web_search=\"disabled\"",
+            "tools.update_plan.enabled=false",
+        ] {
+            command.args(["-c", setting]);
+        }
+        let mut client =
+            Self::launch_options(command, Some(instructions), None, wake, Some(schema))?;
+        client.temporary_directory = Some(temporary);
+        Ok(client)
+    }
     pub fn start(
         config: &CodexConfig,
         root: &Path,
@@ -238,10 +280,19 @@ impl Client {
         Self::launch_session(command, instructions, None, wake)
     }
     fn launch_session(
+        command: Command,
+        instructions: Option<String>,
+        session: Option<crate::roleplay::RoleplaySession>,
+        wake: impl Fn() + Send + 'static,
+    ) -> Result<Self, String> {
+        Self::launch_options(command, instructions, session, wake, None)
+    }
+    fn launch_options(
         mut command: Command,
         instructions: Option<String>,
         session: Option<crate::roleplay::RoleplaySession>,
         wake: impl Fn() + Send + 'static,
+        schema: Option<Value>,
     ) -> Result<Self, String> {
         let secret = command
             .get_envs()
@@ -338,11 +389,14 @@ impl Client {
             let result = communicate(
                 &mut stdin,
                 &directory,
-                instructions.as_deref(),
-                session,
+                ProtocolSetup {
+                    instructions,
+                    session,
+                    secret: secret.clone(),
+                    schema,
+                },
                 receiver,
                 &emit,
-                secret.as_deref(),
             );
             // Reap on every exit path, including failed initialization and broken pipes.
             drop(stdin);
@@ -357,6 +411,7 @@ impl Client {
             events: output,
             child,
             worker: Some(worker),
+            temporary_directory: None,
         })
     }
     pub fn submit(&self, text: String, no_approval: bool) -> Result<(), String> {
@@ -423,12 +478,18 @@ fn request(
 fn communicate(
     writer: &mut impl Write,
     directory: &Path,
-    instructions: Option<&str>,
-    mut session: Option<crate::roleplay::RoleplaySession>,
+    setup: ProtocolSetup,
     receiver: mpsc::Receiver<Input>,
     emit: &impl Fn(Event),
-    secret: Option<&str>,
 ) -> Result<(), String> {
+    let ProtocolSetup {
+        instructions,
+        mut session,
+        secret,
+        schema,
+    } = setup;
+    let secret = secret.as_deref();
+    let structured = schema.is_some();
     let sanitize = |text: &str| {
         secret.map_or_else(
             || text.to_owned(),
@@ -484,14 +545,14 @@ fn communicate(
                             json!({"type":"text","text":format!("[本轮角色背景参考]\n{context}")}),
                         );
                     }
-                    request(
-                        writer,
-                        &mut pending,
-                        &mut next,
-                        "turn/start",
-                        json!({"threadId":thread,"input":input,
-                            "approvalPolicy": if no_approval { json!("never") } else { original_approval_policy.clone() }}),
-                    )?;
+                    let mut turn_params = json!({"threadId":thread,"input":input,
+                        "approvalPolicy": if structured || no_approval {json!("never")} else {original_approval_policy.clone()}});
+                    if let Some(schema) = &schema {
+                        turn_params["outputSchema"] = schema.clone();
+                        turn_params["sandboxPolicy"] =
+                            json!({"type":"readOnly","networkAccess":false});
+                    }
+                    request(writer, &mut pending, &mut next, "turn/start", turn_params)?;
                     if let Some(plan) = plan {
                         emit(Event::Context(Box::new(plan)));
                     }
@@ -547,6 +608,13 @@ fn communicate(
                 if let Some(method) = message["method"].as_str() {
                     let params = &message["params"];
                     if let Some(id) = message.get("id") {
+                        if structured {
+                            write_message(
+                                writer,
+                                json!({"id":id,"error":{"code":-32601,"message":"Background structured extraction does not support tools or interactive requests"}}),
+                            )?;
+                            return Err("后台提炼请求了交互或工具，已停止。".into());
+                        }
                         let prompt = match method {
                             "item/commandExecution/requestApproval"
                             | "item/fileChange/requestApproval" => {
@@ -646,6 +714,14 @@ fn communicate(
                     match method {
                         "item/started" => {
                             let item = &params["item"];
+                            if structured
+                                && !matches!(
+                                    item["type"].as_str(),
+                                    Some("agentMessage" | "reasoning")
+                                )
+                            {
+                                return Err("后台提炼尝试使用工具，已停止。".into());
+                            }
                             if matches!(
                                 item["type"].as_str(),
                                 Some("fileChange" | "commandExecution")
@@ -772,14 +848,44 @@ fn communicate(
                     match method {
                         "initialize" => {
                             write_message(writer, json!({"method":"initialized"}))?;
+                            if structured {
+                                request(
+                                    writer,
+                                    &mut pending,
+                                    &mut next,
+                                    "config/read",
+                                    json!({"cwd":directory,"includeLayers":false}),
+                                )?;
+                                continue;
+                            }
                             let mut params = json!({"cwd":directory});
-                            if let Some(instructions) = instructions {
-                                params["developerInstructions"] = instructions.into();
+                            if let Some(instructions) = &instructions {
+                                params["developerInstructions"] = instructions.as_str().into();
                             }
                             request(writer, &mut pending, &mut next, "thread/start", params)?;
                             if let Some(session) = &session {
                                 emit(Event::Context(Box::new(session.initial_plan())));
                             }
+                        }
+                        "config/read" if structured => {
+                            let mut disabled = serde_json::Map::new();
+                            if let Some(servers) =
+                                message["result"]["config"]["mcp_servers"].as_object()
+                            {
+                                for name in servers.keys() {
+                                    disabled.insert(
+                                        name.clone(),
+                                        json!({"enabled":false,"required":false}),
+                                    );
+                                }
+                            }
+                            request(
+                                writer,
+                                &mut pending,
+                                &mut next,
+                                "thread/start",
+                                json!({"cwd":directory,"developerInstructions":instructions,"ephemeral":true,"sandbox":"read-only","approvalPolicy":"never","config":{"mcp_servers":disabled}}),
+                            )?;
                         }
                         "thread/start" => {
                             // turn/start overrides persist, so retain the local baseline to restore it.
@@ -825,6 +931,22 @@ impl Client {
         instructions: Option<String>,
         session: Option<crate::roleplay::RoleplaySession>,
     ) -> Self {
+        Self::mock_options(mode, instructions, session, None)
+    }
+    pub(crate) fn mock_structured(mode: &str) -> Self {
+        Self::mock_options(
+            mode,
+            Some(crate::roleplay::character_memory::INSTRUCTIONS.into()),
+            None,
+            Some(crate::roleplay::character_memory::output_schema()),
+        )
+    }
+    fn mock_options(
+        mode: &str,
+        instructions: Option<String>,
+        session: Option<crate::roleplay::RoleplaySession>,
+        schema: Option<Value>,
+    ) -> Self {
         let instructions = instructions.or_else(|| {
             session
                 .as_ref()
@@ -844,12 +966,41 @@ impl Client {
                 mode,
             ])
             .current_dir(std::env::temp_dir().canonicalize().unwrap());
-        Self::launch_session(command, instructions, session, || {}).unwrap()
+        Self::launch_options(command, instructions, session, || {}, schema).unwrap()
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn structured_background_threads_use_schema_disable_inherited_mcp_and_reject_interactions() {
+        let source = crate::roleplay::character_memory::Extraction::new(
+            "a".into(),
+            "我喜欢温热的茶",
+            "收到。",
+        );
+        let client = Client::mock_structured("memory-success");
+        client.submit(source.prompt(), false).unwrap();
+        let event = wait_for(&client, |event| {
+            matches!(event, Event::Text { replace: true, .. })
+        });
+        assert!(
+            matches!(event,Event::Text {text,..} if serde_json::from_str::<Value>(&text).unwrap()["events"][0]["title"]=="温茶偏好")
+        );
+        wait_for(&client, |event| {
+            matches!(event, Event::Finished { interrupted: false })
+        });
+        let blocked = Client::mock_structured("memory-interactive");
+        blocked.submit(source.prompt(), false).unwrap();
+        let event = loop {
+            let event = blocked.events.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(!matches!(event, Event::Prompt(_)));
+            if matches!(event, Event::Stopped(_)) {
+                break event;
+            }
+        };
+        assert!(matches!(event,Event::Stopped(text) if text.contains("已停止")));
+    }
 
     #[test]
     fn context_preview_and_aborted_turns_do_not_mutate_future_world_state() {

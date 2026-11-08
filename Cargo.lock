@@ -1536,6 +1536,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlite-vec",
+ "tempfile",
  "toml",
  "ureq 2.12.1",
  "url",

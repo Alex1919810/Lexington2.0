@@ -701,37 +701,65 @@ fn context_menu_close_receives_input_outside_artwork_and_exits() {
 }
 #[test]
 fn right_click_in_drag_circle_opens_context_menu() {
-    let ctx = egui::Context::default();
-    let mut app = Pet::from_context(&ctx, true);
-    frame(&mut app, &ctx, vec![]);
-    frame(&mut app, &ctx, vec![]);
-    let point = pos2(340., 280.);
-    frame(&mut app, &ctx, vec![egui::Event::PointerMoved(point)]);
-    for pressed in [true, false] {
-        frame(
-            &mut app,
-            &ctx,
-            vec![egui::Event::PointerButton {
-                pos: point,
-                button: egui::PointerButton::Secondary,
-                pressed,
-                modifiers: Default::default(),
-            }],
-        );
-    }
-    assert!(
-        ctx.read_response(egui::Id::new("pet-drag"))
-            .is_some_and(|r| r.context_menu_opened())
-    );
-    assert!(app.text.is_empty());
-    for _ in 0..3 {
+    for label in ["设置", "人物记忆"] {
+        let ctx = egui::Context::default();
+        let mut app = Pet::from_context(&ctx, true);
         frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        let point = pos2(340., 280.);
+        frame(&mut app, &ctx, vec![egui::Event::PointerMoved(point)]);
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                &ctx,
+                vec![egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Secondary,
+                    pressed,
+                    modifiers: Default::default(),
+                }],
+            );
+        }
+        assert!(
+            ctx.read_response(egui::Id::new("pet-drag"))
+                .is_some_and(|r| r.context_menu_opened())
+        );
+        assert!(app.text.is_empty());
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0., 0.), vec2(800., 600.))),
+                ..Default::default()
+            },
+            |ctx| app.ui(ctx),
+        );
+        let target = output
+            .shapes
+            .iter()
+            .find_map(|shape| {
+                if let egui::Shape::Text(text) = &shape.shape
+                    && text.galley.job.text == label
+                {
+                    Some(text.pos + text.galley.size() / 2.)
+                } else {
+                    None
+                }
+            })
+            .expect("top-level menu entry");
+        click(&mut app, &ctx, target);
+        assert_eq!(app.settings, label == "设置");
+        assert_eq!(app.character_memory_ui.open, label == "人物记忆");
+        if app.character_memory_ui.open {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                app.settings_ui(ctx);
+                app.character_memories_window(ctx);
+            });
+            assert!(app.character_memory_ui.open);
+            assert!(!app.settings && app.codex.is_none());
+        }
     }
-    click(&mut app, &ctx, point + vec2(20., 14.));
-    assert!(
-        app.settings,
-        "context menu must retain native input coverage and open settings"
-    );
 }
 #[test]
 fn input_hides_after_blur_and_restores_draft_and_error_on_hover_in_both_window_sizes() {

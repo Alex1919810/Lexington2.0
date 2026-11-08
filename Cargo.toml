@@ -21,6 +21,7 @@ sqlite-vec = "=0.1.6"
 fastembed = { version = "=7.6.1", default-features = false, features = ["onnx"] }
 ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "api-24"] }
 hmac-sha256 = "=1.1.15"
+tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
 fastembed = { version = "=7.6.1", default-features = false, features = ["ort-load-dynamic"] }

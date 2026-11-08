@@ -58,11 +58,19 @@ for line in sys.stdin:
             send({"id": message["id"], "result": {"userAgent": "mock"}})
     elif method == "initialized":
         pass
+    elif method == "config/read" and mode.startswith("memory-"):
+        send({"id":message["id"],"result":{"config":{"mcp_servers":{"fixture.with.dot":{"command":"fixture-only","required":True}}}}})
     elif method == "thread/start":
         assert os.path.isabs(params["cwd"])
         assert os.path.samefile(params["cwd"], os.getcwd())
         assert 'baseInstructions' not in params
-        if mode == "persona":
+        if mode.startswith("memory-"):
+            assert params['ephemeral'] is True
+            assert params['sandbox']=='read-only'
+            assert params['approvalPolicy']=='never'
+            assert params['config']['mcp_servers']['fixture.with.dot']=={'enabled':False,'required':False}
+            assert params.get('developerInstructions')
+        elif mode == "persona":
             assert params.get("developerInstructions") == "角色甲\n只属于甲"
         elif mode == "context":
             assert params.get("developerInstructions")
@@ -77,9 +85,13 @@ for line in sys.stdin:
         count += 1
         turn = f"turn-{count}"
         text = params["input"][0]["text"]
-        expected = "never" if text.startswith("no-approval") else ({"granular": {"sandbox_approval": True, "rules": False, "skill_approval": True, "request_permissions": True, "mcp_elicitations": True}} if mode == "granular" else "on-request")
+        expected = "never" if text.startswith("no-approval") or mode.startswith('memory-') else ({"granular": {"sandbox_approval": True, "rules": False, "skill_approval": True, "request_permissions": True, "mcp_elicitations": True}} if mode == "granular" else "on-request")
         assert params["approvalPolicy"] == expected, (params["approvalPolicy"], expected)
-        assert "sandboxPolicy" not in params, "approval toggle must preserve sandbox permissions"
+        if mode.startswith('memory-'):
+            assert params['sandboxPolicy']=={'type':'readOnly','networkAccess':False}
+            assert params['outputSchema']['properties']['events']['type']=='array'
+        else:
+            assert "sandboxPolicy" not in params, "approval toggle must preserve sandbox permissions"
         if mode == "crash":
             sys.exit(3)
         if mode == "error" or text == "fail":
@@ -87,7 +99,18 @@ for line in sys.stdin:
             continue
         if text not in ("fast", "late-ack"):
             send({"id": message["id"], "result": {"turn": {"id": turn}}})
-        if text.startswith("world-"):
+        if mode.startswith('memory-'):
+            if mode=='memory-interactive':
+                send({'id':'blocked','method':'item/tool/requestUserInput','params':{}})
+            elif mode=='memory-malformed':
+                complete('not-json')
+            elif mode=='memory-fail':
+                complete('not-saved','failed')
+            else:
+                data=json.loads(text)
+                result={'events':[{'title':'温茶偏好','description':'用户说喜欢温热的茶。','category':'偏好','happenedAt':'未说明','participants':['用户',data['character']],'importance':2,'perspective':'用户陈述','evidence':data['user']}]}
+                complete(json.dumps(result,ensure_ascii=False))
+        elif text.startswith("world-"):
             complete(json.dumps(params["input"], ensure_ascii=False))
         elif text == "persona-status":
             complete(params.get("developerInstructions", "turn-has-no-persona") + ":" + str(count))
