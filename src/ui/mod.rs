@@ -6,6 +6,7 @@ mod codex;
 mod dialog;
 mod input;
 mod pet;
+mod role_card;
 mod settings;
 mod sidebar;
 mod style;

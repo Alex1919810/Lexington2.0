@@ -29,6 +29,8 @@ pub struct Pet {
     pub(super) config_error: String,
     pub(super) codex_restart_pending: bool,
     pub(super) codex_character: Option<String>,
+    pub(super) codex_role_card: Option<crate::roleplay::RoleCard>,
+    pub(super) roleplay_stamp: Option<(SystemTime, u64)>,
     pub(super) library: CharacterState,
     pub(super) picture: Option<Picture>,
     pub(super) icons: Vec<egui::TextureHandle>,
@@ -86,6 +88,7 @@ pub struct Pet {
     pub(super) local_codex_home: Option<PathBuf>,
     pub(super) local_codex_config: crate::backend::codex_config::LocalCodexConfig,
     pub(super) connection_error: String,
+    pub(super) role_editor: super::role_card::RoleEditor,
 }
 impl Pet {
     pub fn new(
@@ -160,6 +163,8 @@ impl Pet {
             config_error: String::new(),
             codex_restart_pending: false,
             codex_character: None,
+            codex_role_card: None,
+            roleplay_stamp: None,
             library: CharacterState::default(),
             picture: None,
             icons: super::assets::icons(ctx),
@@ -227,6 +232,7 @@ impl Pet {
             local_codex_home: None,
             local_codex_config: Default::default(),
             connection_error: String::new(),
+            role_editor: Default::default(),
         };
         app.refresh(ctx);
         app
@@ -474,6 +480,9 @@ impl Pet {
                 .and_then(|m| m.modified().ok().map(|time| (time, m.len())));
             if stamp != self.config_stamp {
                 self.reload_config();
+            }
+            if self.roleplay_file_stamp() != self.roleplay_stamp {
+                self.reload_roleplay();
             }
         }
         if self.codex_restart_pending && !self.busy {

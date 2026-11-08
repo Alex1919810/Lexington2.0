@@ -15,11 +15,13 @@ struct SettingsActions {
     clock_action: Option<ClockAction>,
     connection: Option<CodexConfig>,
     weather: Option<super::weather::WeatherAction>,
+    role_card: Option<(String, crate::roleplay::RoleCard)>,
 }
 
 impl Pet {
     pub(super) fn settings_ui(&mut self, ctx: &egui::Context) {
         if !self.settings {
+            self.role_editor = Default::default();
             self.connection_draft = None;
             self.connection_error.clear();
             self.settings_viewport_open = false;
@@ -231,6 +233,7 @@ impl Pet {
         });
         self.settings = open;
         if !open {
+            self.role_editor = Default::default();
             self.connection_draft = None;
             self.connection_error.clear();
             self.settings_viewport_open = false;
@@ -275,6 +278,9 @@ impl Pet {
         if let Some(action) = actions.weather {
             self.weather_action(action, ctx);
         }
+        if let Some((character, card)) = actions.role_card {
+            self.save_role_card(&character, &card);
+        }
         if actions.reload {
             self.refresh(ctx);
         }
@@ -293,6 +299,7 @@ impl Pet {
         let mut clock_action = None;
         let mut connection = None;
         let mut weather = None;
+        let mut role_card = None;
         for (text_style, size) in [
             (egui::TextStyle::Body, 14.),
             (egui::TextStyle::Button, 14.),
@@ -309,7 +316,7 @@ impl Pet {
                 vec2(76., 326.),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
-                    for (page, title) in [(0, "常规"), (1, "连接"), (2, "打卡"), (3, "闹钟"), (4, "天气")] {
+                    for (page, title) in [(0, "常规"), (1, "连接"), (2, "打卡"), (3, "闹钟"), (4, "天气"), (5, "角色卡")] {
                         if ui
                             .add_sized(
                                 [76., 34.],
@@ -336,12 +343,14 @@ impl Pet {
                             ui.set_width(ui.available_width());
                             ui.add_space(2.);
                             ui.label(
-                                egui::RichText::new(match self.settings_page { 1 => "连接", 2 => "打卡", 3 => "闹钟", 4 => "天气", _ => "常规" })
+                                egui::RichText::new(match self.settings_page { 1 => "连接", 2 => "打卡", 3 => "闹钟", 4 => "天气", 5 => "角色卡", _ => "常规" })
                                 .size(20.)
                                 .strong(),
                             );
                             ui.add_space(6.);
-                            if self.settings_page == 4 {
+                            if self.settings_page == 5 {
+                                role_card = self.role_card_ui(ui);
+                            } else if self.settings_page == 4 {
                                 weather = self.weather_settings_ui(ui);
                             } else if self.settings_page == 3 {
                                 self.alarm_settings_ui(ui);
@@ -540,6 +549,7 @@ impl Pet {
             clock_action,
             connection,
             weather,
+            role_card,
         }
     }
 }

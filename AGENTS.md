@@ -1,7 +1,7 @@
 # 项目约定
 
 - 本项目采用纯 Rust 原生 GUI：eframe/egui + glow；禁止引入 Vue、Electron、Node、WebView 或 N-API 作为运行链。`Cargo.lock` 随代码保留；集成客户端的 JS 仅在各自应用宿主内运行。
-- `src/ui/` 负责界面与交互，`src/backend/` 负责业务和 Codex 会话，`src/tools/` 负责路径、解码和平台适配，`src/main.rs` 仅负责启动。后端不依赖 UI/egui；解码器只产出像素，UI 持有 GPU 纹理；仅平台工具允许依赖 eframe。模块职责、接口及实现细节以 [docs/MODULES.md](docs/MODULES.md) 为准，修改相关模块前阅读对应条目及适用目录的 AGENTS.md。
+- `src/ui/` 负责界面与交互，`src/backend/` 负责业务和 Codex 会话，平级的 `src/roleplay/` 负责角色卡、角色提示、世界书和角色配置，`src/tools/` 负责路径、解码和平台适配，`src/main.rs` 仅负责启动。后端不依赖 UI/egui；角色扮演模块不依赖后端/UI，也不启动 Codex；解码器只产出像素，UI 持有 GPU 纹理；仅平台工具允许依赖 eframe。模块职责、接口及实现细节以 [docs/MODULES.md](docs/MODULES.md) 为准，修改相关模块前阅读对应条目及适用目录的 AGENTS.md。
 - **任何代码文件改动都必须同步检查并更新 `docs/MODULES.md` 对应职责、接口、依赖、行为或约束；仅调整内部实现也不能遗漏。** 文件增删、移动或重命名须同步目录树；README 结构概览变化时同步更新。代码任务结束前将新增且验证过的可复用知识写入最接近所属模块的 AGENTS.md，不要求写入根文件；只有跨模块通用规则写入根 AGENTS.md。更新前阅读目标文件并合并去重，无新增知识无需添加，不记录临时进度；实现细节和测试场景清单写入模块文档。
 - 未经用户明确授权，不执行 `git commit` 或 `git push`；提交与推送分别授权。每次推送前检查远端是否已有目标分支，一般推送授权不包含创建远端新分支。未经明确允许，不修改 makefile（含大小写变体）或 `include/` 下子模块头文件。
 - 保持 `resource/` 布局和 `config/config.json` 的 camelCase 兼容。资源根按 `LEXINGTON_HOME` → 可执行文件旁 → 当前目录寻找。安装保留已有配置、密钥和登录；日志、Debug、错误及测试结果不得泄露凭据。
@@ -11,6 +11,7 @@
 - 根规则适用于整个项目；进入目录修改前读取对应 AGENTS.md，跨目录任务同时遵守相关规则。子目录只维护局部约束，不覆盖根目录的授权、密钥保护、验证与交付要求。
 - [后端](src/backend/AGENTS.md)：配置、Codex 协议、角色、计时/闹钟、外部 Inbox。
 - [界面](src/ui/AGENTS.md)：输入/焦点、设置与提醒、纹理交互及 UI 回归。
+- [角色扮演](src/roleplay/AGENTS.md)：角色卡、世界书、提示与用户角色配置。
 - [工具](src/tools/AGENTS.md)：GIF、X11、活动采样和平台限制。
 - [脚本](scripts/AGENTS.md)：安装/打包、快捷方式、专项测试环境。
 

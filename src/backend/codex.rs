@@ -43,7 +43,7 @@ pub struct Question {
 }
 
 enum Input {
-    Submit(String, bool),
+    Submit(String, bool, Option<String>),
     Interrupt,
     Reply(Value, Value),
     Incoming(Value),
@@ -53,6 +53,7 @@ enum Input {
 
 /// One app-server process and one conversation for the lifetime of the desktop app.
 pub struct Client {
+    world_book: Vec<crate::roleplay::WorldEntry>,
     input: mpsc::Sender<Input>,
     events: mpsc::Receiver<Event>,
     child: Arc<Mutex<Process>>,
@@ -125,8 +126,15 @@ impl Client {
         character: &str,
         wake: impl Fn() + Send + 'static,
     ) -> Result<Self, String> {
-        let instructions = super::character::agent_instructions(root, character)?;
-        Self::launch(Self::command(config, root)?, instructions, wake)
+        let card = crate::roleplay::RoleCard::load(root, character)?;
+        let instructions = if let Some(card) = &card {
+            Some(card.instructions())
+        } else {
+            crate::roleplay::agent_instructions(root, character)?
+        };
+        let mut client = Self::launch(Self::command(config, root)?, instructions, wake)?;
+        client.world_book = card.map_or_else(Vec::new, |card| card.world_book);
+        Ok(client)
     }
     fn command(config: &CodexConfig, root: &Path) -> Result<Command, String> {
         config.validate_connection()?;
@@ -329,6 +337,7 @@ impl Client {
             }
         });
         Ok(Self {
+            world_book: Vec::new(),
             input,
             events: output,
             child,
@@ -337,7 +346,11 @@ impl Client {
     }
     pub fn submit(&self, text: String, no_approval: bool) -> Result<(), String> {
         self.input
-            .send(Input::Submit(text, no_approval))
+            .send(Input::Submit(
+                text.clone(),
+                no_approval,
+                crate::roleplay::world_context(&self.world_book, &text),
+            ))
             .map_err(|_| "Codex 已停止，请在设置中重启会话。".into())
     }
     pub fn interrupt(&self) {
@@ -412,19 +425,23 @@ fn communicate(
             return Err("Codex 连接超时，请检查登录状态并在设置中重启会话。".into());
         }
         if let Some(thread) = &thread_id {
-            if !active && let Some((text, no_approval)) = queued.take() {
+            if !active && let Some((text, no_approval, world_context)) = queued.take() {
                 if interrupt {
                     interrupt = false;
                     emit(Event::Finished { interrupted: true });
                 } else {
                     active_request = Some(next);
                     approval_items.clear();
+                    let mut input = vec![json!({"type":"text","text":text})];
+                    if let Some(context) = world_context {
+                        input.push(json!({"type":"text","text":context}));
+                    }
                     request(
                         writer,
                         &mut pending,
                         &mut next,
                         "turn/start",
-                        json!({"threadId":thread,"input":[{"type":"text","text":text}],
+                        json!({"threadId":thread,"input":input,
                             "approvalPolicy": if no_approval { json!("never") } else { original_approval_policy.clone() }}),
                     )?;
                     active = true;
@@ -449,11 +466,11 @@ fn communicate(
         match input {
             Input::Shutdown => return Ok(()),
             Input::End(error) => return Err(error),
-            Input::Submit(text, no_approval) => {
+            Input::Submit(text, no_approval, world_context) => {
                 if active || queued.is_some() {
                     emit(Event::Notice("Lexington正在思考，请稍候。".into()));
                 } else {
-                    queued = Some((text, no_approval));
+                    queued = Some((text, no_approval, world_context));
                 }
             }
             Input::Interrupt => {
@@ -736,6 +753,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn role_card_world_book_is_separate_from_the_original_message_on_the_wire() {
+        let mut client = Client::mock("normal");
+        client.world_book = vec![crate::roleplay::WorldEntry {
+            keywords: "world-match".into(),
+            content: "匹配的背景".into(),
+            ..Default::default()
+        }];
+        for (message, count) in [("world-match", 2), ("world-miss", 1)] {
+            client.submit(message.into(), false).unwrap();
+            let event = wait_for(&client, |event| {
+                matches!(event, Event::Text { replace: true, .. })
+            });
+            let Event::Text { text, .. } = event else {
+                unreachable!()
+            };
+            let input: Vec<Value> = serde_json::from_str(&text).unwrap();
+            assert_eq!(input.len(), count);
+            assert_eq!(input[0]["text"], message);
+            if count == 2 {
+                assert!(input[1]["text"].as_str().unwrap().contains("匹配的背景"));
+            }
+            wait_for(&client, |event| matches!(event, Event::Finished { .. }));
+        }
+    }
+
+    #[test]
     fn character_persona_is_sent_once_on_thread_start_and_turns_reuse_it() {
         let root = std::env::temp_dir().join(format!(
             "lexington-protocol-persona-{}",
@@ -750,8 +793,7 @@ mod tests {
         .unwrap();
         std::fs::write(directory.join("a.md"), "角色甲\n只属于甲").unwrap();
         for (character, mode) in [("a", "persona"), ("unconfigured", "normal")] {
-            let instructions =
-                crate::backend::character::agent_instructions(&root, character).unwrap();
+            let instructions = crate::roleplay::agent_instructions(&root, character).unwrap();
             let client = Client::mock_with_instructions(mode, instructions);
             for round in 1..=2 {
                 client.submit("persona-status".into(), false).unwrap();

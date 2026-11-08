@@ -1,6 +1,6 @@
 # 模块职责
 
-代码按 UI、后端功能和工具代码三类组织。`main.rs` 负责启动，UI 负责展示与交互，后端负责业务规则，工具提供路径、解码和平台适配能力。
+代码按 UI、后端功能、角色扮演和工具代码组织。`main.rs` 负责启动，UI 负责展示与交互，后端负责业务规则及基本 Codex 功能，平级的 roleplay 模块负责角色卡与角色提示，工具提供路径、解码和平台适配能力。
 
 ## 目录结构
 
@@ -15,6 +15,7 @@ src/
 │   ├── pet.rs
 │   ├── sidebar.rs
 │   ├── settings.rs
+│   ├── role_card.rs
 │   ├── dialog.rs
 │   ├── clock.rs
 │   ├── codex.rs
@@ -36,6 +37,12 @@ src/
 │   ├── handoff.rs
 │   ├── handoff_windows.rs
 │   └── clock.rs
+├── roleplay/
+│   ├── AGENTS.md
+│   ├── mod.rs
+│   ├── card.rs
+│   ├── registry.rs
+│   └── store.rs
 └── tools/
     ├── AGENTS.md
     ├── mod.rs
@@ -82,38 +89,47 @@ docs/
 └── agents/
     ├── AGENTS.md
     └── lexington/
-        ├── PERSONA.md
-        └── SOURCES.md
+        └── PERSONA.md
 resource/agents/
 ├── characters.json
 ├── lexington.md
-└── SOURCES.md
+└── lexington.json
 ```
 
 ## Agent 角色设定资料
 
-`docs/agents/` 保存产品内角色的设计与来源，局部维护规则见 [AGENTS.md](agents/AGENTS.md)。[Lexington 设定](agents/lexington/PERSONA.md) 定义人格、语气、默认“太太”关系及交互约定；[来源说明](agents/lexington/SOURCES.md) 记录舰R百科的页面版本、依据和改编许可。实际加载的提示为 [resource/agents/lexington.md](../resource/agents/lexington.md)，映射见 [characters.json](../resource/agents/characters.json)。运行时 Markdown 随 `resource/` 安装和打包，设计文档目录不参与分发。
+`docs/agents/` 保存产品内角色的设计，局部维护规则见 [AGENTS.md](agents/AGENTS.md)。[Lexington 设定](agents/lexington/PERSONA.md) 定义人格、语气、默认“太太”关系及交互约定。默认角色卡为 [resource/agents/lexington.json](../resource/agents/lexington.json)，兼容 [旧式 Markdown](../resource/agents/lexington.md)，映射见 [characters.json](../resource/agents/characters.json)。运行时角色资源随 `resource/` 安装和打包，设计文档目录不参与分发。
+
+角色背景及原台词摘句参考舰R百科与页面贡献者的[列克星敦 CV-2 固定版本 125209](https://www.shipgirlfriends.moe/index.php?title=%E5%88%97%E5%85%8B%E6%98%9F%E6%95%A6%28CV-2%29&oldid=125209)，角色来自《战舰少女R》。默认太太关系、桌面日常与新增对话示例为项目改编或二创；角色文字改编按 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/deed.zh-hans) 提供，不改变其他文件许可。这些维护信息不注入模型。
 
 ### 角色映射与会话生命周期
 
-角色设定文件只包含人格、台词与交互约定；来源、网址和许可集中保存在独立的 `docs/agents/lexington/SOURCES.md` 以及随安装包分发的 `resource/agents/SOURCES.md`。后者不在角色映射中，因此不会发送给模型。
+`src/roleplay/` 是与 backend 平级的领域模块，局部规则见 [角色扮演约定](../src/roleplay/AGENTS.md)。不依赖后端、UI 或 egui，不管理 Codex 进程。
 
-Lexington 的运行时 Markdown 除基本人格与助手行为外，包含四处注明游戏场合的原台词短摘句，以及默认太太关系下的项目二创日常、情感表达和原创交互示例。原台词用于参考语气，二创不作为官方设定或用户既有经历；来源与定位见 `docs/agents/lexington/SOURCES.md`。这些内容通过现有角色加载接口生效，不改变会话生命周期。
+| 文件 | 职责和接口 |
+|---|---|
+| `roleplay/mod.rs` | 导出 RoleCard、Rule、WorldEntry、agent_instructions、default_character、world_context、save_role_card |
+| `roleplay/registry.rs` | 按 resource/agents/characters.json 映射角色，校验目录边界和 .md 相对路径；有结构化卡时生成提示，否则读取旧 Markdown；文件上限 64 KiB，拒绝缺失、空白、错误编码与非法路径 |
+| `roleplay/card.rs` | 角色名称、描述、性格、场景、关系、对话示例、用户人设、手动记忆、世界书及附加规则；编译启用规则，世界书按本轮消息关键词匹配，支持始终启用与停用；卡片最多 64 KiB，世界书和规则各最多 64 条；Debug 隐藏内容 |
+| `roleplay/store.rs` | 从 config/roleplay.json 的 roleCards 分组读取按角色保存的覆盖值；保存保留未知字段和其他角色，同目录临时文件同步后原子替换，Unix 权限 0600，损坏文件拒绝覆盖；不读写基本 Codex 配置或凭据 |
+| `ui/role_card.rs` | RoleEditor 保存编辑对象、草稿、分区、错误和提示；角色卡页面编辑五类内容，支持世界书新增/删除和规则新增/启停/排序/删除；保存后才提交角色领域模块，取消/关闭/切换编辑对象丢弃草稿 |
 
-- `backend/character.rs` 的 `agent_instructions(root, character) -> Result<Option<String>, String>` 按立绘目录名读取 `resource/agents/characters.json` 的 `characters` 映射；路径相对 `resource/agents/`，仅允许目录内的 `.md` 文件，规范化后检查目录边界。配置与文本最多 64 KiB，使用 UTF-8；已映射文件缺失、空白、错误编码、超限或非法配置返回明确错误，不展示源文本。注册表缺失或角色未映射返回 None，创建普通会话，不回退至其他角色设定。
-- `defaultCharacter` 在当前角色无效或首次选择时优先匹配已有立绘；本项目配置为 `lexington`。不存在则回退字典序首个可用角色，刷新不改变仍有效的用户选择。新增角色只需立绘目录、Markdown 和映射，不增加角色专属 Rust 分支。
-- `backend/codex.rs` 的 `Client::start(config, root, character, wake)` 在启动子进程前读取设定，`launch/communicate` 将文本作为 `thread/start.developerInstructions` 发送一次。普通用户消息仍按原文发送，同角色多轮复用 thread；不覆盖 `baseInstructions`、本机 Codex 配置、审批和沙箱。手动重启重新读取 Markdown，运行中的文件编辑不自动生效。
-- `ui/app.rs` 保存 `codex_character`，`load_picture` 在活动或启动失败的会话角色变化时立即调用 `start_codex`，覆盖侧栏切换及资源删除后的回退。未启动 Codex 的测试构造不会因资源刷新启动真实服务。同角色换装、正常/战损及格式变化保持会话。
-- `ui/codex.rs::start_codex` 先释放旧 Client（停止旧任务并清理进程树），再清空回复缓存、气泡文本和审批，解除 busy/external_turn/待重启标记，保留未发送草稿，记录新角色并启动全新 thread。角色切换不等待旧任务完成，也不恢复旧角色历史；新角色加载失败时不保留旧 Client。`ui/sidebar.rs` 的角色按钮提示明确说明会结束任务并新建会话。
-- `tests/fixtures/codex-server.py` 的 persona 模式验证 thread/start 精确收到 Markdown、未覆盖基础指令；多轮和普通角色模式检查不重复注入、会话独立与权限保持。`ui/tests.rs` 检查同角色保持任务、角色切换清理、设定缺失错误、失败后继续切换和草稿保留。后端角色测试覆盖映射、默认选择、未知角色与非法文件。
-- `scripts/test-windows.ps1` 使用临时角色资源验证首次/升级安装、ZIP 收录与解压包安装均携带 Markdown 和注册表；现有安装/打包脚本直接递归处理 `resource/`，无需增加另一套分发路径。
+优先级：用户保存的角色卡 → 映射 Markdown 同名的 .json 默认卡 → 原 Markdown。未映射且没有用户卡的角色使用新的普通会话。默认角色卡为 resource/agents/lexington.json，默认太太关系、原台词摘句、二创日常和多轮对话示例分字段保存；来源与许可等维护信息不注入模型。JSON 和 Markdown 随现有资源分发；用户角色配置不作为内置资源覆盖。
 
-验证入口：`cargo test --locked character_`、`cargo test --locked backend::codex::tests::`、`cargo test --locked ui::tests::`；安装分发夹具为 `powershell -ExecutionPolicy Bypass -File scripts/test-windows.ps1`。均使用临时资源或模拟服务，不连接真实模型。
+backend/character.rs 继续负责立绘、格式和台词选择；首次选择通过 roleplay::default_character 优先匹配 lexington，否则回退首个可用角色，已有有效选择保持。角色领域数据无需增加 Rust 角色专属分支。
+
+backend/codex.rs 的 Client::start(config, root, character, wake) 取得角色提示及世界书快照：提示通过 thread/start.developerInstructions 发送一次；世界书匹配结果作为 turn/start.input 的独立文本块，原始用户消息仍为第一个文本块，审批和沙箱流程保持。关键词用逗号或换行分隔，大小写不敏感，只匹配本轮用户/外部输入；旧轮已进入历史的背景不会被自动抹除。记忆手动维护，不自动总结。
+
+ui/app.rs 保存 codex_character、codex_role_card 和角色配置文件时间戳；设置窗口新增第 5 号“角色卡”页面（ui/settings.rs），操作在 viewport 回调结束后执行。每 500ms 检查 config/roleplay.json；仅当前角色卡与会话快照不同时排队重建，任务结束后应用，文件错误保留现有会话并展示错误。当前角色没有启动过 Codex 时不因编辑而启动真实服务。
+
+切换显示角色（ui/sidebar.rs 或资源刷新回退）立即结束旧任务并创建新会话，清理回复、气泡、审批及重启标记，保留未发送草稿；同角色换装、战损与格式变化保持会话。ui/codex.rs 在启动时记录新的角色卡和文件快照。手动重启重新读取默认资源；默认资源编辑不自动热加载。
+
+定向验证：`cargo test --locked role_card` 覆盖结构化默认/覆盖、配置保留与损坏保护、世界书匹配、真实协议分块、设置规则操作及保存/取消/延后重启。相关回归使用 `cargo test --locked backend::codex::tests::`、`cargo test --locked backend::character::tests::` 和 `cargo test --locked ui::tests::`。测试仅用临时资源与模拟服务。
 
 ## 启动与依赖方向
 
 - `main.rs`：先处理 `--ask-files` / `--ask-json` / `--native-messaging` 无 GUI 入口，再取得 Linux/Windows 普通/开发模式独立实例锁并创建 eframe 原生窗口、选择 X11/Wayland/Win32 后端、加载窗口图标并构造 `ui::Pet`。普通尺寸 500×500，`--dev` 为 800×600。Linux X11/XWayland 使用 Dock 桌面浮层类型，不设置 strut、不占用工作区；避免 GNOME 将透明窗体整块限制在屏幕内，使立绘中心可到屏幕边缘。
-- `ui` 可调用 `backend` 和 `tools`；`backend` 不依赖 `ui`、egui 或 GPU 纹理；`tools` 不依赖应用 UI 或业务模块。
+- `ui` 可调用 `backend`、`roleplay` 和 `tools`；`backend` 可消费 `roleplay` 的提示和世界书结果，不依赖 `ui`、egui 或 GPU 纹理；`roleplay` 不依赖 `backend`、UI 或 egui；`tools` 不依赖应用 UI 或业务模块。
 - `tools/platform.rs` 是平台与窗口框架的适配边界，可依赖 eframe/egui/winit；路径和解码工具不依赖这些框架。
 - UI 内通过 `impl Pet` 分文件组织相关交互，必要的共享字段与方法限制在 UI 模块内。不要为了目录分层增加只有转发作用的抽象。
 
@@ -212,7 +228,7 @@ Windows 非阻塞字节管道使用 PeekNamedPipe 区分暂时无数据与断开
 
 根 [AGENTS.md](../AGENTS.md) 维护全项目约束；目录规则分别位于 [后端](../src/backend/AGENTS.md)、[界面](../src/ui/AGENTS.md)、[工具](../src/tools/AGENTS.md)、[脚本](../scripts/AGENTS.md)。跨目录任务读取相关规则，模块知识在对应目录维护。
 
-- 视觉、输入、焦点、纹理及窗口界面编排放入 UI；配置、资源选择、计时及 Codex 会话业务规则放入后端；不涉及业务的路径、解码及平台适配放入工具。
+- 视觉、输入、焦点、纹理及窗口界面编排放入 UI；角色卡、角色映射、世界书及提示组装放入 roleplay；配置、资源选择、计时及基本 Codex 会话业务规则放入后端；不涉及业务的路径、解码及平台适配放入工具。
 - 新增功能优先扩展所属模块，相关逻辑保持内聚；不要仅因代码只用一次就抽取新的辅助函数或文件。
 - 后续任何代码文件改动，须同步检查并更新本文件对应的职责、接口、依赖、行为或约束；新增、删除、移动、重命名文件同时更新目录树。只改内部实现时，也应维护受影响的行为或约束说明。工作规则由根及对应目录 `AGENTS.md` 分层维护；新增可复用知识写入最接近所属模块的 AGENTS.md，仅跨模块通用规则写入根文件，更新前阅读并合并去重，无新增知识不必添加。
 - 安装、打包及原生验证脚本仍放在 `scripts/`；原资源布局和配置格式不随 Rust 模块拆分改变。

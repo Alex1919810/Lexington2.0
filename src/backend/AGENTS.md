@@ -17,7 +17,7 @@
 
 ## 增量验证
 
-- 角色提示由 `resource/agents/characters.json` 映射，作为 thread/start.developerInstructions 注入一次；不能替换 baseInstructions 或拼进用户消息。未映射角色使用新的普通会话，已映射文件加载失败必须报错，不能沿用上一角色。新增角色数据无需 Rust 分支。
+- 角色映射、角色卡和提示组装由平级 roleplay 模块负责；后端保持 Codex 进程/协议/会话/审批职责。组装后的角色提示作为 thread/start.developerInstructions 注入一次；匹配世界书作为本轮独立文本块携带，原始用户输入保留为第一个文本块。不能替换 baseInstructions 或扩大审批/沙箱权限。新增角色数据无需 Codex 分支。
 
 - Windows Codex 仅运行原生 exe，显式 .cmd/.bat 在启动前拒绝；进程以挂起状态加入 kill-on-close Job 后再恢复，退出清理后代。协议夹具必须显式 UTF-8，目录身份比较用 samefile，不能依赖扩展路径前缀的字符串表示。
 - Windows Inbox 使用当前用户及 SYSTEM 的私有命名管道；非阻塞空读先用 PeekNamedPipe 区分暂时无数据和断开，ACK 后等待客户端关闭再 DisconnectNamedPipe。native-host 别名拉起同目录 lexington.exe，不得递归启动自身。

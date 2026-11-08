@@ -85,7 +85,9 @@ for line in sys.stdin:
             continue
         if text not in ("fast", "late-ack"):
             send({"id": message["id"], "result": {"turn": {"id": turn}}})
-        if text == "persona-status":
+        if text.startswith("world-"):
+            complete(json.dumps(params["input"], ensure_ascii=False))
+        elif text == "persona-status":
             complete(params.get("developerInstructions", "turn-has-no-persona") + ":" + str(count))
         elif text == "descendant":
             child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])

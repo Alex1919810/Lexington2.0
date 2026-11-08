@@ -14,6 +14,10 @@ impl Pet {
         // Drop the previous process before replacing it, so restarts cannot leave orphan servers.
         self.codex = None;
         self.codex_character = Some(self.library.character.clone());
+        self.codex_role_card = crate::roleplay::RoleCard::load(&self.root, &self.library.character)
+            .ok()
+            .flatten();
+        self.roleplay_stamp = self.roleplay_file_stamp();
         self.codex_messages.clear();
         self.text.clear();
         self.busy = false;
