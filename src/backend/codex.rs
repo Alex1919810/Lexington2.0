@@ -224,6 +224,8 @@ impl Client {
         } else {
             command.env_remove("LEXINGTON_MODEL_API_KEY");
         }
+        #[cfg(windows)]
+        crate::tools::proxy::inherit_system_proxy(&mut command);
         Ok(command)
     }
     #[cfg(test)]

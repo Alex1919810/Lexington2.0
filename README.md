@@ -54,6 +54,8 @@ bash scripts/install-linux.sh
 
 AI 对话需要原生 Codex CLI；Linux 安装器可在缺失时自动安装，Windows 可在宠物的“设置 → 连接”中指定已有 `codex.exe` 的完整路径。使用本机 Codex 服务前先完成登录，或在设置中配置自定义模型 API。未配置 AI 时，角色展示、台词和提醒仍可使用。
 
+Windows 会在没有代理环境变量时使用系统手动代理；代理变更后，在“设置 → 连接”重启会话。
+
 只想从源码直接启动时，准备好 Rust 和平台构建依赖后运行：
 
 ```bash

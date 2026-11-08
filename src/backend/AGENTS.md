@@ -21,6 +21,7 @@
 - 上下文规划在确认可以发送新任务时执行，实际发送后回传 Context 报告；预览只操作会话副本，不调用模型。失败/中断回滚角色会话快照，最终回复去重后进入最近历史；Context 内容同错误/回复一样遮蔽已知 API Key，不能写入日志。
 
 - Windows Codex 仅运行原生 exe，显式 .cmd/.bat 在启动前拒绝；进程以挂起状态加入 kill-on-close Job 后再恢复，退出清理后代。协议夹具必须显式 UTF-8，目录身份比较用 samefile，不能依赖扩展路径前缀的字符串表示。
+- Windows 的 Codex 子进程通过 tools::proxy 桥接系统手动代理；继承登录和自定义 API 都适用，已有代理环境变量优先。系统代理变更需重启会话，不修改本机 Codex 配置或登录。
 - Windows Inbox 使用当前用户及 SYSTEM 的私有命名管道；非阻塞空读先用 PeekNamedPipe 区分暂时无数据和断开，ACK 后等待客户端关闭再 DisconnectNamedPipe。native-host 别名拉起同目录 lexington.exe，不得递归启动自身。
 
 - 按受影响模块筛选，如 `cargo test --locked backend::codex::tests::`、`cargo test --locked backend::clock::tests::`；集中配置测试用 `cargo test --locked backend::tests::`，也可按具体用例名筛选。涉及 UI 消费协议/状态时补测对应 UI 用例。
