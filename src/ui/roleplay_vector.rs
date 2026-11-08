@@ -1,4 +1,5 @@
 use super::app::Pet;
+use crate::roleplay::EmbeddingSource;
 use eframe::egui;
 
 impl Pet {
@@ -8,14 +9,28 @@ impl Pet {
         };
         let settings = &mut card.vector_memory;
         ui.checkbox(&mut settings.enabled, "启用历史对话向量记忆");
-        ui.small("启用后保存成功完成的对话，并发送当前输入与历史片段到下方 Embedding 服务生成向量。固定记忆仍需手动确认。");
-        ui.label("Embedding 基础地址（兼容 /embeddings 接口）");
-        ui.text_edit_singleline(&mut settings.base_url);
-        ui.label("Embedding 模型名称");
-        ui.text_edit_singleline(&mut settings.model);
-        ui.label("API Key 环境变量名称（本地无鉴权可留空）");
-        ui.text_edit_singleline(&mut settings.api_key_env);
-        ui.small("此处只填写变量名；密钥不写入角色卡。修改环境变量后需重启软件。");
+        ui.small("启用后保存成功完成的对话，按话题召回旧片段；固定记忆仍需手动确认。关闭后停止记录与召回，保留已有数据。");
+        ui.horizontal_wrapped(|ui| {
+            ui.selectable_value(&mut settings.source, EmbeddingSource::Local, "内置本地模型");
+            ui.selectable_value(&mut settings.source, EmbeddingSource::Remote, "远程接口");
+        });
+        if settings.source == EmbeddingSource::Local {
+            ui.label("bge-small-zh-v1.5 · INT8 · CPU");
+            ui.small("模型随软件提供，离线生成向量，无需地址或 Key；Embedding 文本不会发送到远程服务。AI 对话仍使用连接设置。");
+            ui.horizontal(|ui| {
+                ui.label("CPU 线程数");
+                ui.add(egui::DragValue::new(&mut settings.cpu_threads).range(1..=4));
+            });
+        } else {
+            ui.small("远程服务会收到当前查询与待索引的历史片段。");
+            ui.label("Embedding 基础地址（兼容 /embeddings 接口）");
+            ui.text_edit_singleline(&mut settings.base_url);
+            ui.label("Embedding 模型名称");
+            ui.text_edit_singleline(&mut settings.model);
+            ui.label("API Key 环境变量名称（无鉴权可留空）");
+            ui.text_edit_singleline(&mut settings.api_key_env);
+            ui.small("此处只填写变量名；密钥不写入角色卡。修改环境变量后需重启软件。");
+        }
         ui.horizontal(|ui| {
             ui.label("最多召回片段数");
             ui.add(egui::DragValue::new(&mut settings.recall_limit).range(1..=8));
@@ -28,7 +43,7 @@ impl Pet {
                     .speed(0.01),
             );
         });
-        ui.small("按角色隔离，每个角色最多保留 2000 个片段；每次最多为 8 个历史片段补索引。更换模型或地址后逐批重建，失败时继续普通对话。实际注入仍受本轮上下文预算限制。");
+        ui.small("按角色隔离，每个角色最多保留 2000 个片段；每轮最多补索引 8 个片段，切换模型后逐批重建。失败时继续普通对话；召回内容受上下文预算限制。");
         ui.small(
             "数据库保存在 config/roleplay-vectors.sqlite3。停用会停止保存与检索，并保留已有数据。",
         );

@@ -3,6 +3,9 @@ set -euo pipefail
 project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_root"
 cargo build --release --locked
+for name in model.onnx config.json tokenizer.json tokenizer_config.json special_tokens_map.json manifest.json LICENSE.txt; do
+    [[ -f "resource/models/bge-small-zh-v1.5/$name" ]] || { printf 'Missing bundled embedding asset: %s\n' "$name" >&2; exit 1; }
+done
 bundle="$project_root/dist/lexington"
 mkdir -p "$bundle"
 cp target/release/lexington "$bundle/lexington"

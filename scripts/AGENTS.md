@@ -14,3 +14,4 @@
 - 仅运行改动涉及的脚本：依赖安装用 `python3 scripts/test-dependencies.py`；集成客户端用 `node scripts/test-integrations.js`；CLI/桥接用 `python3 scripts/context-smoke.py target/release/lexington`；设置用 settings-smoke；平台窗口用相关 native-smoke 模式。命令和场景详见模块文档。
 - 夹具不调用模型、不安装真实依赖；安装验收仍遵守根 AGENTS 的 release、用户配置保留及安装版核对要求。
 - 发布包配置使用空对象，不打包 config/roleplay.json、config/roleplay-memory.json 或 roleplay-vectors.sqlite3 及 journal/wal/shm；重复 Linux 打包还须清除旧生成目录遗留的私人配置与数据库。`bash scripts/test-package.sh` 使用假构建器和临时资源检查此行为，不访问真实配置。
+- 内置 Embedding 的模型、tokenizer、哈希清单及许可必须随 resource 分发，打包缺文件即失败；Windows x64 还携带经校验的原生 CPU DLL 及其许可/第三方声明，不引入 Python/Node 运行链。安装/无源码发布包测试用假模型与假 DLL 验证完整复制；显式 `--check-embedding` 仅用固定文本验收随包本地模型，不读取用户记录或启动对话模型。

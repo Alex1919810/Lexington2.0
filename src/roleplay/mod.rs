@@ -10,4 +10,4 @@ pub use context::{ContextPlan, ContextSettings, RoleplaySession, SceneState, sta
 pub use profile::{Memory, UserProfile, session_card};
 pub use registry::{agent_instructions, default_character};
 pub use store::save_role_card;
-pub use vector_memory::{VectorMemorySettings, clear_vector_memory};
+pub use vector_memory::{EmbeddingSource, VectorMemorySettings, clear_vector_memory};

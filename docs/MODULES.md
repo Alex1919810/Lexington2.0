@@ -1,6 +1,6 @@
 # 模块职责
 
-代码按 UI、后端功能、角色扮演和工具代码组织。`main.rs` 负责启动，UI 负责展示与交互，后端负责业务规则及基本 Codex 功能，平级的 roleplay 模块负责角色卡与角色提示，工具提供路径、解码和平台适配能力。
+代码按 UI、后端功能、角色扮演和工具代码组织。`main.rs` 负责启动，UI 负责展示与交互，后端负责业务规则及基本 Codex 功能，平级的 roleplay 模块负责角色卡与角色提示，工具提供路径、解码、平台适配、本地 Embedding 和通用向量存储能力。
 
 ## 目录结构
 
@@ -54,6 +54,7 @@ src/
     ├── mod.rs
     ├── paths.rs
     ├── activity.rs
+    ├── embedding.rs
     ├── gif.rs
     ├── platform.rs
     ├── platform_windows.rs
@@ -103,6 +104,19 @@ resource/agents/
 ├── characters.json
 ├── lexington.md
 └── lexington.json
+resource/models/bge-small-zh-v1.5/
+├── model.onnx
+├── config.json
+├── tokenizer.json
+├── tokenizer_config.json
+├── special_tokens_map.json
+├── manifest.json
+└── LICENSE.txt
+resource/runtime/windows-x86_64/
+├── onnxruntime.dll
+├── manifest.json
+├── LICENSE
+└── ThirdPartyNotices.txt
 ```
 
 ## Agent 角色设定资料
@@ -117,11 +131,11 @@ resource/agents/
 
 | 文件 | 职责和接口 |
 |---|---|
-| `roleplay/mod.rs` | 导出 RoleCard、Rule、WorldEntry、RoleplaySession、ContextPlan、UserProfile、Memory、VectorMemorySettings、clear_vector_memory、agent_instructions、session_card、default_character、static_plan、save_role_card |
+| `roleplay/mod.rs` | 导出 RoleCard、Rule、WorldEntry、RoleplaySession、ContextPlan、UserProfile、Memory、EmbeddingSource、VectorMemorySettings、clear_vector_memory、agent_instructions、session_card、default_character、static_plan、save_role_card |
 | `roleplay/registry.rs` | 按 resource/agents/characters.json 映射角色，校验目录边界和 .md 相对路径；有结构化卡时生成提示，否则读取旧 Markdown；文件上限 64 KiB，拒绝缺失、空白、错误编码与非法路径 |
 | `roleplay/card.rs` | 角色名称、描述、性格、场景、关系、对话示例、用户人设、手动记忆、世界书及附加规则；保留核心设定、编译规则与分段示例，包含上下文预算和世界书持续/冷却配置；卡片最多 64 KiB，世界书和规则各最多 64 条；Debug 隐藏内容 |
 | `roleplay/store.rs` | 从 config/roleplay.json 的 roleCards 分组读取按角色保存的覆盖值；角色卡和用户档案复用按分组保存接口，保留未知字段和其他角色，同目录临时文件同步后原子替换，Unix 权限 0600，损坏文件拒绝覆盖；不读写基本 Codex 配置或凭据 |
-| `roleplay/vector_memory.rs` | 持有按角色的向量记忆策略、Embedding 配置与请求、对话切分、召回及清空接口；只通过 tools/vector_store 访问 SQLite，不依赖 backend/UI 或 Codex 登录 |
+| `roleplay/vector_memory.rs` | 持有按角色的向量记忆策略、本地/远程 Embedding 配置与调用、对话切分、召回及清空接口；本地调用 tools/embedding，SQLite 调用 tools/vector_store，不依赖 backend/UI 或 Codex 登录 |
 | `ui/role_card.rs` | RoleEditor 保存编辑对象、草稿、分区、错误和提示；角色卡页面编辑五类内容，支持世界书新增/删除和规则新增/启停/排序/删除；保存后才提交角色领域模块，取消/关闭/切换编辑对象丢弃草稿 |
 
 优先级：用户保存的角色卡 → 映射 Markdown 同名的 .json 默认卡 → 原 Markdown。未映射且没有用户卡的角色使用新的普通会话。默认角色卡为 resource/agents/lexington.json，默认太太关系、原台词摘句、二创日常和多轮对话示例分字段保存；来源与许可等维护信息不注入模型。JSON 和 Markdown 随现有资源分发；用户角色配置不作为内置资源覆盖。
@@ -150,14 +164,19 @@ ui/app.rs 保存 codex_character、codex_role_card 和角色配置文件时间�
 ### 历史对话向量记忆
 
 - 代码分层：`tools/vector_store.rs` 只实现通用命名空间文档存储与向量查询；`roleplay/vector_memory.rs` 决定角色隔离、记录范围、Embedding 与召回策略；`roleplay/context.rs` 把召回片段纳入本轮预算。backend 只调用会话接口，UI 只编辑角色卡草稿及在 viewport 回调之后请求清空。
-- RoleCard 新增 camelCase `vectorMemory` 配置：`enabled` 默认 false，`baseUrl` 默认 `http://127.0.0.1:11434/v1`，`model` 默认空，`apiKeyEnv` 默认空（无鉴权），`recallLimit` 默认 3（1～8），`maxDistance` 默认 0.35（余弦距离 0～2，越小越严格）；保留未知字段。启用时校验模型及 HTTP(S) 地址，拒绝地址内凭据/查询/片段，环境变量字段只允许变量名。配置不进入角色提示；保存有效卡片变化按既有规则重开会话。不会从 Codex/OAuth 读取 Embedding 凭据。
-- 数据文件为资源根的 `config/roleplay-vectors.sqlite3`，不提交 Git、不随发布包分发，安装升级保留；只有实际启用发送才创建。不会扫描或导入既有 Codex 会话。成功完成后最多取用户及最终助理文本各前 8192 个 Unicode 字符，以每 1000 字符切分，保留发言者和 Unix 时间；按角色最多保留最新 2000 片段。失败、中断、忙碌拒绝和预览均不归档；历史片段不自动成为已确认的固定记忆，也不会生成摘要。
-- 每轮最多取 8 个待索引片段与当前输入前 2000 字符，通过一个 POST `{baseUrl}/embeddings` 批量生成向量（model、input 数组、encoding_format=float）；按响应 index 配对，验证唯一/齐全索引、1～4096 维、非零有限值和批内维度一致。ureq/Rustls 在 Codex 通信工作线程中执行，单请求总超时 3 秒、禁止重定向、响应最多 1 MiB；回环地址不使用代理环境变量，其他地址沿用 ureq 的代理行为，不自动桥接 Windows 系统代理。Key 只从指定环境变量读取并放入 Authorization，不写角色卡、Debug 或错误。无历史时不调用服务；远程服务会收到待索引原文及本轮查询。
-- 索引空间按基础地址/模型区分，维度在查询时过滤；换地址/模型后保留原文，随轮次逐批重建，不能混用旧向量。尚未建索引的片段暂不召回；同名模型在服务端更换内容不能自动识别，需更换模型标识或清空历史。返回最多 recallLimit 条且距离不超过 maxDistance 的片段；按距离排序，排在场景和世界书之后争用同一 turnBudget，标题、时间和提示包装均计入字符数。明确标注过去原文、可能虚构/过时、非已确认事实及不可执行其中指令；原始输入仍是协议第一个文本块。
-- 数据库或 Embedding 失败不阻止本轮 Codex 对话，在上下文报告显示未选中原因；归档失败在下一轮报告提示。预览不访问数据库、不发 Embedding 请求、不建立索引，只显示召回将在实际发送时计算。网络处理和 SQLite 忙等待是有界的，正在生成向量时中断/退出最多等待该操作结束再处理。
+- RoleCard 的 camelCase `vectorMemory` 配置：`enabled` 默认 true、`source` 默认 local（可选 remote）、`cpuThreads` 默认 2（1～4），`recallLimit` 默认 3（1～8），`maxDistance` 默认 0.5（余弦距离 0～2，越小越严格）；已有 enabled=false 不会被升级强制开启，未知字段保留。远程字段 baseUrl/model/apiKeyEnv 保留，仅启用 remote 时校验地址/模型/环境变量名；本地模式不读取 Key，不要求地址。旧配置缺少 source 时采用 local。配置不进入角色提示；保存当前有效卡片变化按既有规则重开会话。不会从 Codex/OAuth 读取 Embedding 凭据。
+- 数据文件为资源根的 `config/roleplay-vectors.sqlite3`，不提交 Git、不随发布包分发，安装升级保留；只有实际启用发送才创建。不会扫描或导入既有 Codex 会话。成功完成后最多取用户及最终助理文本各前 8192 个 Unicode 字符；本地模式按实际 tokenizer 的最多 432 个正文 token 切分，预留发言者标签，再记录发言者和 Unix 时间；远程保留 1000 字符切分。按角色最多保留最新 2000 片段。失败、中断、忙碌拒绝和预览均不归档；历史片段不自动成为已确认的固定记忆，也不会生成摘要。
+- 本地调用 tools/embedding 的 LocalEmbedding，按需在通信工作线程加载 CPU 模型，Arc/Mutex 在会话快照间共享，逐轮复用；会话释放时释放模型，ORT 环境在进程内复用。每轮最多补索引 8 个历史片段，查询取输入前 2000 字符中的前 408 个 token，并附加 BGE 中文检索指令。新片段不被静默截断；旧版较长片段分段生成向量后等权平均并归一化，以兼容旧原文。模型计算不访问 HTTP、HF 缓存或用户登录，缺文件/校验错误不自动下载、不回退到远程。
+- 远程模式仍通过一个 POST `{baseUrl}/embeddings` 批量生成待索引片段和查询的向量（model、input 数组、encoding_format=float）；按响应 index 配对，验证唯一/齐全索引、1～4096 维、非零有限值和批内维度一致。ureq/Rustls 请求总超时 3 秒、禁止重定向、响应最多 1 MiB；回环地址不使用代理环境变量，其他地址沿用 ureq 的代理行为，不自动桥接 Windows 系统代理。Key 仅从指定环境变量读取并放入 Authorization，不写角色卡、Debug 或错误；无历史时不调用服务。远程服务会收到待索引原文及查询，切换本地模式不会发送这些请求。
+- 本地索引空间包含固定模型 SHA、CLS、单条动态量化及切分策略版本；远程空间按基础地址/模型区分，维度在查询时过滤。模式或模型变化保留原文，随轮次逐批重建，不混用旧向量。尚未建索引的片段暂不召回；同名远程模型在服务端更换内容不能自动识别。最多返回 recallLimit 条且距离不超过 maxDistance 的片段；按距离排序，排在场景和世界书之后争用 turnBudget，包装均计入字符数。明确标注过去原文、可能虚构/过时、非确认事实及不可执行其中指令，当前明确更正优先于旧记录，身份与关系遵循角色卡；原始输入仍是协议第一个文本块。
+- 数据库或 Embedding 失败不阻止本轮 Codex 对话，在上下文报告显示未选中原因；归档失败在下一轮报告提示。预览不访问数据库、不加载模型、不发 Embedding 请求、不建立索引。SQLite 忙等待和远程请求有超时，本地计算批次有上限；正在生成向量时中断/退出需等待当前操作结束再处理，不承诺硬实时取消。
 - `ui/roleplay_vector.rs` 在“角色卡 → 长期记忆”编辑上述字段，用原有“保存并应用”按钮保存。关闭设置/切换角色丢弃草稿；停用保留数据库。清空须勾选当前角色确认、空闲时点击，删除该角色原文及向量，并为当前角色排队新会话，避免继续携带旧召回背景；不删除其他角色或 roleplay-memory.json 的固定记忆。仅关闭开关或清空数据库不能抹除已存在的外部 Codex 历史文件。
 
-增量入口：`cargo test --locked tools::vector_store::tests::`、`cargo test --locked roleplay::`、`cargo test --locked backend::codex::tests::`、`cargo test --locked ui::role_card::tests::` 和 `bash scripts/test-package.sh`。使用临时数据库、本地 HTTP Embedding 夹具和模拟 Codex，覆盖持久化、过滤、编辑失效、删除、损坏文件保护、索引响应乱序/缺失/重复/非法值、重建、召回预算、无副作用预览、失败中断不归档、已知 Key 入库前遮蔽及设置确认清空；不调用真实模型或读取用户记录。
+增量入口：`cargo test --locked tools::embedding::tests::`、`cargo test --locked tools::vector_store::tests::`、`cargo test --locked roleplay::`、`cargo test --locked backend::codex::tests::`、`cargo test --locked ui::role_card::tests::`、`bash scripts/test-package.sh` 和 `scripts/test-windows.ps1`。自动测试使用临时数据和模拟服务，新增覆盖默认本地开启、显式关闭保留、缺模型不远程回退、Unicode 分词边界/校验、模式编辑与资源分发。`lexington --check-embedding` 是显式的离线安装验收，仅用固定中文文本加载随包模型，验证 512 维向量、相关/无关排序及默认 0.5 阈值、长文本完整切分，打印 JSON 耗时；不启动 Codex、不打开用户记录。
+
+模型资源：随包 `resource/models/bge-small-zh-v1.5` 含约 24 MB 动态 INT8 ONNX 权重、tokenizer、固定版本哈希清单及 MIT 许可；源模型 [BAAI/bge-small-zh-v1.5](https://huggingface.co/BAAI/bge-small-zh-v1.5)，ONNX 转换 [Xenova/bge-small-zh-v1.5](https://huggingface.co/Xenova/bge-small-zh-v1.5/tree/75c43b069aac4d136ba6bc1122f995fedcfd2781)。Windows x64 随包 `resource/runtime/windows-x86_64/onnxruntime.dll` 为官方 ONNX Runtime 1.24.4 CPU 库，来自经 SHA256 校验的官方发行 wheel，仅提取原生库及许可/第三方声明，不携带 Python 运行链；运行库自身约 16 MB。Linux 构建使用 ort 校验下载并静态链接的 CPU 运行库，仍需 Linux 实机验收。`.gitattributes` 禁止已校验模型 JSON/权重和 Windows 运行库换行转换，避免 Windows checkout 后 SHA 改变。两端打包前检查模型资源完整，Windows 同时检查运行库；所有资源随现有 resource 复制，源码及无源码安装均保留用户配置与数据库。
+
+Windows x64 增量验收：27 项相关 Rust 测试、fmt 和 Clippy 通过；Windows 安装/升级/无源码包夹具与 Linux 打包隐私夹具通过。安装版与 release、模型和 CPU DLL 哈希一致，已有配置逐文件哈希保留；实际 ZIP 核验模型、运行库、许可和空配置齐全。安装版 `--check-embedding` 在仅保留 System32 的 PATH 下成功，固定中文样例本机观测加载约 361 ms、样例处理约 29 ms；这是单次安装检查，不代表任意文本延迟或召回质量基准。Linux 实机推理及其他 Windows 架构尚未验收。
 
 参考酒馆的 [Prompt Manager](https://docs.sillytavern.app/usage/prompts/prompt-manager/)、[世界书](https://docs.sillytavern.app/usage/core-concepts/worldinfo/) 与[摘要可修正设计](https://docs.sillytavern.app/extensions/summarize/)。本实现保留 Codex 管理完整历史，不假设能够照搬任意历史插入位置。
 
@@ -165,7 +184,7 @@ ui/app.rs 保存 codex_character、codex_role_card 和角色配置文件时间�
 
 ## 启动与依赖方向
 
-- `main.rs`：先处理 `--ask-files` / `--ask-json` / `--native-messaging` 无 GUI 入口，再取得 Linux/Windows 普通/开发模式独立实例锁并创建 eframe 原生窗口、选择 X11/Wayland/Win32 后端、加载窗口图标并构造 `ui::Pet`。普通尺寸 500×500，`--dev` 为 800×600。Linux X11/XWayland 使用 Dock 桌面浮层类型，不设置 strut、不占用工作区；避免 GNOME 将透明窗体整块限制在屏幕内，使立绘中心可到屏幕边缘。
+- `main.rs`：先处理 `--check-embedding` 固定文本离线验收和 `--ask-files` / `--ask-json` / `--native-messaging` 无 GUI 入口，再取得 Linux/Windows 普通/开发模式独立实例锁并创建 eframe 原生窗口、选择 X11/Wayland/Win32 后端、加载窗口图标并构造 `ui::Pet`。普通尺寸 500×500，`--dev` 为 800×600。Linux X11/XWayland 使用 Dock 桌面浮层类型，不设置 strut、不占用工作区；避免 GNOME 将透明窗体整块限制在屏幕内，使立绘中心可到屏幕边缘。
 - `ui` 可调用 `backend`、`roleplay` 和 `tools`；`backend` 可消费 `roleplay` 的提示和世界书结果，不依赖 `ui`、egui 或 GPU 纹理；`roleplay` 可调用 `tools` 的通用存储，不依赖 `backend`、UI 或 egui；`tools` 不依赖应用 UI 或业务模块。
 - `tools/platform.rs` 是平台与窗口框架的适配边界，可依赖 eframe/egui/winit；路径和解码工具不依赖这些框架。
 - UI 内通过 `impl Pet` 分文件组织相关交互，必要的共享字段与方法限制在 UI 模块内。不要为了目录分层增加只有转发作用的抽象。
@@ -236,7 +255,8 @@ Windows 非阻塞字节管道使用 PeekNamedPipe 区分暂时无数据与断开
 
 | 文件 | 职责与主要接口 | 依赖及约束 |
 |---|---|---|
-| `tools/mod.rs` | 声明路径、活动监测、解码、时间、平台、向量存储及 Windows 代理模块 | 不承载业务状态 |
+| `tools/mod.rs` | 声明路径、活动监测、解码、时间、平台、Embedding、向量存储及 Windows 代理模块 | 不承载业务状态 |
+| `tools/embedding.rs` | `LocalEmbedding::load/split/embed_documents/embed_query` 封装离线中文向量推理；`check` 提供固定文本的离线安装检查 | fastembed 7.6.1 关闭默认特性、HF 下载和 GPU；CLS + L2 归一化输出 512 维。动态 INT8 每次仅推理一条序列，避免不同批量量化范围影响向量；tokenizer 关闭截断/填充后按原文 byte offset 切分，模型每次最多 512 token。默认 2 个 CPU 线程，限制 1～4、关闭 ORT spinning/telemetry。Windows 通过绝对路径加载经内置清单 SHA256 校验的 1.24.4 CPU DLL，忽略外部 ORT_DYLIB_PATH；Linux 静态链接。首次需要时加载并检查模型/分词文件哈希，错误只给通用提示、不输出正文或原生错误，不读取角色、数据库或凭据；不做任何网络请求 |
 | `tools/vector_store.rs` | `VectorStore::open/put/pending/set_embedding/search/delete/prune` 保存命名空间文档及可重建向量；`Document` 保存原文/时间，`SearchHit` 返回文档与距离 | rusqlite 0.37 bundled SQLite + 静态 sqlite-vec 0.1.6，无数据库服务/动态扩展/Python/Node 运行依赖。使用普通 SQLite 表和 sqlite-vec 标量余弦距离精确扫描，按命名空间、模型空间和维度过滤后排序；不伪称 ANN。原文和向量同一行，改正文使索引失效，回填必须匹配当前原文；删除/裁剪同时去掉向量，id=None 表示清空该命名空间，同秒记录按插入顺序稳定裁剪。SQLite 事务语义，busy_timeout 250ms、secure_delete=ON，Unix 新文件 0600，版本 1；损坏、未知或高版本数据库报错而不重置，不记录 SQL/正文或凭据。最多 4096 维且拒绝 NaN/Inf/零向量，通用层无角色、Embedding 或提示逻辑 |
 | `tools/paths.rs` | `resource_root` 定位资源根目录；`clock_state_file` / `alarm_state_file` 返回普通/开发模式独立的用户数据记录路径 | 顺序：`LEXINGTON_HOME` → 可执行文件旁存在 `resource/` 的目录 → 当前目录；闹钟（alarms.json / alarms-dev.json）及打卡状态使用 XDG_DATA_HOME，默认 ~/.local/share/lexington；Windows data_root 使用 LOCALAPPDATA/lexington，回退 USERPROFILE/AppData/Local，不能写入资源目录 |
 | `tools/activity.rs` | `Monitor::start/poll` 在后台每 2 秒采样系统空闲时间和会话可用性，返回带单调时间戳的 Sample；退出停止并回收线程 | Linux 用 loginctl 排除锁屏、远程和非活动会话，优先 gdbus 调用 Mutter IdleMonitor，原生 X11 可回退 XScreenSaver；Wayland 禁止回退 XWayland 空闲时钟。子进程有超时并清理，UI 不阻塞；不记录键鼠内容；不可用样本重置自动确认，保留手动入口；测试可注入采样 |

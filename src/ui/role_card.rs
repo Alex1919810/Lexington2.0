@@ -500,15 +500,24 @@ mod tests {
         app.codex_role_card = Some(card);
         app.role_editor.section = 6;
         frame(&mut app, &ctx, vec![]);
-        click(&mut app, &ctx, "启用历史对话向量记忆");
-        click(&mut app, &ctx, "保存并应用");
-        assert!(!app.role_editor.error.is_empty());
         assert!(
-            !RoleCard::load(&root, "a")
-                .unwrap()
+            app.role_editor
+                .draft
+                .as_ref()
                 .unwrap()
                 .vector_memory
                 .enabled
+        );
+        click(&mut app, &ctx, "远程接口");
+        click(&mut app, &ctx, "保存并应用");
+        assert!(!app.role_editor.error.is_empty());
+        assert!(
+            RoleCard::load(&root, "a")
+                .unwrap()
+                .unwrap()
+                .vector_memory
+                .source
+                == crate::roleplay::EmbeddingSource::Local
         );
         app.role_editor.draft.as_mut().unwrap().vector_memory.model = "fixture".into();
         click(&mut app, &ctx, "保存并应用");
@@ -516,6 +525,12 @@ mod tests {
         assert!(app.codex_restart_pending);
         let saved = RoleCard::load(&root, "a").unwrap().unwrap();
         assert!(saved.vector_memory.enabled);
+        click(&mut app, &ctx, "内置本地模型");
+        click(&mut app, &ctx, "启用历史对话向量记忆");
+        click(&mut app, &ctx, "保存并应用");
+        let disabled = RoleCard::load(&root, "a").unwrap().unwrap();
+        assert!(!disabled.vector_memory.enabled);
+        assert!(disabled.vector_memory.source == crate::roleplay::EmbeddingSource::Local);
         assert!(!saved.instructions().contains("127.0.0.1"));
         let store = crate::tools::vector_store::VectorStore::open(
             &root.join("config/roleplay-vectors.sqlite3"),

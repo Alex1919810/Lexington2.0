@@ -1,0 +1,4 @@
+resource/models/bge-small-zh-v1.5/model.onnx -text
+resource/models/bge-small-zh-v1.5/*.json -text
+resource/models/bge-small-zh-v1.5/LICENSE.txt text eol=lf
+resource/runtime/windows-x86_64/* -text

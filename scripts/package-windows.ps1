@@ -10,6 +10,12 @@ try {
     }
     & $Python -X utf8 scripts/integrations.py build --output dist/integrations
     if ($LASTEXITCODE -ne 0) { throw 'Integration build failed.' }
+    foreach ($name in @('model.onnx', 'config.json', 'tokenizer.json', 'tokenizer_config.json', 'special_tokens_map.json', 'manifest.json', 'LICENSE.txt')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $root ('resource\models\bge-small-zh-v1.5\' + $name)) -PathType Leaf)) { throw "Missing bundled embedding asset: $name" }
+    }
+    foreach ($name in @('onnxruntime.dll', 'manifest.json', 'LICENSE', 'ThirdPartyNotices.txt')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $root ('resource\runtime\windows-x86_64\' + $name)) -PathType Leaf)) { throw "Missing bundled CPU runtime asset: $name" }
+    }
     $stage = Join-Path $root ('dist\lexington-windows-' + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path (Join-Path $stage 'scripts') -Force | Out-Null
     Copy-Item -LiteralPath target/release/lexington.exe, resource, README.md -Destination $stage -Recurse

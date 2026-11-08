@@ -1,0 +1,22 @@
+{
+  "version": "1.24.4",
+  "source": "https://files.pythonhosted.org/packages/8b/f4/6b89e297b93704345f0f3f8c62229bee323ef25682a3f9b4f89a39324950/onnxruntime-1.24.4-cp312-cp312-win_amd64.whl",
+  "archiveSha256": "535b29475ca42b593c45fbb2152fbf1cdf3f287315bf650e6a724a0a1d065cdb",
+  "files": [
+    {
+      "name": "onnxruntime.dll",
+      "size": 16119840,
+      "sha256": "87da0279ab54add397fd518f7022efe8b9a89fd968669d0adff9f9f242344b6c"
+    },
+    {
+      "name": "LICENSE",
+      "size": 1094,
+      "sha256": "c250d6278f0b47a6439fb7592b08b58a55eb9f535aa49a1db63211c3f982b674"
+    },
+    {
+      "name": "ThirdPartyNotices.txt",
+      "size": 331175,
+      "sha256": "fb0af774b4d7cffc5b9d046f2aaeade2f37df2f80abf8033c95dfffcc77a8866"
+    }
+  ]
+}

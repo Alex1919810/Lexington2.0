@@ -1,17 +1,29 @@
 //! Roleplay policy and embedding requests; the generic SQLite store lives in tools.
+use crate::tools::embedding::{LocalEmbedding, MODEL_SPACE};
 use crate::tools::vector_store::{Document, SearchHit, VectorStore};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     io::Read,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex, MutexGuard},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+#[derive(Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EmbeddingSource {
+    #[default]
+    Local,
+    Remote,
+}
 
 #[derive(Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct VectorMemorySettings {
     pub enabled: bool,
+    pub source: EmbeddingSource,
+    pub cpu_threads: usize,
     pub base_url: String,
     pub model: String,
     pub api_key_env: String,
@@ -23,25 +35,30 @@ pub struct VectorMemorySettings {
 impl Default for VectorMemorySettings {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
+            source: EmbeddingSource::Local,
+            cpu_threads: 2,
             base_url: "http://127.0.0.1:11434/v1".into(),
             model: String::new(),
             api_key_env: String::new(),
             recall_limit: 3,
-            max_distance: 0.35,
+            max_distance: 0.5,
             extra: Default::default(),
         }
     }
 }
 impl VectorMemorySettings {
     pub fn validate(&self) -> Result<(), String> {
+        if !(1..=4).contains(&self.cpu_threads) {
+            return Err("本地 Embedding 的 CPU 线程数需为 1～4。".into());
+        }
         if !(1..=8).contains(&self.recall_limit)
             || !self.max_distance.is_finite()
             || !(0.0..=2.0).contains(&self.max_distance)
         {
             return Err("记忆召回数量需为 1～8 条，余弦距离阈值需为 0～2。".into());
         }
-        if !self.enabled {
+        if !self.enabled || self.source == EmbeddingSource::Local {
             return Ok(());
         }
         let url = url::Url::parse(self.base_url.trim()).map_err(|_| "Embedding 基础地址无效。")?;
@@ -76,6 +93,9 @@ impl VectorMemorySettings {
         Ok(())
     }
     fn space(&self) -> String {
+        if self.source == EmbeddingSource::Local {
+            return MODEL_SPACE.into();
+        }
         serde_json::json!([
             self.base_url.trim().trim_end_matches('/'),
             self.model.trim()
@@ -86,9 +106,11 @@ impl VectorMemorySettings {
 
 #[derive(Clone)]
 pub(super) struct VectorMemory {
+    root: PathBuf,
     path: PathBuf,
     character: String,
     pub settings: VectorMemorySettings,
+    local: Arc<Mutex<Option<LocalEmbedding>>>,
 }
 pub fn clear_vector_memory(root: &Path, character: &str) -> Result<(), String> {
     let path = database_path(root);
@@ -103,10 +125,22 @@ fn database_path(root: &Path) -> PathBuf {
 impl VectorMemory {
     pub fn new(root: &Path, character: &str, settings: VectorMemorySettings) -> Self {
         Self {
+            root: root.into(),
             path: database_path(root),
             character: character.into(),
             settings,
+            local: Default::default(),
         }
+    }
+    fn local(&self) -> Result<MutexGuard<'_, Option<LocalEmbedding>>, String> {
+        let mut model = self
+            .local
+            .lock()
+            .map_err(|_| "本地 Embedding 状态不可用。")?;
+        if model.is_none() {
+            *model = Some(LocalEmbedding::load(&self.root, self.settings.cpu_threads)?);
+        }
+        Ok(model)
     }
     pub fn recall(&self, message: &str) -> Result<Vec<SearchHit>, String> {
         self.settings.validate()?;
@@ -126,7 +160,16 @@ impl VectorMemory {
             .map(|document| document.text.as_str())
             .chain(std::iter::once(query.as_str()))
             .collect();
-        let vectors = embed(&self.settings, &inputs)?;
+        let vectors = match self.settings.source {
+            EmbeddingSource::Remote => embed(&self.settings, &inputs)?,
+            EmbeddingSource::Local => {
+                let mut model = self.local()?;
+                let model = model.as_mut().unwrap();
+                let mut vectors = model.embed_documents(&inputs[..pending.len()])?;
+                vectors.push(model.embed_query(&query)?);
+                vectors
+            }
+        };
         for (document, vector) in pending.iter().zip(&vectors) {
             store.set_embedding(&self.character, document, &space, vector)?;
         }
@@ -149,9 +192,20 @@ impl VectorMemory {
             .as_secs() as i64;
         let turn = format!("{:016x}", rand::random::<u64>());
         for (role, text) in [("用户", user), ("角色", assistant)] {
-            let chars: Vec<char> = text.chars().take(8192).collect();
-            for (index, chunk) in chars.chunks(1000).enumerate() {
-                let body: String = chunk.iter().collect();
+            let text: String = text.chars().take(8192).collect();
+            if text.trim().is_empty() {
+                continue;
+            }
+            let chunks = match self.settings.source {
+                EmbeddingSource::Local => self.local()?.as_ref().unwrap().split(&text, 8)?,
+                EmbeddingSource::Remote => text
+                    .chars()
+                    .collect::<Vec<_>>()
+                    .chunks(1000)
+                    .map(|chunk| chunk.iter().collect())
+                    .collect(),
+            };
+            for (index, body) in chunks.into_iter().enumerate() {
                 if body.trim().is_empty() {
                     continue;
                 }
@@ -345,6 +399,7 @@ mod tests {
         let mut card = RoleCard {
             vector_memory: VectorMemorySettings {
                 enabled: true,
+                source: EmbeddingSource::Remote,
                 base_url: base,
                 model: "fixture".into(),
                 ..Default::default()
@@ -399,9 +454,51 @@ mod tests {
     }
 
     #[test]
+    fn local_defaults_preserve_explicit_disable_and_missing_assets_do_not_fall_back_to_remote() {
+        let defaults: VectorMemorySettings = serde_json::from_str("{}").unwrap();
+        assert!(defaults.enabled && defaults.source == EmbeddingSource::Local);
+        assert!(defaults.validate().is_ok());
+        let explicit: VectorMemorySettings =
+            serde_json::from_str(r#"{"enabled":false,"future":7}"#).unwrap();
+        assert!(!explicit.enabled);
+        assert_eq!(serde_json::to_value(explicit).unwrap()["future"], 7);
+        let root =
+            std::env::temp_dir().join(format!("lexington-missing-model-{}", rand::random::<u64>()));
+        let store = VectorStore::open(&database_path(&root)).unwrap();
+        store
+            .put(
+                "a",
+                &Document {
+                    id: "old".into(),
+                    text: "previous fact".into(),
+                    created_at: 1,
+                },
+            )
+            .unwrap();
+        let mut session = RoleplaySession::new(RoleCard::default()).with_memory(&root, "a");
+        let plan = session.begin("query");
+        assert!(plan.text(false).is_empty());
+        assert!(
+            plan.blocks
+                .iter()
+                .any(|block| block.reason.contains("模型文件缺失"))
+        );
+        assert_eq!(store.pending("a", "", 8).unwrap().len(), 1);
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn disabled_memory_is_inert_and_invalid_embedding_data_is_rejected_without_echo() {
         let root = std::env::temp_dir().join(format!("lexington-inert-{}", rand::random::<u64>()));
-        let disabled = VectorMemory::new(&root, "a", Default::default());
+        let disabled = VectorMemory::new(
+            &root,
+            "a",
+            VectorMemorySettings {
+                enabled: false,
+                ..Default::default()
+            },
+        );
         disabled.remember("user", "assistant").unwrap();
         assert!(disabled.recall("query").unwrap().is_empty());
         assert!(!root.exists());
@@ -416,6 +513,7 @@ mod tests {
         let (base, requests, server) = fixture(bad);
         let mut settings = VectorMemorySettings {
             enabled: true,
+            source: EmbeddingSource::Remote,
             base_url: base,
             model: "fixture".into(),
             ..Default::default()

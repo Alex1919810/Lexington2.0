@@ -857,6 +857,7 @@ mod tests {
             std::env::temp_dir().join(format!("lexington-abort-memory-{}", rand::random::<u64>()));
         let mut card = crate::roleplay::RoleCard::default();
         card.vector_memory.enabled = true;
+        card.vector_memory.source = crate::roleplay::EmbeddingSource::Remote;
         card.vector_memory.model = "fixture".into();
         card.vector_memory.base_url = "http://127.0.0.1:1/v1".into();
         card.context.scan_messages = 1;
@@ -1030,6 +1031,7 @@ mod tests {
             let session = custom.then(|| {
                 let mut card = crate::roleplay::RoleCard::default();
                 card.vector_memory.enabled = true;
+                card.vector_memory.source = crate::roleplay::EmbeddingSource::Remote;
                 card.vector_memory.model = "fixture".into();
                 card.vector_memory.base_url = "http://127.0.0.1:1/v1".into();
                 crate::roleplay::RoleplaySession::new(card).with_memory(&root, "a")

@@ -13,6 +13,10 @@ for name in install-linux.sh install-dependencies.sh dependencies.py integration
 printf 'fixture binary\n' > "$fixture/target/release/lexington"
 printf 'fixture\n' > "$fixture/README.md"
 printf 'default character\n' > "$fixture/resource/agents/fixture.md"
+mkdir -p "$fixture/resource/models/bge-small-zh-v1.5"
+for name in model.onnx config.json tokenizer.json tokenizer_config.json special_tokens_map.json manifest.json LICENSE.txt; do
+    printf 'fixture-model\n' > "$fixture/resource/models/bge-small-zh-v1.5/$name"
+done
 printf '{"apiKey":"fixture-private-config"}\n' > "$fixture/config/config.json"
 printf 'fixture-private-card\n' > "$fixture/config/roleplay.json"
 printf 'fixture-private-memory\n' > "$fixture/config/roleplay-memory.json"
@@ -38,10 +42,17 @@ for suffix in '' -journal -wal -shm; do
     [[ ! -e "$bundle/config/roleplay-vectors.sqlite3$suffix" ]]
 done
 [[ -f "$bundle/resource/agents/fixture.md" ]]
+[[ -f "$bundle/resource/models/bge-small-zh-v1.5/model.onnx" ]]
 [[ -f "$fixture/config/roleplay-memory.json" ]]
 archive="$fixture/dist/lexington-linux-$(uname -m).tar.gz"
 [[ -f "$archive" ]]
 listing="$(tar -tzf "$archive")"
 [[ "$listing" != *'config/roleplay.json'* && "$listing" != *'config/roleplay-memory.json'* ]]
 [[ "$listing" != *'roleplay-vectors.sqlite3'* ]]
+[[ "$listing" == *'resource/models/bge-small-zh-v1.5/model.onnx'* ]]
+rm "$fixture/resource/models/bge-small-zh-v1.5/model.onnx"
+if PATH="$fixture/bin:$PATH" bash "$fixture/scripts/package.sh" >/dev/null 2>&1; then
+    printf 'Packaging accepted missing embedding model.\n' >&2
+    exit 1
+fi
 printf 'Linux bundle privacy and role-resource fixture checks passed.\n'

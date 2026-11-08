@@ -9,6 +9,11 @@ use eframe::egui;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use backend::handoff::{self, Request};
     let args: Vec<_> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|arg| arg == "--check-embedding") {
+        let report = tools::embedding::check(&tools::paths::resource_root())?;
+        println!("{report}");
+        return Ok(());
+    }
     if args.get(1).is_some_and(|arg| arg == "--native-messaging")
         || std::env::current_exe().ok().is_some_and(|path| {
             path.file_stem()
