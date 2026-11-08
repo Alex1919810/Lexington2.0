@@ -23,6 +23,10 @@ try {
     [IO.File]::WriteAllText((Join-Path $source 'Cargo.toml'), 'fixture')
     [IO.File]::WriteAllText((Join-Path $source 'target\release\lexington.exe'), 'fixture version one')
     [IO.File]::WriteAllText((Join-Path $source 'resource\fixture.txt'), 'resource one')
+    $agentDirectory = Join-Path $source 'resource\agents'
+    New-Item -ItemType Directory -Path $agentDirectory -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $agentDirectory 'characters.json'), '{"defaultCharacter":"fixture","characters":{"fixture":"fixture.md"}}')
+    [IO.File]::WriteAllText((Join-Path $agentDirectory 'fixture.md'), 'fixture persona one')
     [IO.File]::WriteAllText((Join-Path $source 'config\config.json'), '{"codex":{"apiKey":"fixture-only-not-real"}}')
     $installer = Join-Path $source 'scripts\install-windows.ps1'
     & $installer -InstallDir $installed -SkipBuild -NoShortcuts -NoIntegrations -NoRestart
@@ -31,9 +35,11 @@ try {
     [IO.File]::WriteAllText((Join-Path $source 'target\release\lexington.exe'), 'fixture version two')
     [IO.File]::WriteAllText((Join-Path $source 'config\config.json'), '{}')
     [IO.File]::WriteAllText((Join-Path $source 'resource\fixture.txt'), 'resource two')
+    [IO.File]::WriteAllText((Join-Path $agentDirectory 'fixture.md'), 'fixture persona two')
     & $installer -InstallDir $installed -SkipBuild -NoShortcuts -NoIntegrations -NoRestart
     Assert-True ((Get-FileHash -LiteralPath $config).Hash -eq $originalHash) 'Upgrade overwrote the installed configuration.'
     Assert-True ((Get-Content -LiteralPath (Join-Path $installed 'resource\fixture.txt') -Raw) -eq 'resource two') 'Resources did not update.'
+    Assert-True ((Get-Content -LiteralPath (Join-Path $installed 'resource\agents\fixture.md') -Raw) -eq 'fixture persona two') 'Agent Markdown did not update.'
     Assert-True ((Get-FileHash -LiteralPath (Join-Path $installed 'lexington.exe')).Hash -eq (Get-FileHash -LiteralPath (Join-Path $source 'target\release\lexington.exe')).Hash) 'Binary mismatch.'
     Assert-True ((Get-FileHash -LiteralPath (Join-Path $installed 'lexington-native-host.exe')).Hash -eq (Get-FileHash -LiteralPath (Join-Path $installed 'lexington.exe')).Hash) 'Host alias mismatch.'
     Assert-True (@(Get-ChildItem -LiteralPath $installed -Filter '.install-*').Count -eq 0) 'Temporary binary leaked.'
@@ -52,6 +58,7 @@ try {
         try { $packagedConfig = $reader.ReadToEnd() } finally { $reader.Dispose() }
         Assert-True ($packagedConfig.Trim() -eq '{}') 'Package contains source credentials.'
         Assert-True (@($archive.Entries | Where-Object { $_.Name -eq 'lexington-context.vsix' }).Count -eq 1) 'VSIX is missing.'
+        Assert-True (@($archive.Entries | Where-Object { $_.FullName.Replace('\', '/') -eq 'resource/agents/fixture.md' }).Count -eq 1) 'Agent Markdown is missing from ZIP.'
     } finally { $archive.Dispose() }
     $unpacked = Join-Path $fixture 'unpacked release'
     Expand-Archive -LiteralPath $archivePath -DestinationPath $unpacked
@@ -59,6 +66,8 @@ try {
     & (Join-Path $unpacked 'scripts\install-windows.ps1') -InstallDir $packageInstall -NoShortcuts -NoIntegrations -NoRestart -Python 'deliberately-unavailable-python'
     Assert-True ((Get-FileHash -LiteralPath (Join-Path $packageInstall 'lexington.exe')).Hash -eq (Get-FileHash -LiteralPath (Join-Path $installed 'lexington.exe')).Hash) 'Source-free package install mismatch.'
     Assert-True ((Get-Content -LiteralPath (Join-Path $packageInstall 'config\config.json') -Raw).Trim() -eq '{}') 'Source-free install configuration mismatch.'
+    Assert-True ((Get-Content -LiteralPath (Join-Path $packageInstall 'resource\agents\fixture.md') -Raw) -eq 'fixture persona two') 'Source-free install lost agent Markdown.'
+    Assert-True ((Get-FileHash -LiteralPath (Join-Path $packageInstall 'resource\agents\characters.json')).Hash -eq (Get-FileHash -LiteralPath (Join-Path $agentDirectory 'characters.json')).Hash) 'Source-free install lost agent mapping.'
     Write-Output 'Windows install/upgrade/preservation/hash/package fixture checks passed.'
 } finally {
     $resolved = [IO.Path]::GetFullPath($fixture)

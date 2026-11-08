@@ -35,6 +35,54 @@ fn click(app: &mut Pet, ctx: &egui::Context, point: egui::Pos2) {
     );
 }
 #[test]
+fn character_switch_discards_old_codex_session_and_missing_persona_cannot_reuse_it() {
+    let root = std::env::temp_dir().join(format!("lexington-ui-persona-{}", rand::random::<u64>()));
+    for name in ["a", "b"] {
+        let directory = root.join("resource/illustration").join(name).join("png");
+        std::fs::create_dir_all(&directory).unwrap();
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255]))
+            .save(directory.join("normal.png"))
+            .unwrap();
+    }
+    let directory = root.join("resource/agents");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("characters.json"),
+        r#"{"characters":{"b":"missing.md"}}"#,
+    )
+    .unwrap();
+    let ctx = egui::Context::default();
+    let mut app = Pet::from_root(&ctx, true, root.clone());
+    app.codex = Some(crate::backend::codex::Client::mock("normal"));
+    app.codex_character = Some("a".into());
+    app.busy = true;
+    app.codex_restart_pending = true;
+    app.external_turn = true;
+    app.input = "保留草稿".into();
+    app.text = "旧角色回答".into();
+    app.codex_messages.push(("old".into(), app.text.clone()));
+    // Changing illustrations of the same character must keep the ongoing turn.
+    app.load_picture(&ctx);
+    assert!(app.busy);
+    assert!(app.codex.is_some());
+    app.library.next_character(&root);
+    app.load_picture(&ctx);
+    assert_eq!(app.codex_character.as_deref(), Some("b"));
+    assert!(app.codex.is_none());
+    assert!(!app.busy && !app.external_turn && !app.codex_restart_pending);
+    assert!(app.text.is_empty() && app.codex_messages.is_empty());
+    assert_eq!(app.input, "保留草稿");
+    assert!(app.error.contains("Markdown"));
+    // Even a prior startup failure cannot pin the selected character to its old session.
+    app.library.next_character(&root);
+    app.config.codex.executable = "lexington-fixture-unavailable.exe".into();
+    app.load_picture(&ctx);
+    assert_eq!(app.codex_character.as_deref(), Some("a"));
+    assert_eq!(app.codex_status, "启动失败");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn window_position_persists_without_size_or_dev_mode_leaking_and_recovers_offscreen() {
     use eframe::App;
     #[derive(Default)]

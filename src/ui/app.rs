@@ -28,6 +28,7 @@ pub struct Pet {
     pub(super) config_stamp: Option<(SystemTime, u64)>,
     pub(super) config_error: String,
     pub(super) codex_restart_pending: bool,
+    pub(super) codex_character: Option<String>,
     pub(super) library: CharacterState,
     pub(super) picture: Option<Picture>,
     pub(super) icons: Vec<egui::TextureHandle>,
@@ -158,6 +159,7 @@ impl Pet {
             config_stamp: None,
             config_error: String::new(),
             codex_restart_pending: false,
+            codex_character: None,
             library: CharacterState::default(),
             picture: None,
             icons: super::assets::icons(ctx),
@@ -235,6 +237,13 @@ impl Pet {
                 .map_err(|e| eprintln!("加载立绘失败: {e}"))
                 .ok()
         });
+        if self
+            .codex_character
+            .as_ref()
+            .is_some_and(|name| name != &self.library.character)
+        {
+            self.start_codex(ctx);
+        }
     }
     pub(super) fn refresh(&mut self, ctx: &egui::Context) {
         self.reload_config();

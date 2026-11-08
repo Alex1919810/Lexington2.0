@@ -78,8 +78,37 @@ scripts/
 ├── settings-smoke.py
 └── native-smoke.py
 docs/
-└── MODULES.md
+├── MODULES.md
+└── agents/
+    ├── AGENTS.md
+    └── lexington/
+        ├── PERSONA.md
+        └── SOURCES.md
+resource/agents/
+├── characters.json
+├── lexington.md
+└── SOURCES.md
 ```
+
+## Agent 角色设定资料
+
+`docs/agents/` 保存产品内角色的设计与来源，局部维护规则见 [AGENTS.md](agents/AGENTS.md)。[Lexington 设定](agents/lexington/PERSONA.md) 定义人格、语气、默认“太太”关系及交互约定；[来源说明](agents/lexington/SOURCES.md) 记录舰R百科的页面版本、依据和改编许可。实际加载的提示为 [resource/agents/lexington.md](../resource/agents/lexington.md)，映射见 [characters.json](../resource/agents/characters.json)。运行时 Markdown 随 `resource/` 安装和打包，设计文档目录不参与分发。
+
+### 角色映射与会话生命周期
+
+角色设定文件只包含人格、台词与交互约定；来源、网址和许可集中保存在独立的 `docs/agents/lexington/SOURCES.md` 以及随安装包分发的 `resource/agents/SOURCES.md`。后者不在角色映射中，因此不会发送给模型。
+
+Lexington 的运行时 Markdown 除基本人格与助手行为外，包含四处注明游戏场合的原台词短摘句，以及默认太太关系下的项目二创日常、情感表达和原创交互示例。原台词用于参考语气，二创不作为官方设定或用户既有经历；来源与定位见 `docs/agents/lexington/SOURCES.md`。这些内容通过现有角色加载接口生效，不改变会话生命周期。
+
+- `backend/character.rs` 的 `agent_instructions(root, character) -> Result<Option<String>, String>` 按立绘目录名读取 `resource/agents/characters.json` 的 `characters` 映射；路径相对 `resource/agents/`，仅允许目录内的 `.md` 文件，规范化后检查目录边界。配置与文本最多 64 KiB，使用 UTF-8；已映射文件缺失、空白、错误编码、超限或非法配置返回明确错误，不展示源文本。注册表缺失或角色未映射返回 None，创建普通会话，不回退至其他角色设定。
+- `defaultCharacter` 在当前角色无效或首次选择时优先匹配已有立绘；本项目配置为 `lexington`。不存在则回退字典序首个可用角色，刷新不改变仍有效的用户选择。新增角色只需立绘目录、Markdown 和映射，不增加角色专属 Rust 分支。
+- `backend/codex.rs` 的 `Client::start(config, root, character, wake)` 在启动子进程前读取设定，`launch/communicate` 将文本作为 `thread/start.developerInstructions` 发送一次。普通用户消息仍按原文发送，同角色多轮复用 thread；不覆盖 `baseInstructions`、本机 Codex 配置、审批和沙箱。手动重启重新读取 Markdown，运行中的文件编辑不自动生效。
+- `ui/app.rs` 保存 `codex_character`，`load_picture` 在活动或启动失败的会话角色变化时立即调用 `start_codex`，覆盖侧栏切换及资源删除后的回退。未启动 Codex 的测试构造不会因资源刷新启动真实服务。同角色换装、正常/战损及格式变化保持会话。
+- `ui/codex.rs::start_codex` 先释放旧 Client（停止旧任务并清理进程树），再清空回复缓存、气泡文本和审批，解除 busy/external_turn/待重启标记，保留未发送草稿，记录新角色并启动全新 thread。角色切换不等待旧任务完成，也不恢复旧角色历史；新角色加载失败时不保留旧 Client。`ui/sidebar.rs` 的角色按钮提示明确说明会结束任务并新建会话。
+- `tests/fixtures/codex-server.py` 的 persona 模式验证 thread/start 精确收到 Markdown、未覆盖基础指令；多轮和普通角色模式检查不重复注入、会话独立与权限保持。`ui/tests.rs` 检查同角色保持任务、角色切换清理、设定缺失错误、失败后继续切换和草稿保留。后端角色测试覆盖映射、默认选择、未知角色与非法文件。
+- `scripts/test-windows.ps1` 使用临时角色资源验证首次/升级安装、ZIP 收录与解压包安装均携带 Markdown 和注册表；现有安装/打包脚本直接递归处理 `resource/`，无需增加另一套分发路径。
+
+验证入口：`cargo test --locked character_`、`cargo test --locked backend::codex::tests::`、`cargo test --locked ui::tests::`；安装分发夹具为 `powershell -ExecutionPolicy Bypass -File scripts/test-windows.ps1`。均使用临时资源或模拟服务，不连接真实模型。
 
 ## 启动与依赖方向
 
@@ -119,7 +148,7 @@ Windows 同样启用 UI 的 Inbox、原生位置保存/恢复、显示器检测�
 | `backend/resources.rs` | 定义 `Illustration`（含服装名 `outfit` 和战损标记 `damaged`）；`illustrations` 扫描排序立绘并解析配对元数据，`background` 选择首张支持的背景，`texts` 读取非空角色台词 | 标准库文件读取和 serde_json；只解析文件名最后的 `_Normal` / `_Damage` 后缀，ASCII 大小写不敏感；无后缀按正常处理，其完整文件名主体作为服装名。保留 `resource/` 布局，按目录识别角色与格式，拒绝台词路径穿越，不解码图片 |
 | `backend/character.rs` | `CharacterState` 持有资源列表、角色、格式、正常/战损状态、选中索引与台词；`filtered` 返回当前角色/格式/状态的队列，`damage_counterpart` 查同服装的相反状态，`toggle_damage` 双向切换；`refresh` 保留当前路径并恢复失效选择，`next_illustration` 循环当前队列，`toggle_format`/`next_character` 切换格式/角色，`selected_path` 提供路径 | 仅依赖资源扫描模块和标准库；默认 GIF + 正常。配对严格限制同角色、同格式、服装名 ASCII 大小写不敏感，缺少对应版本时不切换；格式切换尽量保留同服装。选取回退顺序为当前格式/当前状态 → 另一格式/当前状态 → 当前格式/另一状态 → 另一格式/另一状态。含现有 15 对资源双向匹配、独立队列循环、后缀大小写、缺失配对及删除恢复测试；只选择路径，纹理和默认宠物由 UI 处理 |
 | `backend/codex_config.rs` | `LocalCodexConfig::read` 读取本机用户级 TOML 的模型、所选 profile 和提供方地址/凭据；`draft` 填充展示值，`to_save` 保持继承语义 | 依赖 toml、serde_json 和 CodexConfig；只读 config.toml/auth.json，不解析项目/管理员配置层。Key 读取 provider env_key 环境变量、experimental_bearer_token，OpenAI 登录再读 OPENAI_API_KEY 环境/登录文件；忽略 OAuth tokens。缺文件允许，错误不带 TOML 源码或凭据，不派生 Debug；单测注入环境和临时目录，覆盖来源、profile、继承/显式优先及解析错误不泄密 |
-| `backend/codex.rs` | `Client::start/submit(text, no_approval)/interrupt/reply/poll` 管理 app-server 子进程、stdio JSON 消息与事件通道；`Event`/`Prompt` 表达回复、审批、问题及连接状态 | 依赖配置、serde_json 和标准库，不依赖 UI 或 HTTP 客户端。自定义模型/提供方通过 -c 覆盖（JSON 字符串编码兼容 TOML），provider=lexington_api、wire_api=responses、requires_openai_auth=false；Key 仅传 LEXINGTON_MODEL_API_KEY 子进程环境，关闭模式显式移除变量，不修改用户 Codex 配置；初始化/流式事件中的完整 Key 统一遮蔽。启动 initialize → initialized → thread/start，输入可等待初始化，忙碌提示使用 Lexington 名称；一次程序运行复用一个 thread；保留 thread/start 返回的原始 approvalPolicy，逐轮明确传入 never 或原始策略，兼容字符串和 granular 对象，防止 turn/start 的持久覆盖导致关闭开关后仍无需审批；不覆盖沙箱。后台线程隔离阻塞读取，唤醒回调仅通知 UI。ACK 超时 30 秒，生成不限时；按 thread/turn 及请求 ID 关联，忽略过期 ACK；文本增量与最终 item 分开处理。缓存 item/started 中命令与文件 diff 用于审批，不支持的服务器请求返回 -32601。退出、重启或连接失败须终止并回收子进程；Unix 通过独立进程组与 libc 清理启动器及后代，先关 stdin 再回收并 join 读线程，防止后代持有 stdout 导致退出卡住；Windows 隐藏且挂起启动原生 exe，加入 kill-on-close Job Object 后恢复主线程，退出清理整棵进程树；默认补查 PATH、用户 CLI 目录及 npm 原生 vendor 的 codex/、bin/ 布局，不执行 .cmd/Node；command 构建独立以验证参数和环境隔离。不记录协议原文/凭据 |
+| `backend/codex.rs` | `Client::start/submit(text, no_approval)/interrupt/reply/poll` 管理 app-server 子进程、stdio JSON 消息与事件通道；`Event`/`Prompt` 表达回复、审批、问题及连接状态 | 依赖配置、serde_json 和标准库，不依赖 UI 或 HTTP 客户端。自定义模型/提供方通过 -c 覆盖（JSON 字符串编码兼容 TOML），provider=lexington_api、wire_api=responses、requires_openai_auth=false；Key 仅传 LEXINGTON_MODEL_API_KEY 子进程环境，关闭模式显式移除变量，不修改用户 Codex 配置；初始化/流式事件中的完整 Key 统一遮蔽。启动 initialize → initialized → thread/start，输入可等待初始化，忙碌提示使用 Lexington 名称；同一角色会话复用一个 thread，切换角色新建 thread；保留 thread/start 返回的原始 approvalPolicy，逐轮明确传入 never 或原始策略，兼容字符串和 granular 对象，防止 turn/start 的持久覆盖导致关闭开关后仍无需审批；不覆盖沙箱。后台线程隔离阻塞读取，唤醒回调仅通知 UI。ACK 超时 30 秒，生成不限时；按 thread/turn 及请求 ID 关联，忽略过期 ACK；文本增量与最终 item 分开处理。缓存 item/started 中命令与文件 diff 用于审批，不支持的服务器请求返回 -32601。退出、重启或连接失败须终止并回收子进程；Unix 通过独立进程组与 libc 清理启动器及后代，先关 stdin 再回收并 join 读线程，防止后代持有 stdout 导致退出卡住；Windows 隐藏且挂起启动原生 exe，加入 kill-on-close Job Object 后恢复主线程，退出清理整棵进程树；默认补查 PATH、用户 CLI 目录及 npm 原生 vendor 的 codex/、bin/ 布局，不执行 .cmd/Node；command 构建独立以验证参数和环境隔离。不记录协议原文/凭据 |
 | `backend/weather.rs` | `City::validate` 校验选定地点；`Client::start/send/poll` 通过有界通道在单个工作线程中搜索城市和查询三天预报；解析 WMO 天气代码并生成中文文本 | ureq + Rustls HTTPS 直连 Open-Meteo 地理编码/预报接口，不经过 Codex，不依赖 egui；请求总超时 10 秒、禁重定向、响应限制 1 MiB、待处理队列 4。按城市及请求日缓存 30 分钟，更新失败可显示同城同日 6 小时内旧数据并注明；缓存只在内存，含更新时间/时区和来源。退出丢弃队列并回收线程，最多等待当前有超时请求。测试用本地 HTTP 夹具覆盖编码、缓存/换城、超时/非法/超大数据及无损配置保存 |
 | `backend/alarm.rs` | `AlarmState::load/save/toggle/delete/poll/dismiss` 管理多个本地时间闹钟、调度与待确认提醒 | 不依赖 UI；时间严格 HH:MM，提示语 1～500 字符；一次性闹钟响后关闭，每天重复按 libc mktime 计算下一本地日期，不能固定加 86400 秒，跳过 DST 不存在时间。设置时间已过时安排下一次；启用重新计算；到期（含休眠/停机错过）每个闹钟只补一次并推进到未来，pending 跨重启保存；同时到期合并，重启不重复。普通/开发记录隔离，0600 临时文件同步后原子替换，保存失败不提交内存，损坏数据拒绝覆盖。含同时触发、重复/错过、重启、校验、编辑启停删除与存储失败测试 |
 | `backend/clock.rs` | `ClockState::load/observe/toggle/edit/undo/poll` 管理本地日期的自动确认、手动打卡、时间修正、撤销和一次性下班提醒；`now/local_time` 处理时间戳与本地时间 | 依赖配置、serde、标准库及 tools/time 跨平台 libc 本地时间转换，不依赖 UI。自动开始须持续活跃默认 180 秒，回溯首次操作；空闲满 60 秒、锁屏/不可用样本、采样间隔超过 10 秒、时钟跳变均重置确认，确认终点须有新操作。每天自动一次，手动取消、撤销或提醒后当天不再自动开始；跨本地日期重置。记录立即原子保存，失败不提交内存状态；起点、已处理和已提醒状态跨启动恢复，开发模式隔离；编辑拒绝未来或不存在的本地时间。含模拟时钟、断档、持久化、撤销、编辑和存储错误测试 |

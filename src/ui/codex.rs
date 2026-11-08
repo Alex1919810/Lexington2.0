@@ -13,14 +13,20 @@ impl Pet {
         self.codex_restart_pending = false;
         // Drop the previous process before replacing it, so restarts cannot leave orphan servers.
         self.codex = None;
+        self.codex_character = Some(self.library.character.clone());
+        self.codex_messages.clear();
+        self.text.clear();
         self.busy = false;
         self.external_turn = false;
         self.codex_prompts.clear();
         self.error.clear();
         let ctx = ctx.clone();
-        match Client::start(&self.config.codex, &self.root, move || {
-            ctx.request_repaint()
-        }) {
+        match Client::start(
+            &self.config.codex,
+            &self.root,
+            &self.library.character,
+            move || ctx.request_repaint(),
+        ) {
             Ok(client) => {
                 self.codex = Some(client);
                 self.codex_status = "正在连接…".into();

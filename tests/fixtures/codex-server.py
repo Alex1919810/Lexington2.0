@@ -61,6 +61,11 @@ for line in sys.stdin:
     elif method == "thread/start":
         assert os.path.isabs(params["cwd"])
         assert os.path.samefile(params["cwd"], os.getcwd())
+        assert 'baseInstructions' not in params
+        if mode == "persona":
+            assert params.get("developerInstructions") == "角色甲\n只属于甲"
+        else:
+            assert "developerInstructions" not in params
         send({"id": message["id"], "result": {"thread": {"id": thread}, "approvalPolicy": {"granular": {"sandbox_approval": True, "rules": False, "skill_approval": True, "request_permissions": True, "mcp_elicitations": True}} if mode == "granular" else "on-request"}})
     elif method == "turn/start":
         assert params["threadId"] == thread
@@ -80,7 +85,9 @@ for line in sys.stdin:
             continue
         if text not in ("fast", "late-ack"):
             send({"id": message["id"], "result": {"turn": {"id": turn}}})
-        if text == "descendant":
+        if text == "persona-status":
+            complete(params.get("developerInstructions", "turn-has-no-persona") + ":" + str(count))
+        elif text == "descendant":
             child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
             complete(str(child.pid))
         elif text == "approve":

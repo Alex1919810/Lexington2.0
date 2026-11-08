@@ -1,5 +1,64 @@
 use super::resources::{self, Illustration};
 use std::path::Path;
+use std::{collections::BTreeMap, fs, io::Read, path::PathBuf};
+
+#[derive(Default, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct AgentRegistry {
+    default_character: Option<String>,
+    characters: BTreeMap<String, PathBuf>,
+}
+
+fn read_agent_file(path: &Path) -> Result<String, String> {
+    let mut text = String::new();
+    fs::File::open(path)
+        .and_then(|file| file.take(65537).read_to_string(&mut text))
+        .map_err(|_| "无法读取角色设定文件，请检查文件是否存在及 UTF-8 编码。".to_owned())?;
+    if text.len() > 65536 {
+        return Err("角色设定文件不能超过 64 KiB。".into());
+    }
+    Ok(text)
+}
+
+fn agent_registry(root: &Path) -> Result<AgentRegistry, String> {
+    let path = root.join("resource/agents/characters.json");
+    if !path.try_exists().map_err(|_| "无法检查角色配置文件。")? {
+        return Ok(AgentRegistry::default());
+    }
+    serde_json::from_str(&read_agent_file(&path)?)
+        .map_err(|_| "角色配置 characters.json 格式错误。".into())
+}
+
+/// Unconfigured characters use a fresh neutral session, never another character's persona.
+pub fn agent_instructions(root: &Path, character: &str) -> Result<Option<String>, String> {
+    let registry = agent_registry(root)?;
+    let Some(relative) = registry.characters.get(character) else {
+        return Ok(None);
+    };
+    if relative.extension().is_none_or(|ext| ext != "md")
+        || relative
+            .components()
+            .any(|part| !matches!(part, std::path::Component::Normal(_)))
+    {
+        return Err("角色设定路径必须为 agents 目录内的相对 .md 路径。".into());
+    }
+    let directory = root
+        .join("resource/agents")
+        .canonicalize()
+        .map_err(|_| "角色设定目录不可用。")?;
+    let path = directory
+        .join(relative)
+        .canonicalize()
+        .map_err(|_| "找不到当前角色配置的 Markdown 设定。")?;
+    if !path.starts_with(&directory) {
+        return Err("角色设定不能指向 agents 目录之外。".into());
+    }
+    let text = read_agent_file(&path)?;
+    if text.trim().is_empty() {
+        return Err("当前角色的 Markdown 设定为空。".into());
+    }
+    Ok(Some(text))
+}
 
 /// Resource selection and format fallback, with no GPU or UI state.
 pub struct CharacterState {
@@ -88,7 +147,12 @@ impl CharacterState {
         self.illustrations = resources::illustrations(root);
         let names = self.characters();
         if !names.contains(&self.character) {
-            self.character = names.first().cloned().unwrap_or_default();
+            self.character = agent_registry(root)
+                .ok()
+                .and_then(|registry| registry.default_character)
+                .filter(|name| names.contains(name))
+                .or_else(|| names.first().cloned())
+                .unwrap_or_default();
         }
         if let Some(i) =
             old.and_then(|path| self.illustrations.iter().position(|ill| ill.path == path))
@@ -134,6 +198,57 @@ impl CharacterState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn character_agents_resolve_independently_and_reject_invalid_markdown() {
+        let root = std::env::temp_dir().join(format!("lexington-agents-{}", rand::random::<u64>()));
+        let directory = root.join("resource/agents");
+        fs::create_dir_all(&directory).unwrap();
+        assert!(agent_instructions(&root, "a").unwrap().is_none());
+        fs::write(
+            directory.join("characters.json"),
+            r#"{"defaultCharacter":"b","characters":{"a":"a.md","b":"b.md"}}"#,
+        )
+        .unwrap();
+        fs::write(directory.join("a.md"), "角色甲\n只属于甲").unwrap();
+        fs::write(directory.join("b.md"), "角色乙").unwrap();
+        assert_eq!(
+            agent_instructions(&root, "a").unwrap().as_deref(),
+            Some("角色甲\n只属于甲")
+        );
+        assert_eq!(
+            agent_instructions(&root, "b").unwrap().as_deref(),
+            Some("角色乙")
+        );
+        assert!(agent_instructions(&root, "unconfigured").unwrap().is_none());
+        for name in ["a", "b"] {
+            let artwork = root.join("resource/illustration").join(name).join("png");
+            fs::create_dir_all(&artwork).unwrap();
+            fs::write(artwork.join("normal.png"), []).unwrap();
+        }
+        let mut library = CharacterState::default();
+        library.refresh(&root);
+        assert_eq!(library.character, "b");
+        library.next_character(&root);
+        assert_eq!(library.character, "a");
+        library.refresh(&root);
+        assert_eq!(library.character, "a");
+        for contents in [Vec::new(), vec![b'x'; 65537], vec![0xff]] {
+            fs::write(directory.join("a.md"), contents).unwrap();
+            assert!(agent_instructions(&root, "a").is_err());
+        }
+        fs::remove_file(directory.join("a.md")).unwrap();
+        assert!(agent_instructions(&root, "a").is_err());
+        fs::write(
+            directory.join("characters.json"),
+            r#"{"characters":{"a":"../outside.md"}}"#,
+        )
+        .unwrap();
+        assert!(agent_instructions(&root, "a").is_err());
+        fs::write(directory.join("characters.json"), "invalid registry").unwrap();
+        assert!(agent_instructions(&root, "a").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn bundled_outfits_pair_both_ways_and_wrap_in_separate_queues() {

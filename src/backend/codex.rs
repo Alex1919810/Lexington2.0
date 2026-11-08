@@ -122,9 +122,11 @@ impl Client {
     pub fn start(
         config: &CodexConfig,
         root: &Path,
+        character: &str,
         wake: impl Fn() + Send + 'static,
     ) -> Result<Self, String> {
-        Self::launch(Self::command(config, root)?, wake)
+        let instructions = super::character::agent_instructions(root, character)?;
+        Self::launch(Self::command(config, root)?, instructions, wake)
     }
     fn command(config: &CodexConfig, root: &Path) -> Result<Command, String> {
         config.validate_connection()?;
@@ -215,7 +217,11 @@ impl Client {
         }
         Ok(command)
     }
-    fn launch(mut command: Command, wake: impl Fn() + Send + 'static) -> Result<Self, String> {
+    fn launch(
+        mut command: Command,
+        instructions: Option<String>,
+        wake: impl Fn() + Send + 'static,
+    ) -> Result<Self, String> {
         let secret = command
             .get_envs()
             .find(|(key, _)| *key == "LEXINGTON_MODEL_API_KEY")
@@ -307,7 +313,13 @@ impl Client {
                 let _ = events.send(event);
                 wake();
             };
-            let result = communicate(&mut stdin, &directory, receiver, &emit);
+            let result = communicate(
+                &mut stdin,
+                &directory,
+                instructions.as_deref(),
+                receiver,
+                &emit,
+            );
             // Reap on every exit path, including failed initialization and broken pipes.
             drop(stdin);
             owned_child.lock().unwrap().stop();
@@ -371,6 +383,7 @@ fn request(
 fn communicate(
     writer: &mut impl Write,
     directory: &Path,
+    instructions: Option<&str>,
     receiver: mpsc::Receiver<Input>,
     emit: &impl Fn(Event),
 ) -> Result<(), String> {
@@ -658,13 +671,11 @@ fn communicate(
                     match method {
                         "initialize" => {
                             write_message(writer, json!({"method":"initialized"}))?;
-                            request(
-                                writer,
-                                &mut pending,
-                                &mut next,
-                                "thread/start",
-                                json!({"cwd":directory}),
-                            )?;
+                            let mut params = json!({"cwd":directory});
+                            if let Some(instructions) = instructions {
+                                params["developerInstructions"] = instructions.into();
+                            }
+                            request(writer, &mut pending, &mut next, "thread/start", params)?;
                         }
                         "thread/start" => {
                             // turn/start overrides persist, so retain the local baseline to restore it.
@@ -700,6 +711,9 @@ fn communicate(
 #[cfg(test)]
 impl Client {
     pub(crate) fn mock(mode: &str) -> Self {
+        Self::mock_with_instructions(mode, None)
+    }
+    pub(crate) fn mock_with_instructions(mode: &str, instructions: Option<String>) -> Self {
         let mut command = Command::new(
             std::env::var_os("LEXINGTON_TEST_PYTHON")
                 .unwrap_or_else(|| if cfg!(windows) { "python" } else { "python3" }.into()),
@@ -714,12 +728,44 @@ impl Client {
                 mode,
             ])
             .current_dir(std::env::temp_dir().canonicalize().unwrap());
-        Self::launch(command, || {}).unwrap()
+        Self::launch(command, instructions, || {}).unwrap()
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn character_persona_is_sent_once_on_thread_start_and_turns_reuse_it() {
+        let root = std::env::temp_dir().join(format!(
+            "lexington-protocol-persona-{}",
+            rand::random::<u64>()
+        ));
+        let directory = root.join("resource/agents");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("characters.json"),
+            r#"{"characters":{"a":"a.md"}}"#,
+        )
+        .unwrap();
+        std::fs::write(directory.join("a.md"), "角色甲\n只属于甲").unwrap();
+        for (character, mode) in [("a", "persona"), ("unconfigured", "normal")] {
+            let instructions =
+                crate::backend::character::agent_instructions(&root, character).unwrap();
+            let client = Client::mock_with_instructions(mode, instructions);
+            for round in 1..=2 {
+                client.submit("persona-status".into(), false).unwrap();
+                let event = wait_for(&client, |event| {
+                    matches!(event, Event::Text { replace: true, .. })
+                });
+                assert!(
+                    matches!(event, Event::Text { text, .. } if text == format!("turn-has-no-persona:{round}"))
+                );
+                wait_for(&client, |event| matches!(event, Event::Finished { .. }));
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn native_launch_configuration_preserves_unicode_and_isolates_credentials() {
@@ -763,7 +809,7 @@ mod tests {
                     command.env_remove(key);
                 }
             }
-            let client = Client::launch(command, || {}).unwrap();
+            let client = Client::launch(command, None, || {}).unwrap();
             client.submit("确认配置".into(), false).unwrap();
             wait_for(&client, |event| {
                 matches!(event, Event::Finished { interrupted: false })
@@ -832,7 +878,7 @@ mod tests {
                 api_key: "fixture-key-not-a-real-secret".into(),
                 ..Default::default()
             };
-            let client = Client::start(&config, &root, || {}).unwrap();
+            let client = Client::start(&config, &root, "", || {}).unwrap();
             client.submit("确认配置".into(), false).unwrap();
             wait_for(&client, |event| {
                 matches!(event, Event::Finished { interrupted: false })

@@ -52,7 +52,7 @@ impl Pet {
                         "下一张正常立绘"
                     },
                     "切换 GIF/PNG 格式",
-                    "切换角色",
+                    "切换角色（结束当前 Codex 任务并新建会话）",
                     if self.clock_state.running() {
                         "点击终止计时"
                     } else {
