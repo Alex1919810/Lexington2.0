@@ -195,6 +195,7 @@ mod tests {
             std::path::PathBuf::from("resource/illustration/lexington/gif/WeddingDress_Normal.gif"),
             std::path::PathBuf::from("resource/illustration/lexington/live2d/WeddingDress_Normal"),
             std::path::PathBuf::from("resource/illustration/lexington/live2d/BiKiNi_Normal"),
+            std::path::PathBuf::from("resource/illustration/lexington/live2d/Flower_Normal"),
         ];
         while let Some(relative) = pending.pop() {
             let source = repository.join(&relative);
@@ -322,6 +323,61 @@ mod tests {
         );
         if let Animation::Live { actor, .. } = &app.picture.as_ref().unwrap().decoder {
             assert_eq!(actor.parameters(3.7)["hat_angle"], 0.);
+        }
+        app.library.selected = app
+            .library
+            .illustrations
+            .iter()
+            .position(|i| i.format == "live2d" && i.outfit == "Flower" && !i.damaged);
+        app.load_picture(&ctx);
+        if let Animation::Live {
+            started, rendered, ..
+        } = &mut app.picture.as_mut().unwrap().decoder
+        {
+            *started = Instant::now() + Duration::from_secs(60);
+            *rendered = Duration::ZERO;
+        }
+        for point in [
+            [145., 278.],
+            [285., 230.],
+            [232., 118.],
+            [372., 226.],
+            [335., 345.],
+        ] {
+            click(&mut app, screen_point(point[0], point[1]));
+        }
+        // A Flower arm drag must not queue another arm action.
+        let from = screen_point(285., 230.);
+        run(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(from),
+                egui::Event::PointerButton {
+                    pos: from,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+        let to = from + egui::vec2(30., 15.);
+        run(&mut app, vec![egui::Event::PointerMoved(to)]);
+        run(
+            &mut app,
+            vec![egui::Event::PointerButton {
+                pos: to,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        );
+        if let Animation::Live { actor, .. } = &app.picture.as_ref().unwrap().decoder {
+            for value in actor.parameters(1.).values() {
+                assert_ne!(*value, 0.);
+            }
+            assert_eq!(actor.parameters(3.7)["arm_angle"], 0.);
+        } else {
+            panic!("Flower Live2D actor not selected");
         }
         assert!(app.text.is_empty());
         assert!(app.codex.is_none());

@@ -602,6 +602,197 @@ impl LayeredActor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn flower_screen_left_arm_skin_stays_in_front_of_swaying_hair() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resource/illustration/lexington/live2d/Flower_Normal/actor.json");
+        let bytes = std::fs::read(&path).unwrap();
+        let mut actor = LayeredActor::load(&path, &bytes).unwrap();
+        let mut still_hair = LayeredActor::load(&path, &bytes).unwrap();
+        let arm = actor
+            .model
+            .parts
+            .iter()
+            .position(|p| p.image == "left-arm.png")
+            .unwrap();
+        let hair = actor
+            .model
+            .parts
+            .iter()
+            .position(|p| p.image == "hair.png")
+            .unwrap();
+        assert!(actor.model.rig.is_none());
+        assert_eq!(actor.model.parts.len(), 14);
+        let probes = [
+            [210, 225],
+            [210, 226],
+            [210, 227],
+            [211, 227],
+            [210, 240],
+            [211, 240],
+            [211, 241],
+            [212, 239],
+            [211, 242],
+        ];
+        for [x, y] in probes {
+            assert_eq!(
+                actor.parts[arm].image.get_pixel(x, y),
+                actor.original.get_pixel(x, y)
+            );
+            assert_eq!(
+                actor.parts[hair].image.get_pixel(x, y)[3],
+                0,
+                "skin must not move with hair at {x},{y}"
+            );
+        }
+        still_hair.model.parts[hair].idle.as_mut().unwrap().angle = 0.;
+        for angle in [0., -2.2] {
+            actor
+                .model
+                .channels
+                .get_mut("bouquet_angle")
+                .unwrap()
+                .default = angle;
+            still_hair
+                .model
+                .channels
+                .get_mut("bouquet_angle")
+                .unwrap()
+                .default = angle;
+            for time in [1.5, 4.5] {
+                let matrix =
+                    actor.part_transform(&actor.model.parts[arm], &actor.parameters(time), time);
+                let frame = actor.render(time);
+                let baseline = still_hair.render(time);
+                // Interior probes stay opaque through both resampling passes;
+                // a free edge can legitimately show the hair behind the arm.
+                for [x, y] in [[210, 226], [210, 240], [211, 240]] {
+                    let p = render::apply(
+                        actor.root(time),
+                        render::apply(matrix, [x as f32, y as f32]),
+                    );
+                    let (x, y) = (p[0].round() as u32, p[1].round() as u32);
+                    assert_eq!(
+                        frame.get_pixel(x, y),
+                        baseline.get_pixel(x, y),
+                        "hair covered screen-left arm: angle={angle}, time={time}, pixel={x},{y}"
+                    );
+                }
+            }
+        }
+        let mut clicked = LayeredActor::load(&path, &bytes).unwrap();
+        assert!(clicked.click(render::apply(clicked.root(1.5), [211., 241.]), 1.5));
+        assert!(clicked.parameters(2.5)["bouquet_angle"] < 0.);
+    }
+    #[test]
+    fn flower_layers_keep_local_clicks_independent_and_return_to_shared_idle() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resource/illustration/lexington/live2d/Flower_Normal/actor.json");
+        let bytes = std::fs::read(&path).unwrap();
+        let mut a = LayeredActor::load(&path, &bytes).unwrap();
+        let start = 0.37;
+        for point in [
+            [145., 278.],
+            [285., 230.],
+            [232., 118.],
+            [372., 226.],
+            [335., 345.],
+        ] {
+            assert!(
+                a.click(render::apply(a.root(start), point), start),
+                "{point:?}"
+            );
+        }
+        assert_eq!(a.events.len(), 5);
+        assert!(!a.click(render::apply(a.root(start), [244., 213.]), start));
+        assert!(!a.click([0., 0.], start));
+        let values = a.parameters(start + 1.);
+        for channel in a.model.channels.keys() {
+            assert_ne!(values[channel], 0., "{channel}");
+        }
+        let arm = a
+            .model
+            .parts
+            .iter()
+            .find(|p| p.image == "right-arm.png")
+            .unwrap();
+        let bracelet = a
+            .model
+            .parts
+            .iter()
+            .find(|p| p.image == "bracelet.png")
+            .unwrap();
+        let time = start + 1.;
+        let matrix = a.part_transform(arm, &values, time);
+        assert_eq!(matrix, a.part_transform(bracelet, &values, time));
+        let moved = render::apply(a.root(time), render::apply(matrix, [285., 230.]));
+        assert!(a.click(moved, time));
+        assert!(!a.click(moved, time + 0.01));
+        let active = a.render(time);
+        let mut idle = LayeredActor::load(&path, &bytes).unwrap();
+        let baseline = idle.render(time);
+        for y in 143..159 {
+            for x in 235..257 {
+                assert_eq!(
+                    active.get_pixel(x, y),
+                    baseline.get_pixel(x, y),
+                    "face {x},{y}"
+                );
+            }
+        }
+        assert!(active.pixels().all(|p| p[3] != 0 || p.0 == [0; 4]));
+        assert_eq!(a.render(9.), idle.render(9.));
+        assert!(a.events.is_empty());
+    }
+    #[test]
+    #[ignore = "release Flower pose and continuous native rendering review"]
+    fn flower_native_review_frames() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resource/illustration/lexington/live2d/Flower_Normal/actor.json");
+        let bytes = std::fs::read(&path).unwrap();
+        let output = Path::new(env!("CARGO_MANIFEST_DIR")).join(".tools/flower-review");
+        std::fs::create_dir_all(&output).unwrap();
+        for (name, time) in [("hair-positive", 1.5), ("hair-negative", 4.5)] {
+            for angle in [0., -2.2] {
+                let mut a = LayeredActor::load(&path, &bytes).unwrap();
+                a.model.channels.get_mut("bouquet_angle").unwrap().default = angle;
+                let suffix = if angle == 0. { "" } else { "-bouquet" };
+                a.render(time)
+                    .save(output.join(format!("{name}{suffix}.png")))
+                    .unwrap();
+            }
+        }
+        for (name, phase) in [("neutral", 0.), ("middle", 0.5), ("extreme", 1.)] {
+            let mut a = LayeredActor::load(&path, &bytes).unwrap();
+            if phase != 0. {
+                for channel in a.model.channels.values_mut() {
+                    channel.default = if channel.range[0] < 0. {
+                        channel.range[0]
+                    } else {
+                        channel.range[1]
+                    } * phase;
+                }
+            }
+            a.render(0.)
+                .save(output.join(format!("{name}.png")))
+                .unwrap();
+        }
+        let mut a = LayeredActor::load(&path, &bytes).unwrap();
+        for (name, start) in [
+            ("bouquet", 0.37),
+            ("arm", 0.71),
+            ("hat", 1.11),
+            ("ribbon", 1.43),
+            ("butterflies", 1.73),
+        ] {
+            assert!(trigger(&a.model.actions, &mut a.events, name, start));
+        }
+        for i in 0..=180 {
+            a.render(f64::from(i) / 30.)
+                .save(output.join(format!("{i:03}.png")))
+                .unwrap();
+        }
+    }
     fn actor() -> LayeredActor {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("resource/illustration/lexington/live2d/BiKiNi_Normal/actor.json");

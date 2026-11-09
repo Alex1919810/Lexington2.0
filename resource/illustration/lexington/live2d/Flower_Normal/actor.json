@@ -1,0 +1,384 @@
+{
+  "format": "lexington-layered-actor-1",
+  "canvas": [
+    512,
+    512
+  ],
+  "original": "original.png",
+  "background": "garden.png",
+  "foreground": "body.png",
+  "fixed_background": true,
+  "breath_body_only": true,
+  "root_pivot": [
+    237.5,
+    479
+  ],
+  "sway": {
+    "period": 6,
+    "angle": 0.12,
+    "dx": 0.18
+  },
+  "breath": {
+    "period": 3,
+    "center": [
+      243,
+      211
+    ],
+    "radii": [
+      32,
+      34
+    ],
+    "dx_scale": 0.008,
+    "dy": -0.65
+  },
+  "channels": {
+    "bouquet_angle": {
+      "default": 0,
+      "range": [
+        -2.2,
+        0
+      ]
+    },
+    "arm_angle": {
+      "default": 0,
+      "range": [
+        0,
+        1.8
+      ]
+    },
+    "hat_angle": {
+      "default": 0,
+      "range": [
+        -1.8,
+        0
+      ]
+    },
+    "ribbon_angle": {
+      "default": 0,
+      "range": [
+        0,
+        2.6
+      ]
+    },
+    "butterflies_angle": {
+      "default": 0,
+      "range": [
+        0,
+        9.0
+      ]
+    }
+  },
+  "actions": {
+    "bouquet": {
+      "duration": 2.8,
+      "tracks": {
+        "bouquet_angle": [
+          [
+            0,
+            0,
+            "smooth"
+          ],
+          [
+            0.9799999999999999,
+            -2.2,
+            "smooth"
+          ],
+          [
+            1.68,
+            -2.2,
+            "smooth"
+          ],
+          [
+            2.8,
+            0,
+            "linear"
+          ]
+        ]
+      }
+    },
+    "arm": {
+      "duration": 2.6,
+      "tracks": {
+        "arm_angle": [
+          [
+            0,
+            0,
+            "smooth"
+          ],
+          [
+            0.9099999999999999,
+            1.8,
+            "smooth"
+          ],
+          [
+            1.56,
+            1.8,
+            "smooth"
+          ],
+          [
+            2.6,
+            0,
+            "linear"
+          ]
+        ]
+      }
+    },
+    "hat": {
+      "duration": 2.4,
+      "tracks": {
+        "hat_angle": [
+          [
+            0,
+            0,
+            "smooth"
+          ],
+          [
+            0.84,
+            -1.8,
+            "smooth"
+          ],
+          [
+            1.44,
+            -1.8,
+            "smooth"
+          ],
+          [
+            2.4,
+            0,
+            "linear"
+          ]
+        ]
+      }
+    },
+    "ribbon": {
+      "duration": 3.2,
+      "tracks": {
+        "ribbon_angle": [
+          [
+            0,
+            0,
+            "smooth"
+          ],
+          [
+            1.1199999999999999,
+            2.6,
+            "smooth"
+          ],
+          [
+            1.92,
+            2.6,
+            "smooth"
+          ],
+          [
+            3.2,
+            0,
+            "linear"
+          ]
+        ]
+      }
+    },
+    "butterflies": {
+      "duration": 1.8,
+      "tracks": {
+        "butterflies_angle": [
+          [
+            0,
+            0,
+            "smooth"
+          ],
+          [
+            0.63,
+            9.0,
+            "smooth"
+          ],
+          [
+            1.08,
+            9.0,
+            "smooth"
+          ],
+          [
+            1.8,
+            0,
+            "linear"
+          ]
+        ]
+      }
+    }
+  },
+  "parts": [
+    {
+      "image": "ribbon.png",
+      "mask": "ribbon-mask.png",
+      "pivot": [
+        325.0,
+        245.0
+      ],
+      "foreground": false,
+      "fill_background": false,
+      "channel": "ribbon_angle",
+      "action": "ribbon"
+    },
+    {
+      "image": "hair.png",
+      "mask": "hair-mask.png",
+      "pivot": [
+        223.5,
+        151.5
+      ],
+      "foreground": false,
+      "fill_background": false,
+      "idle": {
+        "period": 6,
+        "angle": 2.0
+      }
+    },
+    {
+      "image": "hat-back.png",
+      "mask": "hat-back-mask.png",
+      "pivot": [
+        244.0,
+        128.0
+      ],
+      "foreground": false,
+      "fill_background": false,
+      "channel": "hat_angle",
+      "action": "hat"
+    },
+    {
+      "image": "bouquet.png",
+      "mask": "bouquet-mask.png",
+      "pivot": [
+        213.0,
+        211.0
+      ],
+      "foreground": false,
+      "fill_background": false,
+      "channel": "bouquet_angle",
+      "action": "bouquet"
+    },
+    {
+      "image": "left-arm.png",
+      "mask": "left-arm-mask.png",
+      "pivot": [
+        213.0,
+        211.0
+      ],
+      "foreground": false,
+      "fill_background": false,
+      "channel": "bouquet_angle",
+      "action": "bouquet"
+    },
+    {
+      "image": "butterfly-1.png",
+      "mask": "butterfly-1-mask.png",
+      "pivot": [
+        113.75,
+        358.5
+      ],
+      "foreground": false,
+      "fill_background": false,
+      "channel": "butterflies_angle",
+      "action": "butterflies"
+    },
+    {
+      "image": "butterfly-2.png",
+      "mask": "butterfly-2-mask.png",
+      "pivot": [
+        336.0,
+        346.0
+      ],
+      "foreground": false,
+      "fill_background": false,
+      "channel": "butterflies_angle",
+      "action": "butterflies"
+    },
+    {
+      "image": "butterfly-3.png",
+      "mask": "butterfly-3-mask.png",
+      "pivot": [
+        339.5,
+        421.25
+      ],
+      "foreground": false,
+      "fill_background": false,
+      "channel": "butterflies_angle",
+      "action": "butterflies"
+    },
+    {
+      "image": "petals.png",
+      "mask": "petals-mask.png",
+      "pivot": [
+        245.0,
+        328.5
+      ],
+      "foreground": false,
+      "fill_background": false,
+      "idle": {
+        "period": 6,
+        "angle": 1.2
+      }
+    },
+    {
+      "image": "bracelet-back.png",
+      "mask": "bracelet-back-mask.png",
+      "pivot": [
+        275.0,
+        196.5
+      ],
+      "foreground": true,
+      "fill_background": false,
+      "channel": "arm_angle",
+      "action": "arm"
+    },
+    {
+      "image": "right-arm.png",
+      "mask": "right-arm-mask.png",
+      "pivot": [
+        275.0,
+        196.5
+      ],
+      "foreground": true,
+      "fill_background": false,
+      "channel": "arm_angle",
+      "action": "arm"
+    },
+    {
+      "image": "bracelet.png",
+      "mask": "bracelet-mask.png",
+      "pivot": [
+        275.0,
+        196.5
+      ],
+      "foreground": true,
+      "fill_background": false,
+      "channel": "arm_angle",
+      "action": "arm"
+    },
+    {
+      "image": "hat-front.png",
+      "mask": "hat-front-mask.png",
+      "pivot": [
+        244.0,
+        128.0
+      ],
+      "foreground": true,
+      "fill_background": false,
+      "channel": "hat_angle",
+      "action": "hat"
+    },
+    {
+      "image": "sleeve.png",
+      "mask": "sleeve-mask.png",
+      "pivot": [
+        273.5,
+        192.5
+      ],
+      "foreground": true,
+      "fill_background": false,
+      "idle": {
+        "period": 6,
+        "angle": 0
+      }
+    }
+  ]
+}

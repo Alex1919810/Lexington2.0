@@ -108,6 +108,7 @@ integrations/
 scripts/
 ├── AGENTS.md
 ├── build-bikini-live2d-v2.py
+├── build-flower-live2d.py
 ├── import-live2d.py
 ├── install-linux.sh
 ├── install-windows.ps1
@@ -148,6 +149,13 @@ resource/runtime/windows-x86_64/
 ├── LICENSE
 └── ThirdPartyNotices.txt
 resource/illustration/lexington/live2d-drafts/   # 本地临时目录，Git 忽略，非仓库文件
+resource/illustration/lexington/live2d/Flower_Normal/
+├── actor.json / README.txt
+├── original.png / garden.png / body.png
+├── hair.png / left-arm.png / right-arm.png / bouquet.png / ribbon.png
+├── hat-back.png / hat-front.png / bracelet-back.png / bracelet.png / sleeve.png
+├── butterfly-1.png / butterfly-2.png / butterfly-3.png / petals.png
+└── 各部件对应 *-mask.png；正式目录仅保留运行引用及说明
 resource/illustration/lexington/live2d/BiKiNi_Normal/
 ├── actor.json / README.txt
 ├── original.png / roots.png / body.png
@@ -189,6 +197,11 @@ resource/illustration/lexington/live2d/WeddingDress_Normal/
 
 项目技能 `.agents/skills/unified-live2d/` 的制作/头发/验收参考包含连续表面、边缘振铃、帽发遮挡、补发覆盖及中位停顿的处理；Lexington 参考区分两种原生格式和临时草稿/正式交付边界。技能不授予提交或推送权限。
 
+- Flower_Normal 从 `png/Flower_Normal.png` 制作，保留源 PNG/GIF。内置 imagegen 分别补齐躯干、头发、左右臂和配饰图集，实际输出 1254×1254；`scripts/build-flower-live2d.py` 在预乘 alpha 中配准为 512×512 的 `lexington-layered-actor-1`。可见原画像素按互斥 ownership 分配，AI 补图仅进入原遮挡后方；透明区原 RGB 不当作可见杂色。完整生成图、提示和审核图在忽略的 `live2d-drafts/Flower_Normal`；默认草稿，`--publish` 最后原子替换 actor.json。离线制作需 NumPy/OpenCV/Pillow，运行与常规测试只依赖正式模型。
+- Flower 使用原画姿态及 14 个部件：固定躯干/脸/前发与花园底板，另有背发、双臂、花束、帽子前后层、手环前后层、右袖口遮挡、飘带、三只独立蝴蝶与花瓣。花束/持花臂共用肩轴 -2.2°、2.8 秒的小幅动作；右臂/手环 1.8°、帽子 -1.8°、飘带 2.6°、独立蝴蝶 9°。保留通道叠加、限量排队、躯干呼吸及全局 6 秒 ±2° 背发摆动，不增加眨眼。正式模型没有左肩袖重绘或胸前抬花 IK；相关实验素材留在忽略的制作目录。
+- 左右按屏幕方向；`left-arm.png` 为持花臂。保留内肘/前臂皮肤及近白高光归回手臂层的修复。`flower_screen_left_arm_skin_stays_in_front_of_swaying_hair` 检查原皮肤 RGBA、发层无误分皮肤、正负发摆极值与持花臂小幅动作叠加、该处点击，并固定为无 rig 的 14 部件模型。`flower_layers_keep_local_clicks_independent_and_return_to_shared_idle` 覆盖五类 alpha 命中、移动手臂命中、手环跟随、独立通道/限队列、脸部像素与归位到同一全局时刻待机；UI 既有用例显式选择 Flower，检查悬停逆变换点击和拖动不排队。
+- `flower_native_review_frames` 默认忽略，从正式模型输出静止/中间/极值、正负发摆叠加与 181 帧错相触发预览至 `.tools/flower-review`，不依赖草稿。恢复版正式资源与改动前快照逐文件比对，离线脚本复现全部 PNG 字节及相同 actor.json 数据；仅做 Live2D 相关增量测试，安装按项目规则同步 release、保留配置并安全重启。
+
 - BiKiNi_Normal 当前制作源为 `live2d-drafts/BiKiNi_Normal_v2/`；`live2d-drafts/` 已 Git 忽略，仅作本地临时制作；旧 `BiKiNi_Normal/` 草稿及旧切片脚本也在该目录存档。正式构建、运行和常规测试只依赖提交的 live2d 模型；`bikini_v2_review_frames` 也从正式目录生成快照。原图 1024×1024，模型 512×512，生成工具实际输出 1254×1254。完整板身、背发、身体清洁底板、整条扶帽臂、完整草帽分别生成；姿态参考整图仅作审核，未用整人重绘替换运行角色。
 - `scripts/build-bikini-live2d-v2.py` 读取 generated PNG、实测 `alignment.json` 和固定 ownership 快照，在预乘 alpha 中做仿射/TPS 配准；默认仅导出草稿 model，`--publish` 复制审核文件并最后原子替换 actor.json。离线需要 NumPy/OpenCV/Pillow，应用无需这些依赖。可用 `.tools/bikini-authoring/bin/python` 工具环境运行；这些临时输入不随 Git 分发，缺失时离线工具明确报错，不从旧运行纹理自动生成 ownership。原脸轮廓按 RGBA 恢复，身体可见核心沿用原画；肩部、整臂与完整板面使用配准后的连续生成纹理，避免将旧切片的遮挡边界拼回皮肤/板面造成内部色缝。生成提示、原始文件与配准数据保留用于复核。
 - 待机呼吸仅作用身体，整体摇摆 6 秒；冲浪板 ±3.5°，背发以 (258,145) 为轴整束刚性旋转、6 秒 ±6°，发根由固定头部遮挡。抬帽轨道保留 `hat_angle` 控制名（0..6），实际驱动固定弯曲侧两骨 IK，腕部最多上移 8px，整条手臂共享连续蒙皮网格，帽子跟随前臂刚性变换，不是完整脱帽。脸与躯干不跟随手臂动作拉伸。`pose-review.png` 展示静止/中间/极值，`review.gif` 和 `detail.gif` 直接来自原生 Rust 连续渲染，属于审核预览；交互另用实际窗口验收。
@@ -205,7 +218,7 @@ resource/illustration/lexington/live2d/WeddingDress_Normal/
 - 制作缩图在预乘 alpha 中使用 OpenCV INTER_AREA 正权面积滤波；Lanczos 负瓣曾在腿外产生相隔一像素的 alpha 1..4 振铃点，反预乘后 RGB 极端。禁止通过全轮廓形态开运算/硬阈值补救，否则细边变成硬台阶；只移除微小游离连通块。330px 以下无移动物体，身体保留面积缩图后的原画完整 RGBA。新增回归覆盖虚高头皮、帽沿前景、外侧振铃点和腿部一致性。
 
 - 固定栈在移动部件包围盒以外也必须返回背景与身体合成，不能退回 original；否则腿部/外围会重新出现已清理的原始边缘像素。旧分区模式仍保留 original 回退。回归检查包围盒外不恢复源图杂色，以及头发两侧极值保持距离。
-- `LayeredActor` 支持可选 rig、部件骨骼 binding 与 mesh；`mesh.rs` 处理共享顶点的三角网格：anchored 网格按权重固定发根，arm 网格按 root/upper/lower 权重连续变形。验证顶点数 3..2048、索引数 ≤12288、有限坐标/权重及非退化三角形；arm 必须关联 rig，权重和为 1。固定 IK 分支并在通道范围采样验证腕部可达，骨段 scale=1。共享边界像素直接写入而非重复 alpha-over，避免网格对角线色缝。
+- `LayeredActor` 支持可选 rig、部件骨骼 binding 与 mesh；`mesh.rs` 处理共享顶点的三角网格：anchored 网格按权重固定发根，arm 网格按 root/upper/lower 权重连续变形。验证顶点数 3..2048、索引数 ≤12288、有限坐标/权重及非退化三角形；arm 必须关联 rig，权重和为 1。固定 IK 分支并在通道范围采样验证腕部可达，单通道 target_delta 每单位位移不超过 3px，骨段 scale=1。共享边界像素直接写入而非重复 alpha-over，避免网格对角线色缝。
 - `fixed_background=true` 时所有姿态使用同一图层栈，不按旧新多边形覆盖差扣底图；包围盒包含遮罩及实际纹理 alpha。完整帽子使用单个 `front_mask` 进行深度归属：完整帽在发束/身体后与完整帽在前两种合成结果之间插值，同一纹理只重采样一次，不分别裁切前后半透明帽沿再叠加。`background_above_depth=true` 将静态根层放到后帽沿前、其他后景部件后；前帽沿仍按遮罩盖住根层，后帽沿命中同时受根层 alpha 遮挡。此选项默认 false，只允许固定背景且有深度部件的模型。只允许一个深度部件，不与其他 foreground 部件混用。
 - `breath_body_only=true` 时呼吸只在静态身体取样阶段施加，手臂/帽/板不受躯干位移场挤压；最终统一根变换。兼容旧模型的整层呼吸及固定轴部件。缓存仅最新姿态，网格临时栅格化，不缓存整段 RGBA；零 alpha RGB 归零。
 - 命中逆当前根、部件或网格变换，按同一深度归属检查可见 alpha（≥8/255）；非交互发束也阻挡后方帽子，身体遮挡后景，帽子/扶帽臂触发 hat，板触发 board。点击采样已显示帧时间，待机不重启，同通道限队列，拖动排除短按。
