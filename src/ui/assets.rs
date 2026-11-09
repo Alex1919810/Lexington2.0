@@ -189,7 +189,33 @@ mod tests {
         use crate::ui::app::Pet;
         let ctx = egui::Context::default();
         ctx.style_mut(|s| s.animation_time = 0.);
-        let mut app = Pet::from_context(&ctx, true);
+        let root = tempfile::tempdir().unwrap();
+        let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut pending = vec![
+            std::path::PathBuf::from("resource/illustration/lexington/gif/WeddingDress_Normal.gif"),
+            std::path::PathBuf::from("resource/illustration/lexington/live2d/WeddingDress_Normal"),
+            std::path::PathBuf::from("resource/illustration/lexington/live2d/BiKiNi_Normal"),
+        ];
+        while let Some(relative) = pending.pop() {
+            let source = repository.join(&relative);
+            if source.is_dir() {
+                for entry in std::fs::read_dir(source).unwrap() {
+                    pending.push(relative.join(entry.unwrap().file_name()));
+                }
+            } else {
+                let destination = root.path().join(relative);
+                std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+                std::fs::copy(source, destination).unwrap();
+            }
+        }
+        let mut app = Pet::from_root(&ctx, true, root.path().to_path_buf());
+        // Pin this regression to the legacy outfit as the library grows.
+        app.library.selected = app
+            .library
+            .illustrations
+            .iter()
+            .position(|i| i.format == "gif" && i.outfit == "WeddingDress" && !i.damaged);
+        app.load_picture(&ctx);
         let run = |app: &mut Pet, events| {
             let _ = ctx.run(
                 egui::RawInput {
@@ -240,6 +266,65 @@ mod tests {
             panic!("Live2D actor not selected");
         }
         assert!(app.text.is_empty());
+        app.library.selected = app
+            .library
+            .illustrations
+            .iter()
+            .position(|i| i.format == "live2d" && i.outfit == "BiKiNi" && !i.damaged);
+        app.load_picture(&ctx);
+        if let Animation::Live {
+            started, rendered, ..
+        } = &mut app.picture.as_mut().unwrap().decoder
+        {
+            *started = Instant::now() + Duration::from_secs(60);
+            *rendered = Duration::ZERO;
+        }
+        // The square canvas fits a 450px pet rect, then hover scales it by 1.05.
+        let screen_point = |x: f32, y: f32| {
+            egui::pos2(
+                400. + (x - 256.) * 450. / 512. * 1.05,
+                295. + (y - 256.) * 450. / 512. * 1.05,
+            )
+        };
+        click(&mut app, screen_point(110., 230.));
+        click(&mut app, screen_point(225., 110.));
+        if let Animation::Live { actor, .. } = &app.picture.as_ref().unwrap().decoder {
+            let p = actor.parameters(0.9);
+            assert!(p["board_angle"] > 0.);
+            assert_eq!(p["hat_angle"], 6.);
+        } else {
+            panic!("Bikini Live2D actor not selected");
+        }
+        // A drag starting over the hat must not enqueue another local action.
+        let from = screen_point(225., 110.);
+        run(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(from),
+                egui::Event::PointerButton {
+                    pos: from,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+        let to = from + egui::vec2(30., 15.);
+        run(&mut app, vec![egui::Event::PointerMoved(to)]);
+        run(
+            &mut app,
+            vec![egui::Event::PointerButton {
+                pos: to,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        );
+        if let Animation::Live { actor, .. } = &app.picture.as_ref().unwrap().decoder {
+            assert_eq!(actor.parameters(3.7)["hat_angle"], 0.);
+        }
+        assert!(app.text.is_empty());
+        assert!(app.codex.is_none());
     }
     #[test]
     fn compact_alpha_grid_matches_pixel_max_for_uneven_dimensions() {

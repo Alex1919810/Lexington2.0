@@ -25,6 +25,17 @@ class WindowAttributes(C.Structure):
                 ("override_redirect", I), ("colormap", W), ("cursor", W)]
 
 
+class WindowState(C.Structure):
+    _fields_ = [("x", I), ("y", I), ("width", I), ("height", I),
+                ("border_width", I), ("depth", I), ("visual", D), ("root", W),
+                ("window_class", I), ("bit_gravity", I), ("win_gravity", I),
+                ("backing_store", I), ("backing_planes", W), ("backing_pixel", W),
+                ("save_under", I), ("colormap", W), ("map_installed", I),
+                ("map_state", I), ("all_event_masks", C.c_long),
+                ("your_event_mask", C.c_long), ("do_not_propagate_mask", C.c_long),
+                ("override_redirect", I), ("screen", D)]
+
+
 def bind(lib, name, args, result=I):
     function = getattr(lib, name)
     function.argtypes, function.restype = args, result
@@ -39,6 +50,7 @@ bind(X, "XInternAtom", [D, C.c_char_p, I], W)
 bind(X, "XGetAtomName", [D, W], D)
 bind(X, "XFree", [D])
 bind(X, "XTranslateCoordinates", [D, W, W, I, I, C.POINTER(I), C.POINTER(I), C.POINTER(W)])
+bind(X, "XGetWindowAttributes", [D, W, C.POINTER(WindowState)])
 bind(X, "XGetGeometry", [D, W, C.POINTER(W), C.POINTER(I), C.POINTER(I), C.POINTER(U), C.POINTER(U), C.POINTER(U), C.POINTER(U)])
 bind(X, "XQueryPointer", [D, W, C.POINTER(W), C.POINTER(W), C.POINTER(I), C.POINTER(I), C.POINTER(I), C.POINTER(I), C.POINTER(U)])
 bind(X, "XSync", [D, I])
@@ -91,7 +103,9 @@ def main():
 
     def find(window, pid, depth=0):
         if property32(window, "_NET_WM_PID", 6) == [pid]:
-            return window
+            state = WindowState()
+            if X.XGetWindowAttributes(display, window, C.byref(state)) and state.map_state == 2:
+                return window
         if depth < 3:
             for child in children(window):
                 found = find(child, pid, depth + 1)
@@ -172,6 +186,12 @@ def main():
                 button(True)
                 button(False)
                 assert X.XCheckWindowEvent(display, underlying, 1 << 2, C.byref(event)), ("blank area blocked click", offset)
+            # GNOME may raise the receiver after a blank-area click. Restore
+            # test stacking before checking the pet's input shape.
+            X.XLowerWindow(display, underlying)
+            X.XRaiseWindow(display, window)
+            X.XSync(display, 0)
+            time.sleep(0.3)
             warp(original[0] + pet_point[0], original[1] + pet_point[1])
             button(True)
             button(False)

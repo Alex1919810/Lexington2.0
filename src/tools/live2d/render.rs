@@ -25,7 +25,7 @@ pub(super) struct Renderer {
     eye_mask: Vec<f32>,
     pose: Option<Pose>,
 }
-fn rgba(root: &Path, name: &str) -> Result<RgbaImage, String> {
+pub(super) fn rgba(root: &Path, name: &str) -> Result<RgbaImage, String> {
     let path = safe_path(root, name)?;
     let (w, h) = image::image_dimensions(&path).map_err(|_| "Live2D 图片无效。")?;
     if w == 0 || h == 0 || w > 4096 || h > 4096 {
@@ -68,7 +68,7 @@ fn floats(root: &Path, name: &str, len: usize) -> Result<Vec<f32>, String> {
     }
     Ok(values)
 }
-fn packed(p: &Rgba<u8>) -> [f32; 4] {
+pub(super) fn packed(p: &Rgba<u8>) -> [f32; 4] {
     let a = f32::from(p[3]) / 255.;
     [
         f32::from(p[0]) / 255. * a,
@@ -77,8 +77,11 @@ fn packed(p: &Rgba<u8>) -> [f32; 4] {
         a,
     ]
 }
-fn straight(p: [f32; 4]) -> Rgba<u8> {
+pub(super) fn straight(p: [f32; 4]) -> Rgba<u8> {
     let a = p[3].clamp(0., 1.);
+    if (a * 255.).round() == 0. {
+        return Rgba([0; 4]);
+    }
     Rgba([
         if a > 1e-7 {
             (p[0] / a * 255.).round().clamp(0., 255.) as u8
@@ -112,7 +115,7 @@ fn weights(x: f32, y: f32) -> [(i32, i32, f32); 4] {
         (ix + 1, iy + 1, a * b),
     ]
 }
-fn sample(image: &RgbaImage, x: f32, y: f32, clamp: bool) -> [f32; 4] {
+pub(super) fn sample(image: &RgbaImage, x: f32, y: f32, clamp: bool) -> [f32; 4] {
     let mut out = [0.; 4];
     for (mut x, mut y, w) in weights(x, y) {
         if clamp {
@@ -137,7 +140,7 @@ fn scalar(data: &[f32], w: u32, h: u32, x: f32, y: f32) -> f32 {
         })
         .sum()
 }
-fn apply(m: Matrix, p: [f32; 2]) -> [f32; 2] {
+pub(super) fn apply(m: Matrix, p: [f32; 2]) -> [f32; 2] {
     [
         m[0] * p[0] + m[1] * p[1] + m[2],
         m[3] * p[0] + m[4] * p[1] + m[5],
@@ -147,7 +150,7 @@ pub(super) fn inverse(m: Matrix, p: [f32; 2]) -> [f32; 2] {
     let p = [p[0] - m[2], p[1] - m[5]];
     [m[0] * p[0] + m[3] * p[1], m[1] * p[0] + m[4] * p[1]]
 }
-fn rotation(p: [f32; 2], angle: f32, dx: f32) -> Matrix {
+pub(super) fn rotation(p: [f32; 2], angle: f32, dx: f32) -> Matrix {
     let (s, c) = angle.to_radians().sin_cos();
     [
         c,
@@ -166,7 +169,7 @@ pub(super) fn root(m: &Model, time: f64) -> Matrix {
         m.shared_idle.sway.translation_x_px_per_wave * v,
     )
 }
-fn segment(a: [f32; 2], b: [f32; 2], c: [f32; 2], d: [f32; 2]) -> Matrix {
+pub(super) fn segment(a: [f32; 2], b: [f32; 2], c: [f32; 2], d: [f32; 2]) -> Matrix {
     let angle = (d[1] - c[1]).atan2(d[0] - c[0]) - (b[1] - a[1]).atan2(b[0] - a[0]);
     let (s, co) = angle.sin_cos();
     [
@@ -178,7 +181,7 @@ fn segment(a: [f32; 2], b: [f32; 2], c: [f32; 2], d: [f32; 2]) -> Matrix {
         c[1] - s * a[0] - co * a[1],
     ]
 }
-fn elbow(b: [[f32; 2]; 3], target: [f32; 2], pole: f32) -> [f32; 2] {
+pub(super) fn elbow(b: [[f32; 2]; 3], target: [f32; 2], pole: f32) -> [f32; 2] {
     let len = |a: [f32; 2], b: [f32; 2]| {
         (((a[0] - b[0]) as f64).powi(2) + ((a[1] - b[1]) as f64).powi(2)).sqrt()
     };

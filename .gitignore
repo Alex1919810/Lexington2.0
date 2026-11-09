@@ -42,3 +42,6 @@ yarn-error.log*
 
 # Native verification helpers
 __pycache__/
+
+# Temporary Live2D authoring workspaces
+live2d-drafts/

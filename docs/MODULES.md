@@ -81,6 +81,8 @@ src/
     ├── gif.rs
     ├── live2d/
     │   ├── mod.rs
+    │   ├── layered.rs
+    │   ├── mesh.rs
     │   └── render.rs
     ├── platform.rs
     ├── platform_windows.rs
@@ -105,6 +107,7 @@ integrations/
     └── lexington_menu.py
 scripts/
 ├── AGENTS.md
+├── build-bikini-live2d-v2.py
 ├── import-live2d.py
 ├── install-linux.sh
 ├── install-windows.ps1
@@ -144,6 +147,13 @@ resource/runtime/windows-x86_64/
 ├── manifest.json
 ├── LICENSE
 └── ThirdPartyNotices.txt
+resource/illustration/lexington/live2d-drafts/   # 本地临时目录，Git 忽略，非仓库文件
+resource/illustration/lexington/live2d/BiKiNi_Normal/
+├── actor.json / README.txt
+├── original.png / roots.png / body.png
+├── board.png / hair.png / arm.png / hat.png
+├── board-mask.png / hair-mask.png / arm-mask.png / hat-mask.png / hat-front-mask.png
+└── 正式目录仅保留 actor.json 引用资源及 README.txt
 resource/illustration/lexington/live2d/WeddingDress_Normal/
 ├── actor.json
 ├── source-actor.json
@@ -177,16 +187,35 @@ resource/illustration/lexington/live2d/WeddingDress_Normal/
 
 ## 原生 Live2D 风格角色
 
+项目技能 `.agents/skills/unified-live2d/` 的制作/头发/验收参考包含连续表面、边缘振铃、帽发遮挡、补发覆盖及中位停顿的处理；Lexington 参考区分两种原生格式和临时草稿/正式交付边界。技能不授予提交或推送权限。
+
+- BiKiNi_Normal 当前制作源为 `live2d-drafts/BiKiNi_Normal_v2/`；`live2d-drafts/` 已 Git 忽略，仅作本地临时制作；旧 `BiKiNi_Normal/` 草稿及旧切片脚本也在该目录存档。正式构建、运行和常规测试只依赖提交的 live2d 模型；`bikini_v2_review_frames` 也从正式目录生成快照。原图 1024×1024，模型 512×512，生成工具实际输出 1254×1254。完整板身、背发、身体清洁底板、整条扶帽臂、完整草帽分别生成；姿态参考整图仅作审核，未用整人重绘替换运行角色。
+- `scripts/build-bikini-live2d-v2.py` 读取 generated PNG、实测 `alignment.json` 和固定 ownership 快照，在预乘 alpha 中做仿射/TPS 配准；默认仅导出草稿 model，`--publish` 复制审核文件并最后原子替换 actor.json。离线需要 NumPy/OpenCV/Pillow，应用无需这些依赖。可用 `.tools/bikini-authoring/bin/python` 工具环境运行；这些临时输入不随 Git 分发，缺失时离线工具明确报错，不从旧运行纹理自动生成 ownership。原脸轮廓按 RGBA 恢复，身体可见核心沿用原画；肩部、整臂与完整板面使用配准后的连续生成纹理，避免将旧切片的遮挡边界拼回皮肤/板面造成内部色缝。生成提示、原始文件与配准数据保留用于复核。
+- 待机呼吸仅作用身体，整体摇摆 6 秒；冲浪板 ±3.5°，背发以 (258,145) 为轴整束刚性旋转、6 秒 ±6°，发根由固定头部遮挡。抬帽轨道保留 `hat_angle` 控制名（0..6），实际驱动固定弯曲侧两骨 IK，腕部最多上移 8px，整条手臂共享连续蒙皮网格，帽子跟随前臂刚性变换，不是完整脱帽。脸与躯干不跟随手臂动作拉伸。`pose-review.png` 展示静止/中间/极值，`review.gif` 和 `detail.gif` 直接来自原生 Rust 连续渲染，属于审核预览；交互另用实际窗口验收。
+
 侧栏顺序调整同时同步 `scripts/native-smoke.py` 的 clock 模式：打卡按钮距首个按钮中心偏移 300 像素；pin 模式及 PNG/GIF 按钮坐标保持。Linux x86_64 已用隔离 X11 实际点击打卡入口；相关验收见验证入口。
 
 - 侧栏在正常/Q版立绘切换按钮下方放置 L 按钮，其后依次为角色切换、打卡；存在当前角色的素材时可切换，当前模式高亮。默认仍为 GIF。目录为 resource/illustration/<角色>/live2d/<换装>_Normal/actor.json，个人角色可在 config/characters/<角色>/live2d 使用相同结构；_Damage 可选。换装前缀与 PNG/GIF 去掉最终状态后缀后的名称一致，例如 Lexington 的 WeddingDress_Normal。只扫描 actor.json 的模型目录；▶ 只遍历当前格式/状态，战损按钮仍需对应资源。
 - backend/resources 只发现路径和角色/换装/状态；CharacterState::can_toggle_live2d/toggle_live2d 保持角色，优先同换装、再匹配状态，无对应换装则选择该角色已有模型。退出 L 优先同换装 PNG，再回退 GIF；普通格式按钮仍切换 GIF/PNG。同角色格式切换保持 Codex 会话。select_first 的三格式回退处理仅有 PNG 或仅有 Live2D 的下一角色，刷新保留当前模型。
 - 首套资源来自用户提供的 unified-character-hair-assets.zip v4，位于 resource/illustration/lexington/live2d/WeddingDress_Normal。使用自定义 lexington-native-actor-1 格式，并非 Cubism moc3；不声称支持任意 Cubism 模型。actor.json 含相对文件引用、画布/原点、骨骼和固定 IK pole、图层、遮罩、呼吸向量场、头发参数、33 态局部眼部图集、动作轨道与热区。source-actor.json 仅保留原包描述，不由运行时解析。
-- tools/live2d::Actor::load/render/parameters/trigger/click 不依赖 UI；加载校验画布/图集/轨道/通道范围与文件尺寸、有限浮点值，资源路径 canonicalize 后必须留在模型内，拒绝绝对路径/上级路径。动作只允许列出的缓动名，不执行 JSON 中的公式、Python 或外部程序。画布最多 1024×1024 总像素、边长最多 2048，模型描述最多 64 KiB；不扫描 Codex 配置/登录。
+- BiKiNi_Normal 的原生资源位于 `live2d/BiKiNi_Normal/`，使用 `lexington-layered-actor-1`，由 Actor 分派到 `tools/live2d/layered.rs`，既有婚纱格式仍由原分层/IK 渲染器处理。两者共用通道/轨道校验、采样与限队列控制。新格式只接受同画布 PNG 部件、分区遮罩、背景补图、静态前景和模型数值，不执行素材脚本；引用沿用 canonicalize 路径限制。部件最多 16 个、局部通道默认角度 0、范围不超过 ±15°，固定轴保形旋转；可选 `idle:{period,angle}` 部件不绑定 action/channel，要求有限正周期、幅度 ≤15° 及 `fill_background=false`，避免持续发束摆动留下旧发。后景在前景部件之前。
+- Bikini 背发不再使用渐变 anchored 权重；整束 scale=1 旋转检查点间距离。部件 idle 角度使用独立的普通正弦 `angle*sin(2π*global_time/period)`，中位速度不为零；不复用躯干的 sin³ 包络，避免中位停顿。移动背发只保留 y≥160，生成头皮不混入背发；静态 `roots.png` 在头部/手臂后衔接移动发束；根部上沿沿后脑曲线延伸到太阳穴上方，不依赖 neutral 帽沿常数高度。生成旧手部留下的小片低覆盖按局部头侧支撑区延展邻近灰发纹理，边缘面积采样，避免抬帽露出矩形空洞。原画恢复的发区先排除完整臂域和静态身体所有权，防止上臂/泳装像素随头发摆动；RGB 沿有效发区距离平滑过渡，不能在旧手臂孔边界硬贴原发颜色形成亮色块。自由发梢沿用原画 RGBA，生成内容用于隐藏根部；臂/身体原遮挡区域保留生成背发，不能清成旧手臂形状的孔。
+- 冠部使用已配准的完整生成头部底板，顶部下移 1px 匹配原发顶点；134..143px 仅在发区渐变接回原画，143px 以下脸部保持原画。不能沿 neutral 帽发接触线裁掉抬帽时需要露出的头发。生成内部 alpha≥240 的实心冠发归为不透明，避免后帽沿透出；外侧 AA 保持。帽子 `front_mask` 为连续几何深度区域，与帽网 alpha、补发 alpha 分离；帽沿盖住隐藏重叠，帽网孔不会变成深度孔。原画帽沿恢复排除灰发像素，帽发接触 4px 带直接使用完整帽纹理，避免混色原画像素带起灰边；深度区域的曲线边界保留 1px 连续覆盖，而非二值硬边。花心不能用肤色阈值裁掉；手指孔跟随真实臂纹理。
+- 胸/腰外侧原画 alpha<255 时，身体底板 alpha 不能比原画更大；193..270px 右轮廓在原发/板背景处按原图肤色边界取样并解混最后一个像素，清掉生成肩部突起和板色残片。身体不能在原画边缘之外保留更宽的生成底板。回归同时检查恢复冠发、胸腰轮廓和发层不含原上臂肤色；抬帽 0/3/6 控制值下太阳穴支撑点 alpha≥250，帽接触纹理不含原灰发条。
+- 制作缩图在预乘 alpha 中使用 OpenCV INTER_AREA 正权面积滤波；Lanczos 负瓣曾在腿外产生相隔一像素的 alpha 1..4 振铃点，反预乘后 RGB 极端。禁止通过全轮廓形态开运算/硬阈值补救，否则细边变成硬台阶；只移除微小游离连通块。330px 以下无移动物体，身体保留面积缩图后的原画完整 RGBA。新增回归覆盖虚高头皮、帽沿前景、外侧振铃点和腿部一致性。
+
+- 固定栈在移动部件包围盒以外也必须返回背景与身体合成，不能退回 original；否则腿部/外围会重新出现已清理的原始边缘像素。旧分区模式仍保留 original 回退。回归检查包围盒外不恢复源图杂色，以及头发两侧极值保持距离。
+- `LayeredActor` 支持可选 rig、部件骨骼 binding 与 mesh；`mesh.rs` 处理共享顶点的三角网格：anchored 网格按权重固定发根，arm 网格按 root/upper/lower 权重连续变形。验证顶点数 3..2048、索引数 ≤12288、有限坐标/权重及非退化三角形；arm 必须关联 rig，权重和为 1。固定 IK 分支并在通道范围采样验证腕部可达，骨段 scale=1。共享边界像素直接写入而非重复 alpha-over，避免网格对角线色缝。
+- `fixed_background=true` 时所有姿态使用同一图层栈，不按旧新多边形覆盖差扣底图；包围盒包含遮罩及实际纹理 alpha。完整帽子使用单个 `front_mask` 进行深度归属：完整帽在发束/身体后与完整帽在前两种合成结果之间插值，同一纹理只重采样一次，不分别裁切前后半透明帽沿再叠加。`background_above_depth=true` 将静态根层放到后帽沿前、其他后景部件后；前帽沿仍按遮罩盖住根层，后帽沿命中同时受根层 alpha 遮挡。此选项默认 false，只允许固定背景且有深度部件的模型。只允许一个深度部件，不与其他 foreground 部件混用。
+- `breath_body_only=true` 时呼吸只在静态身体取样阶段施加，手臂/帽/板不受躯干位移场挤压；最终统一根变换。兼容旧模型的整层呼吸及固定轴部件。缓存仅最新姿态，网格临时栅格化，不缓存整段 RGBA；零 alpha RGB 归零。
+- 命中逆当前根、部件或网格变换，按同一深度归属检查可见 alpha（≥8/255）；非交互发束也阻挡后方帽子，身体遮挡后景，帽子/扶帽臂触发 hat，板触发 board。点击采样已显示帧时间，待机不重启，同通道限队列，拖动排除短按。
+- tools/live2d::Actor::load/render/click 不依赖 UI；加载校验画布/图集/轨道/通道范围与文件尺寸、有限浮点值，资源路径 canonicalize 后必须留在模型内，拒绝绝对路径/上级路径。动作只允许列出的缓动名，不执行 JSON 中的公式、Python 或外部程序。画布最多 1024×1024 总像素、边长最多 2048，模型描述最多 64 KiB；不扫描 Codex 配置/登录。
 - Actor 只接收调用方的单调秒数，待机使用持续全局时间，动作使用事件局部时间。不同通道可叠加，同通道至多排队一次重放，不能重置当前动作；完成时清理事件，首末轨道归默认值。头部椭圆只触发 blink（0.64 秒）；花束多边形只触发 bouquet（3.8 秒、最大抬升 10 像素），热点随抬花及根变换更新。先逆 UI 屏幕变换，再逆模型根旋转/平移命中。
 - tools/live2d/render.rs 使用裁剪原图层、固定方向两骨 IK 和 scale=1 的刚性臂/花束变换；预乘 alpha 双线性重采样，32 分之一像素权重。按原参考顺序恢复肩部/衣服遮罩，避免半透明层重复叠色；只对躯干呼吸，扩张/高斯平滑保护手臂、花束及独立发束。发束读取同一时钟、刚性旋转并恢复当前前景遮挡；眼部仅通过局部遮罩替换 RGB 并保留 alpha。最后统一施加一次模型根变换；缓存仅保留最近一份手部姿态及保护场，不缓存整段合成帧。
 - ui/assets::Picture 将 Raster 解码器或 Live Actor 装入枚举，UI 持有纹理与单调时钟。Live 以至多 30fps 更新纹理和 alpha 输入遮罩；tools 只输出 RGBA。模型自身提供根摇摆，ui/pet 保留悬停缩放/抬升并取消额外正弦悬浮，避免双重摇摆。Live 使用完整显示图像范围接收部位点击，短按触发局部动作；拖动不触发动作，未配置部位不触发随机台词或其他动作，右键入口保持。平台最终仍仅接收可见 alpha 和控件输入范围，不把整块透明画布变为原生可点击区域。
 - scripts/import-live2d.py 是本次原包的离线格式转换工具，读取 ZIP 中已验证的 NumPy rig/头发数组和 PNG，生成原生 PNG、16 位遮罩与 little-endian float32 场；不执行原包脚本，不覆盖已有输出目录。离线需要 NumPy/Pillow，参考视觉对照另需 OpenCV；应用、安装包和启动流程无 Python/Node/WebView/Cubism SDK 运行依赖。f32 资源禁止 Git 换行转换；现有资源目录复制流程自动分发模型。
+
+验证补充：`cargo test --locked live2d` 定向覆盖两套模型、限队列/移动热区、UI 点击/拖动、原画脸/躯干保留、遮挡命中、连续 IK 骨长、网格极值无翻折、共享边 alpha、固定底图、近 neutral 连续性与随动肘部接缝；头发覆盖探针跟随发束变换，取周围仍为实心纹理的内部点，不把固定世界位置的抗锯齿自由轮廓误判为接缝。`bikini_v2_review_frames`（release、ignored）输出静止/中间/极值；`bikini_continuous_seam_frames` 输出 181 帧（0.37s 点板、1.11s 点帽、发束持续摆动），生成 full/detail 审核 GIF。非周期触发、局部放大与中间帧必须人工查看，数值或连通性通过不能证明无颜色接缝。隔离 Xephyr + GNOME WM 验证实际穿透和部位点击，不用离屏 RGBA 替代窗口。测试不读取真实配置，不运行全量测试。
 
 验证：tools::live2d::tests:: 覆盖轨道边界、独立通道、重复点击限队列、移动热点、非法轨道及路径；ui::assets::tests::live2d_sidebar_and_transformed_body_clicks_trigger_only_local_actions 使用 egui 指针事件检查 L 入口、变换后头部/花束点击及不产生随机聊天。backend::character::tests:: 补测前缀、格式回退和模型刷新；其余受影响 Picture/GIF、pet transform 与侧栏用例定向回归，不运行全量测试。`cargo test --release --locked live2d_reference_frames -- --ignored --nocapture` 将固定五组原生像素样例写入忽略的 .tools/live2d-verify，包含待机、抬花极值、闭眼和叠加；本机对照原包 Python 参考，预乘 RGBA 的单通道平均差 ≤0.041/255，最大差 11/255，并查看并排图确认轮廓。单次 release 原生帧计算约 5.5～22.2ms，不含纹理上传/原生窗口，不作为性能保证。Linux x86_64 已补测 X11 穿透、打卡及 Xephyr + GNOME WM 拖动，见验证入口；模拟事件不能替代原生验证。
 
@@ -364,7 +393,7 @@ Windows 非阻塞字节管道使用 PeekNamedPipe 区分暂时无数据与断开
 | `tools/gif.rs` | `Decoder::load/advance` 返回当前 RgbaImage；支持 GIF/静态图片，控制隔帧播放、时序、循环次数、索引缓存与超限流式回退 | 不依赖 UI，不创建 GPU 纹理，不缓存合成帧。源帧 0、2、4…输出，各跳过帧先独立归一化延迟再合并到前一显示帧，奇数结尾保留，不跨循环合并，总时长不变。首轮缓存索引帧/调色板，96 MiB 预算仅针对单个当前 GIF，超限释放前缀并保持流式；完整缓存回放不重读源文件，循环时清空处置画布。保留透明索引、局部/全局调色板、交错帧及 Keep/Background/Previous：跳过 Keep 直接更新处置画布，跳过 Background 仅清区域，Previous 保留原画布，无需合成/上传被跳过帧的 RGBA。Finite(0) 视为无限，显式有限次数保留，原帧低于 20ms 按 100ms。回归覆盖无源文件回放、缓存超限、奇数/变延迟、跳过帧依赖、有限循环和 UI 纹理/透明遮罩；全量参考像素与合并延迟对比用 cargo test --release --locked bundled_frames_match_reference_decoder_pixel_for_pixel -- --ignored；frame_sampling_performance 用 --release --ignored --nocapture --test-threads=1 比较同等循环的原帧率/抽帧取帧，不含 UI/纹理开销 |
 | `tools/platform.rs` | `configure` 设置平台窗口属性；Linux `DragWindow::new/arm/update/configure/focus` 应用 X11 窗口提示和绝对坐标拖动；`window_at_pointer` 从原生指针下窗口层级查找当前进程/指定标题并返回真实位置；`move_window` 对指定子窗口发送经确认的 _NET_MOVERESIZE_WINDOW，无窗口管理器时直接 ConfigureWindow；`position` 获取原生窗口屏幕坐标；`monitors` 返回 RandR 活动显示器矩形（主屏优先、含负坐标，失败回退根窗口尺寸），统一换算逻辑坐标；`screen_pointer` 获取屏幕绝对指针和左键状态供独立设置拖动；`pointer_position` 获取原生窗口局部指针，`set_input_regions` 应用 XShape Input 区域，含 DPI/拖动锚点回归测试 | 使用 eframe，Linux 另依赖 winit/x11rb（shape、randr、screensaver 特性）；XShape ≥ 1.1 时仅更新 Input、不能裁剪 Bounding/绘制区域；逻辑坐标按 DPI 换算后裁到 viewport，缓存相同输入区域以避免重复请求，使用 checked 请求。原生 Wayland 不应用该 X11 遮罩；Windows 导出 platform_windows.rs 实现，其他平台保留无操作配置入口。X11 请求关闭临时连接前执行 `.check()`；按下时同时查询原生屏幕指针与窗口位置捕获锚点，避免窗口移动后 egui 缓存的局部坐标滞后导致贴边重新拖动跳跃；阈值换算 DPI，不累加局部位移；独立设置使用根窗口指针查询实现 Dock 标题栏拖动，不依赖 WM 的 StartDrag |
 
-| `tools/live2d/mod.rs` / `render.rs` | Actor 提供原生分层动画、轨道控制、移动热区与 RGBA 渲染，接口及限制见原生 Live2D 小节 | 仅标准库、serde、image，不依赖 UI/GPU 或 Python；所有角色坐标和动作数据来自模型文件 |
+| `tools/live2d/mod.rs` / `render.rs` / `layered.rs` / `mesh.rs` | Actor 分派婚纱 IK 与分层网格/刚性部件模型，提供原生分层动画、共享轨道控制、移动 alpha 热区与 RGBA 渲染，接口及限制见原生 Live2D 小节 | 仅标准库、serde、image，不依赖 UI/GPU 或 Python；所有角色坐标和动作数据来自模型文件 |
 
 ## 外部右键客户端与安装脚本
 
@@ -462,6 +491,7 @@ python3 scripts/test-dependencies.py
 ```
 
 - native-smoke 模式为 `drag`、`drag-edges`、`click-through`、`position`、`clock`、`input`、`pin`、`idle`，`--production` 验证普通尺寸。需要 libX11/libXtst，优先 Xephyr + 窗口管理器隔离，同一 display 的指针测试必须串行；脚本移动并恢复鼠标。GIF/Live2D 画布或旧 GIF 抓取坐标可能透明；`--pet-point X Y` 可指定原生窗口像素中的实体抓取点（如开发窗口婚纱 Live2D 用 `400 250`），拖动和穿透用例共用此点；验收包括阈值、精确位移、反向移动和尺寸保持，失败也须释放鼠标按钮。
+- native-smoke 按 `_NET_WM_PID` 找到窗口后还须等待 X11 `IsViewable`，避免冷启动尚未映射时 SetInputFocus 触发 BadMatch。其 click-through 模式在透明区点击底层测试接收窗后，重新压低该接收窗并抬高桌宠，再验证人物保留输入；GNOME 可能因接收窗被点击改变测试堆叠，不能把底窗遮住桌宠误判为 alpha 穿透。
 - 侧栏模式跨启动验证使用独立 `XDG_DATA_HOME`，两次正常退出后检查 `lexington/app.ron` 中的固定模式。
 - settings-smoke 用无资源临时根目录显示粉色测试形象，不代表安装资源丢失；覆盖 1×/1.5× DPI。集成和依赖脚本使用夹具，不调用模型或安装真实依赖；Node 仅是 JS 客户端测试的开发依赖。
 

@@ -1,4 +1,6 @@
 //! Native unified 2D actors: shared idle clock, local tracks and moving hit regions.
+mod layered;
+mod mesh;
 mod render;
 use image::RgbaImage;
 use serde::Deserialize;
@@ -101,7 +103,7 @@ struct Event {
     action: String,
     start: f64,
 }
-pub struct Actor {
+pub(super) struct LegacyActor {
     model: Model,
     renderer: render::Renderer,
     events: Vec<Event>,
@@ -137,7 +139,158 @@ fn ease(kind: &str, u: f32) -> f32 {
         _ => u,
     }
 }
+enum ActorKind {
+    Legacy(Box<LegacyActor>),
+    Layered(Box<layered::LayeredActor>),
+}
+pub struct Actor(ActorKind);
 impl Actor {
+    pub fn load(path: &Path) -> Result<Self, String> {
+        let bytes = std::fs::read(path).map_err(|_| "无法读取 Live2D 模型。")?;
+        if bytes.len() > 65536 {
+            return Err("Live2D 模型描述过大。".into());
+        }
+        let header: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|_| "Live2D 模型格式错误。")?;
+        Ok(Self(if header["format"] == "lexington-layered-actor-1" {
+            ActorKind::Layered(Box::new(layered::LayeredActor::load(path, &bytes)?))
+        } else {
+            ActorKind::Legacy(Box::new(LegacyActor::load(path)?))
+        }))
+    }
+    pub fn render(&mut self, time: f64) -> RgbaImage {
+        match &mut self.0 {
+            ActorKind::Legacy(a) => a.render(time),
+            ActorKind::Layered(a) => a.render(time),
+        }
+    }
+    pub fn click(&mut self, point: [f32; 2], time: f64) -> bool {
+        match &mut self.0 {
+            ActorKind::Legacy(a) => a.click(point, time),
+            ActorKind::Layered(a) => a.click(point, time),
+        }
+    }
+    #[cfg(test)]
+    pub fn parameters(&self, time: f64) -> BTreeMap<String, f32> {
+        match &self.0 {
+            ActorKind::Legacy(a) => a.parameters(time),
+            ActorKind::Layered(a) => a.parameters(time),
+        }
+    }
+}
+fn parameters(
+    channels: &BTreeMap<String, Channel>,
+    actions: &BTreeMap<String, Action>,
+    events: &[Event],
+    time: f64,
+) -> BTreeMap<String, f32> {
+    let mut values = channels
+        .iter()
+        .map(|(k, v)| (k.clone(), v.default))
+        .collect::<BTreeMap<_, _>>();
+    for event in events {
+        let action = &actions[&event.action];
+        let local = time - event.start;
+        if local < 0. || local >= action.duration {
+            continue;
+        }
+        for (channel, track) in &action.tracks {
+            for pair in track.windows(2) {
+                let (a, b) = (&pair[0], &pair[1]);
+                if local >= a.0 && local <= b.0 {
+                    let u = ((local - a.0) / (b.0 - a.0)) as f32;
+                    values.insert(channel.clone(), a.1 + (b.1 - a.1) * ease(&a.2, u));
+                    break;
+                }
+            }
+        }
+    }
+    values
+}
+fn trigger(
+    actions: &BTreeMap<String, Action>,
+    events: &mut Vec<Event>,
+    action: &str,
+    time: f64,
+) -> bool {
+    events.retain(|e| e.start + actions[&e.action].duration > time);
+    let Some(next) = actions.get(action) else {
+        return false;
+    };
+    let conflicting = events
+        .iter()
+        .filter(|e| {
+            actions[&e.action]
+                .tracks
+                .keys()
+                .any(|k| next.tracks.contains_key(k))
+        })
+        .collect::<Vec<_>>();
+    if conflicting.iter().any(|e| e.start > time) {
+        return false;
+    }
+    let start = conflicting
+        .iter()
+        .map(|e| e.start + actions[&e.action].duration)
+        .fold(time, f64::max);
+    events.push(Event {
+        action: action.into(),
+        start,
+    });
+    true
+}
+fn validate_motion(
+    channels: &BTreeMap<String, Channel>,
+    actions: &BTreeMap<String, Action>,
+) -> Result<(), String> {
+    if channels.is_empty() || channels.len() > 16 || actions.len() > 32 {
+        return Err("Live2D 通道数量无效。".into());
+    }
+    for (name, channel) in channels {
+        if name.len() > 80
+            || !channel.default.is_finite()
+            || channel.range.iter().any(|v| !v.is_finite())
+            || channel.range[0] > channel.default
+            || channel.range[1] < channel.default
+        {
+            return Err("Live2D 通道无效。".into());
+        }
+    }
+    for action in actions.values() {
+        if !action.duration.is_finite()
+            || action.duration <= 0.
+            || action.duration > 60.
+            || action.tracks.is_empty()
+        {
+            return Err("Live2D 动作无效。".into());
+        }
+        for (name, track) in &action.tracks {
+            let channel = channels.get(name).ok_or("Live2D 动作通道缺失。")?;
+            if track.len() < 2
+                || track.len() > 64
+                || track[0].0 != 0.
+                || track.last().unwrap().0 != action.duration
+                || track[0].1 != channel.default
+                || track.last().unwrap().1 != channel.default
+                || track.windows(2).any(|p| p[0].0 >= p[1].0)
+                || track.iter().any(|(t, v, e)| {
+                    !t.is_finite()
+                        || !v.is_finite()
+                        || *v < channel.range[0]
+                        || *v > channel.range[1]
+                        || !matches!(
+                            e.as_str(),
+                            "linear" | "smooth" | "quintic_squared" | "quintic_complement_squared"
+                        )
+                })
+            {
+                return Err("Live2D 轨道无效。".into());
+            }
+        }
+    }
+    Ok(())
+}
+impl LegacyActor {
     pub fn load(path: &Path) -> Result<Self, String> {
         let root = path
             .parent()
@@ -158,59 +311,15 @@ impl Actor {
         })
     }
     pub fn parameters(&self, time: f64) -> BTreeMap<String, f32> {
-        let mut values = self
-            .model
-            .channels
-            .iter()
-            .map(|(k, v)| (k.clone(), v.default))
-            .collect::<BTreeMap<_, _>>();
-        for event in &self.events {
-            let action = &self.model.actions[&event.action];
-            let local = time - event.start;
-            if local < 0. || local >= action.duration {
-                continue;
-            }
-            for (channel, track) in &action.tracks {
-                for pair in track.windows(2) {
-                    let (a, b) = (&pair[0], &pair[1]);
-                    if local >= a.0 && local <= b.0 {
-                        let u = ((local - a.0) / (b.0 - a.0)) as f32;
-                        values.insert(channel.clone(), a.1 + (b.1 - a.1) * ease(&a.2, u));
-                        break;
-                    }
-                }
-            }
-        }
-        values
+        parameters(
+            &self.model.channels,
+            &self.model.actions,
+            &self.events,
+            time,
+        )
     }
     pub fn trigger(&mut self, action: &str, time: f64) -> bool {
-        self.events
-            .retain(|e| e.start + self.model.actions[&e.action].duration > time);
-        let Some(next) = self.model.actions.get(action) else {
-            return false;
-        };
-        let conflicting = self
-            .events
-            .iter()
-            .filter(|e| {
-                self.model.actions[&e.action]
-                    .tracks
-                    .keys()
-                    .any(|k| next.tracks.contains_key(k))
-            })
-            .collect::<Vec<_>>();
-        if conflicting.iter().any(|e| e.start > time) {
-            return false;
-        }
-        let start = conflicting
-            .iter()
-            .map(|e| e.start + self.model.actions[&e.action].duration)
-            .fold(time, f64::max);
-        self.events.push(Event {
-            action: action.into(),
-            start,
-        });
-        true
+        trigger(&self.model.actions, &mut self.events, action, time)
     }
     pub fn click(&mut self, point: [f32; 2], time: f64) -> bool {
         let point = render::inverse(render::root(&self.model, time), point);
@@ -300,51 +409,7 @@ impl Model {
         {
             return Err("Live2D 模型参数无效。".into());
         }
-        for (name, channel) in &self.channels {
-            if name.len() > 80
-                || !channel.default.is_finite()
-                || channel.range.iter().any(|v| !v.is_finite())
-                || channel.range[0] > channel.default
-                || channel.range[1] < channel.default
-            {
-                return Err("Live2D 通道无效。".into());
-            }
-        }
-        for action in self.actions.values() {
-            if !action.duration.is_finite()
-                || action.duration <= 0.
-                || action.duration > 60.
-                || action.tracks.is_empty()
-            {
-                return Err("Live2D 动作无效。".into());
-            }
-            for (name, track) in &action.tracks {
-                let channel = self.channels.get(name).ok_or("Live2D 动作通道缺失。")?;
-                if track.len() < 2
-                    || track.len() > 64
-                    || track[0].0 != 0.
-                    || track.last().unwrap().0 != action.duration
-                    || track[0].1 != channel.default
-                    || track.last().unwrap().1 != channel.default
-                    || track.windows(2).any(|p| p[0].0 >= p[1].0)
-                    || track.iter().any(|(t, v, e)| {
-                        !t.is_finite()
-                            || !v.is_finite()
-                            || *v < channel.range[0]
-                            || *v > channel.range[1]
-                            || !matches!(
-                                e.as_str(),
-                                "linear"
-                                    | "smooth"
-                                    | "quintic_squared"
-                                    | "quintic_complement_squared"
-                            )
-                    })
-                {
-                    return Err("Live2D 轨道无效。".into());
-                }
-            }
-        }
+        validate_motion(&self.channels, &self.actions)?;
         for region in &self.hit_regions {
             if !self.actions.contains_key(&region.action)
                 || !matches!(
@@ -365,8 +430,8 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn actor() -> Actor {
-        Actor::load(
+    fn actor() -> LegacyActor {
+        LegacyActor::load(
             &Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("resource/illustration/lexington/live2d/WeddingDress_Normal/actor.json"),
         )
