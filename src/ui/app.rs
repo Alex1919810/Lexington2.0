@@ -44,6 +44,7 @@ pub struct Wife {
     pub(super) typed_at: Instant,
     pub(super) full_text: bool,
     pub(super) dialog_clicks: u8,
+    pub(super) turn_ui_hidden: bool,
     pub(super) pet_pressed: Option<Instant>,
     pub(super) drag_sent: bool,
     pub(super) last_activity: Instant,
@@ -178,6 +179,7 @@ impl Wife {
             typed_at: Instant::now(),
             full_text: false,
             dialog_clicks: 0,
+            turn_ui_hidden: false,
             pet_pressed: None,
             drag_sent: false,
             last_activity: Instant::now(),
@@ -535,6 +537,7 @@ impl Wife {
         let sidebar_handled = self.sidebar(ctx, screen);
         if !clicked
             && !sidebar_handled
+            && !self.busy
             && ctx.input(|i| i.pointer.primary_clicked())
             && let Some(rect) = bubble
         {

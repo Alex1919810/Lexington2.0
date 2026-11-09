@@ -57,6 +57,8 @@ impl Wife {
         self.roleplay_stamp = self.roleplay_file_stamp();
         self.codex_messages.clear();
         self.text.clear();
+        self.turn_ui_hidden = false;
+        self.dialog_clicks = 0;
         self.busy = false;
         self.external_turn = false;
         self.codex_prompts.clear();
@@ -163,6 +165,7 @@ impl Wife {
                         self.queue_character_memory();
                     }
                     self.busy = false;
+                    self.dialog_clicks = 0;
                     self.codex_status = if interrupted {
                         "已停止"
                     } else {
@@ -180,7 +183,8 @@ impl Wife {
                     self.interrupt_development_test(&error);
                     self.finish_development("failed", &error);
                     self.busy = false;
-                    if self.external_turn {
+                    self.dialog_clicks = 0;
+                    if self.external_turn && !self.turn_ui_hidden {
                         self.text = error.clone();
                         self.full_text = true;
                         self.last_activity = Instant::now();
@@ -199,14 +203,15 @@ impl Wife {
             }
         }
         if changed {
-            self.text = self
-                .codex_messages
-                .iter()
-                .map(|(_, text)| text.as_str())
-                .collect::<Vec<_>>()
-                .join("\n\n");
+            if !self.turn_ui_hidden {
+                self.text = self
+                    .codex_messages
+                    .iter()
+                    .map(|(_, text)| text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+            }
             self.full_text = true; // Codex already streams text; do not apply a second typewriter delay.
-            self.dialog_clicks = 0;
             self.last_activity = Instant::now();
         }
     }

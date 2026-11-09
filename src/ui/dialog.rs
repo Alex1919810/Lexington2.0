@@ -12,6 +12,28 @@ impl Wife {
         self.dialog_clicks = 0;
     }
     pub(super) fn click_pet(&mut self) {
+        if self.turn_ui_hidden {
+            self.turn_ui_hidden = false;
+            self.text = self
+                .codex_messages
+                .iter()
+                .map(|(_, text)| text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            self.full_text = true;
+            self.dialog_clicks = 0;
+            self.last_activity = Instant::now();
+            return;
+        }
+        if self.busy {
+            self.dialog_clicks += 1;
+            if self.dialog_clicks == 2 {
+                self.turn_ui_hidden = true;
+                self.text.clear();
+                self.dialog_clicks = 0;
+            }
+            return;
+        }
         if self.text.is_empty() {
             // Preset lines are fallback content, including after an AI bubble was dismissed.
             if self.busy
@@ -36,19 +58,27 @@ impl Wife {
         }
     }
     pub(super) fn bubble(&mut self, ctx: &egui::Context, center: egui::Pos2) -> Option<Rect> {
-        if self.text.is_empty() {
+        let waiting = self.text.is_empty()
+            && self.busy
+            && !self.turn_ui_hidden
+            && self.development.tests_ui.running.is_none();
+        if self.text.is_empty() && !waiting {
             return None;
         }
+        let text = if waiting {
+            "Lexington正在思考"
+        } else {
+            &self.text
+        };
         let width = self.config.dialog.width;
         let position = pos2(
             center.x + self.config.dialog.offset_x - width,
             center.y + self.config.dialog.offset_y,
         );
-        let shown = if self.full_text {
-            self.text.clone()
+        let shown = if self.full_text || waiting {
+            text.to_owned()
         } else {
-            self.text
-                .chars()
+            text.chars()
                 .take((self.typed_at.elapsed().as_secs_f64() / 0.05) as usize + 1)
                 .collect()
         };
@@ -58,7 +88,7 @@ impl Wife {
             .fixed_pos(position)
             .show(ctx, |ui| {
                 let galley = egui::WidgetText::from(
-                    egui::RichText::new(&self.text)
+                    egui::RichText::new(text)
                         .font(style::font(14.))
                         .line_height(Some(21.)),
                 )

@@ -53,3 +53,5 @@
 - 小窗口里的任务详情 ScrollArea 须显式 min_scrolled_height(0)：egui 默认 64px 的最小滚动高度会覆盖更小的 max_height，导致新增页签后仍把发送区挤出窗口。
 
 - 中文输入回归须覆盖没有 Enabled/Preedit 的连续多次 Commit；单次完整预编辑序列不能发现 egui 0.31 首词后丢字的问题。共用兼容回调在 style::install 注册，按 viewport/聚焦控件隔离组合状态；主聊天与 development 均使用该回调，不分别拼接候选文本。
+
+- Codex 生成期间输出气泡不因超时或外部点击关闭；无正文时只绘制等待提示，不把提示写入聊天内容。两次立绘短按收起输出及输入/思考区，再单击恢复累计输出，Live2D 部位动作保持。turn_ui_hidden 只控制显示，不能中断任务或丢弃 codex_messages/项目记录；流式片段不得重置点击计数或重开面板，完成保留显式收起，新发送/新会话重置。

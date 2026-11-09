@@ -397,6 +397,88 @@ fn clock_cancel_expiry_and_dialog_inactivity() {
     frame(&mut app, &ctx, vec![]);
     assert!(app.text.is_empty());
 }
+
+#[test]
+fn pending_reply_stays_visible_and_pet_clicks_hide_and_restore_the_live_turn() {
+    for dismiss in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = Wife::from_root(&ctx, false, root.path().into());
+        app.codex = Some(crate::backend::codex::Client::mock("normal"));
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        app.input = format!("visibility:{}", root.path().display());
+        app.submit(&ctx);
+        app.last_activity = Instant::now() - Duration::from_secs(60);
+        frame(&mut app, &ctx, vec![egui::Event::PointerGone]);
+        assert!(app.busy && app.dialog_bounds.is_some());
+        assert!(app.input_bounds.is_some());
+        // Neither inactivity nor a click outside may dismiss an active reply.
+        click(&mut app, &ctx, pos2(750., 30.));
+        assert!(app.dialog_bounds.is_some() && !app.turn_ui_hidden);
+        std::fs::write(root.path().join("first"), "").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.text != "首段" && Instant::now() < deadline {
+            frame(&mut app, &ctx, vec![]);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(app.text, "首段");
+        click(&mut app, &ctx, pos2(400., 300.));
+        assert_eq!(app.dialog_clicks, 1);
+        std::fs::write(root.path().join("next"), "").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.text != "首段后续" && Instant::now() < deadline {
+            frame(&mut app, &ctx, vec![]);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(app.text, "首段后续");
+        assert_eq!(
+            app.dialog_clicks, 1,
+            "streaming must preserve the first click"
+        );
+        if dismiss {
+            click(&mut app, &ctx, pos2(400., 300.));
+            assert!(app.busy && app.turn_ui_hidden);
+            assert!(app.dialog_bounds.is_none() && app.input_bounds.is_none());
+            // One click restores the current turn while it is still streaming.
+            click(&mut app, &ctx, pos2(400., 300.));
+            assert!(app.busy && !app.turn_ui_hidden);
+            assert_eq!(app.text, "首段后续");
+            assert!(app.dialog_bounds.is_some() && app.input_bounds.is_some());
+            click(&mut app, &ctx, pos2(400., 300.));
+            click(&mut app, &ctx, pos2(400., 300.));
+            assert!(app.busy && app.turn_ui_hidden);
+        }
+        std::fs::write(root.path().join("finish"), "").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.busy && Instant::now() < deadline {
+            frame(&mut app, &ctx, vec![]);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!app.busy && app.error.is_empty());
+        assert!(
+            app.codex_messages
+                .iter()
+                .any(|(_, text)| text == "首段后续最终")
+        );
+        if dismiss {
+            assert!(app.text.is_empty());
+            assert!(app.dialog_bounds.is_none() && app.input_bounds.is_none());
+            // Completion updates the saved reply without reopening the panels.
+            click(&mut app, &ctx, pos2(400., 300.));
+            assert!(!app.turn_ui_hidden);
+            assert!(app.dialog_bounds.is_some() && app.input_bounds.is_some());
+        }
+        assert_eq!(app.text, "首段后续最终");
+        app.last_activity = Instant::now() - Duration::from_secs(60);
+        frame(&mut app, &ctx, vec![]);
+        assert!(
+            app.text.is_empty(),
+            "inactivity hiding resumes after completion"
+        );
+    }
+}
 #[test]
 fn context_menu_close_receives_input_outside_artwork_and_exits() {
     let root = std::env::temp_dir().join(format!("lexington-menu-{}", rand::random::<u64>()));

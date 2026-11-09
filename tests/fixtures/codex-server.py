@@ -133,6 +133,19 @@ for line in sys.stdin:
                 data=json.loads(text)
                 result={'events':[{'title':'温茶偏好','description':'用户说喜欢温热的茶。','category':'偏好','happenedAt':'未说明','participants':['用户',data['character']],'importance':2,'perspective':'用户陈述','evidence':data['user']}]}
                 complete(json.dumps(result,ensure_ascii=False))
+        elif text.startswith("visibility:"):
+            from pathlib import Path
+            import time
+            directory = Path(text.removeprefix("visibility:"))
+            for phase, delta in [("first", "首段"), ("next", "后续"), ("finish", "最终")]:
+                deadline = time.monotonic() + 60
+                while not (directory / phase).exists():
+                    assert time.monotonic() < deadline, "visibility fixture timed out"
+                    time.sleep(0.01)
+                if phase == "finish":
+                    complete("首段后续最终")
+                else:
+                    notify("item/agentMessage/delta", {"itemId": "reply-" + turn, "delta": delta})
         elif text.startswith("world-"):
             complete(json.dumps(params["input"], ensure_ascii=False))
         elif text == "resume-status":

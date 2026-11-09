@@ -170,6 +170,8 @@ impl Wife {
                 self.record_development_start(display);
                 self.context_ui.last_input = remembered_input;
                 self.busy = true;
+                self.turn_ui_hidden = false;
+                self.dialog_clicks = 0;
                 self.external_turn = external.is_some();
                 self.codex_status = "Lexington正在思考".into();
                 self.error.clear();
@@ -187,6 +189,11 @@ impl Wife {
         center: egui::Pos2,
         image_height: f32,
     ) {
+        if self.turn_ui_hidden {
+            self.input_bounds = None;
+            ctx.memory_mut(|memory| memory.surrender_focus("message-input".into()));
+            return;
+        }
         let width = self.config.dialog.width;
         let error_height = if self.error.is_empty() || self.busy {
             0.

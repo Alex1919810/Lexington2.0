@@ -173,11 +173,11 @@ impl Wife {
                         let dimensions = pic.size();
                         pic.click_part([local.x * dimensions.x, local.y * dimensions.y]);
                     }
-                    // Live actors respond only through their configured body-part actions.
+                    // Body-part actions remain independent of conversation visibility.
                 }
                 self.context_menu(ctx, &response);
             });
-        if clicked && !live {
+        if clicked && (!live || self.busy || self.turn_ui_hidden) {
             self.click_pet();
         }
         (size, transform, clicked)
