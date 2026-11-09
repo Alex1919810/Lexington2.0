@@ -4,6 +4,10 @@ mod assets;
 mod character_memories;
 mod clock;
 mod codex;
+mod development;
+mod development_diagnostics;
+mod development_memory;
+mod development_tests;
 mod dialog;
 mod input;
 mod new_character;
@@ -18,7 +22,7 @@ mod style;
 mod transparency;
 mod weather;
 
-pub use app::Pet;
+pub use app::Wife;
 pub use transparency::check as check_transparency;
 
 #[cfg(test)]

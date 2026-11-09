@@ -1,4 +1,4 @@
-use super::app::Pet;
+use super::app::Wife;
 use crate::backend::clock::{self, local_time};
 use eframe::egui;
 use std::time::{Duration, Instant};
@@ -9,7 +9,7 @@ pub(super) enum ClockAction {
     Manual,
 }
 
-impl Pet {
+impl Wife {
     pub(super) fn poll_clock(&mut self) {
         let now = clock::now();
         for sample in self

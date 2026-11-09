@@ -1,9 +1,9 @@
-use super::app::Pet;
+use super::app::Wife;
 use super::style::draw_shadow;
 use eframe::egui::{self, Color32, Rect, pos2, vec2};
 use eframe::egui::{FontId, Sense};
 
-impl Pet {
+impl Wife {
     pub(super) fn sidebar(&mut self, ctx: &egui::Context, screen: Rect) -> bool {
         let mut handled = false;
         let x = if screen.width() / 2. - 315. < 0. {

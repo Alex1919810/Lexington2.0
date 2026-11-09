@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-pub struct Pet {
+pub struct Wife {
     #[cfg(any(target_os = "linux", windows))]
     pub(super) inbox: Option<crate::backend::handoff::Inbox>,
     pub(super) external_turn: bool,
@@ -84,17 +84,14 @@ pub struct Pet {
     pub(super) settings_drag: Option<(egui::Pos2, egui::Pos2, platform::WindowId)>,
     pub(super) settings_pointer_down: bool,
     pub(super) settings_drag_active: bool,
-    pub(super) connection_draft: Option<crate::backend::config::CodexConfig>,
-    pub(super) local_codex_home: Option<PathBuf>,
-    pub(super) local_codex_config: crate::backend::codex_config::LocalCodexConfig,
-    pub(super) connection_error: String,
+    pub(super) development: super::development::DevelopmentUi,
     pub(super) role_editor: super::role_card::RoleEditor,
     pub(super) character_creation: super::new_character::CharacterCreation,
     pub(super) context_ui: super::roleplay_context::ContextUi,
     pub(super) character_memory_ui: super::character_memories::CharacterMemoryUi,
     transparency: Option<std::sync::Arc<super::transparency::Transparency>>,
 }
-impl Pet {
+impl Wife {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         #[cfg(any(target_os = "linux", windows))] endpoint: crate::backend::handoff::Endpoint,
@@ -110,14 +107,7 @@ impl Pet {
         if let Some(storage) = cc.storage {
             app.restore_state(storage);
         }
-        app.local_codex_home = std::env::var_os("CODEX_HOME")
-            .filter(|path| !path.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME")
-                    .or_else(|| std::env::var_os("USERPROFILE"))
-                    .map(|home| PathBuf::from(home).join(".codex"))
-            });
+        app.load_development_workspaces();
         #[cfg(any(target_os = "linux", windows))]
         {
             app.drag_window = platform::DragWindow::new(cc);
@@ -238,10 +228,7 @@ impl Pet {
             settings_drag: None,
             settings_pointer_down: false,
             settings_drag_active: false,
-            connection_draft: None,
-            local_codex_home: None,
-            local_codex_config: Default::default(),
-            connection_error: String::new(),
+            development: Default::default(),
             role_editor: Default::default(),
             character_creation: Default::default(),
             context_ui: Default::default(),
@@ -287,6 +274,9 @@ impl Pet {
                 {
                     self.clock_state.reset_candidate();
                 }
+                if config.codex.development_mode != self.config.codex.development_mode {
+                    self.development.reset_sessions_pending = true;
+                }
                 self.codex_restart_pending |= config.codex.connection_changed(&self.config.codex);
                 self.config = config;
                 self.config_error.clear();
@@ -299,6 +289,10 @@ impl Pet {
         response.context_menu(|ui| {
             if ui.button("设置").clicked() {
                 self.settings = true;
+                ui.close_menu();
+            }
+            if ui.button("开发").clicked() {
+                self.development.open = true;
                 ui.close_menu();
             }
             if ui.button("人物记忆").clicked() {
@@ -325,8 +319,11 @@ impl Pet {
         }
     }
 }
-impl eframe::App for Pet {
+impl eframe::App for Wife {
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
+        self.interrupt_development_test("应用已退出。");
+        self.finish_development("interrupted", "应用已退出。");
+        self.save_development(true);
         if let Some(pass) = self.transparency.take() {
             pass.destroy();
         }
@@ -364,7 +361,7 @@ impl eframe::App for Pet {
         self.ui(ctx);
     }
 }
-impl Pet {
+impl Wife {
     pub(super) fn ui(&mut self, ctx: &egui::Context) {
         self.input_regions.clear();
         #[cfg(any(target_os = "linux", windows))]
@@ -560,6 +557,7 @@ impl Pet {
             self.input_regions.push(window.response.rect);
         }
         self.settings_ui(ctx);
+        self.development_window(ctx);
         self.character_memories_window(ctx);
         self.codex_prompt_ui(ctx);
         self.clock_notice_ui(ctx);

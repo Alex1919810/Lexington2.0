@@ -2,28 +2,73 @@
   "name": "lexington-context",
   "displayName": "Lexington",
   "description": "选中文字或文件，右键看看Lexington怎么说，直接交给本机 Lexington。",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "publisher": "lexington",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Other"],
-  "extensionKind": ["ui"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
   "main": "./extension.js",
-  "activationEvents": ["onCommand:lexington.askSelection", "onCommand:lexington.askFile"],
-  "capabilities": { "untrustedWorkspaces": { "supported": true }, "virtualWorkspaces": { "supported": true } },
+  "activationEvents": [
+    "onCommand:lexington.askSelection",
+    "onCommand:lexington.askFile",
+    "onCommand:lexington.sendDiagnostics"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": {
+      "supported": true
+    }
+  },
   "contributes": {
     "commands": [
-      { "command": "lexington.askSelection", "title": "看看Lexington怎么说" },
-      { "command": "lexington.askFile", "title": "看看Lexington怎么说" }
+      {
+        "command": "lexington.askSelection",
+        "title": "看看Lexington怎么说"
+      },
+      {
+        "command": "lexington.askFile",
+        "title": "看看Lexington怎么说"
+      },
+      {
+        "command": "lexington.sendDiagnostics",
+        "title": "发送项目诊断到开发"
+      }
     ],
     "menus": {
-      "editor/context": [{ "command": "lexington.askSelection", "when": "editorHasSelection", "group": "navigation@99" }],
-      "explorer/context": [{ "command": "lexington.askFile", "when": "resourceScheme == file", "group": "navigation@99" }]
+      "editor/context": [
+        {
+          "command": "lexington.askSelection",
+          "when": "editorHasSelection",
+          "group": "navigation@99"
+        },
+        {
+          "command": "lexington.sendDiagnostics",
+          "when": "resourceScheme == file",
+          "group": "navigation@100"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "lexington.askFile",
+          "when": "resourceScheme == file",
+          "group": "navigation@99"
+        }
+      ]
     },
     "configuration": {
       "title": "Lexington",
       "properties": {
         "lexington.executable": {
-          "type": "string", "default": "",
+          "type": "string",
+          "default": "",
           "description": "Lexington 可执行文件绝对路径；留空使用用户级安装位置。"
         }
       }

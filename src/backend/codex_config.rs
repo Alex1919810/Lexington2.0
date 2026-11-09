@@ -1,11 +1,8 @@
-//! Read local Codex API defaults without changing Codex or Lexington settings.
-use super::config::CodexConfig;
+//! Read the effective provider key solely for redaction. Never persist or display it.
 use std::{fs, path::Path};
 
 #[derive(Default)]
 pub struct LocalCodexConfig {
-    pub model: String,
-    pub base_url: String,
     pub api_key: String,
 }
 
@@ -26,12 +23,6 @@ impl LocalCodexConfig {
             .get("profile")
             .and_then(toml::Value::as_str)
             .and_then(|name| config.get("profiles")?.get(name));
-        let model = profile
-            .and_then(|p| p.get("model"))
-            .or_else(|| config.get("model"))
-            .and_then(toml::Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
         let provider_id = profile
             .and_then(|p| p.get("model_provider"))
             .or_else(|| config.get("model_provider"))
@@ -45,20 +36,6 @@ impl LocalCodexConfig {
                 .and_then(|p| p.get(name))
                 .and_then(toml::Value::as_str)
         };
-        let base_url = field("base_url")
-            .map(str::to_owned)
-            .or_else(|| {
-                (provider_id == "openai")
-                    .then(|| env("OPENAI_BASE_URL"))
-                    .flatten()
-            })
-            .unwrap_or_else(|| {
-                if provider_id == "openai" {
-                    "https://api.openai.com/v1".into()
-                } else {
-                    String::new()
-                }
-            });
         let mut api_key = field("env_key")
             .and_then(&env)
             .filter(|key| !key.trim().is_empty())
@@ -87,36 +64,7 @@ impl LocalCodexConfig {
                 }
             }
         }
-        Ok(Self {
-            model,
-            base_url,
-            api_key,
-        })
-    }
-
-    pub fn draft(&self, saved: &CodexConfig) -> CodexConfig {
-        let mut draft = saved.clone();
-        if draft.model.is_empty() {
-            draft.model.clone_from(&self.model);
-        }
-        if !saved.use_custom_api {
-            draft.base_url.clone_from(&self.base_url);
-            draft.api_key.clone_from(&self.api_key);
-        }
-        draft
-    }
-
-    pub fn to_save(&self, draft: &CodexConfig, saved: &CodexConfig) -> CodexConfig {
-        let mut result = draft.clone();
-        if !result.use_custom_api {
-            if saved.model.is_empty() && result.model == self.model {
-                result.model.clear();
-            }
-            // Merely displaying inherited credentials must not persist them.
-            result.base_url.clone_from(&saved.base_url);
-            result.api_key.clone_from(&saved.api_key);
-        }
-        result
+        Ok(Self { api_key })
     }
 }
 
@@ -147,32 +95,12 @@ requires_openai_auth = false
         )
         .unwrap();
         let inline = LocalCodexConfig::read_with_env(&home, |_| None).unwrap();
-        assert_eq!(inline.model, "profile-model");
-        assert_eq!(inline.base_url, "https://example.invalid/v1");
         assert_eq!(inline.api_key, "fixture-inline-secret");
         let environment = LocalCodexConfig::read_with_env(&home, |name| {
             (name == "FIXTURE_API_KEY").then(|| "fixture-env-secret".into())
         })
         .unwrap();
         assert_eq!(environment.api_key, "fixture-env-secret");
-        let saved = CodexConfig {
-            base_url: "https://previous.invalid/v1".into(),
-            api_key: "previous-secret".into(),
-            ..Default::default()
-        };
-        let mut draft = inline.draft(&saved);
-        assert!(!draft.use_custom_api);
-        assert_eq!(inline.to_save(&draft, &saved), saved);
-        draft.use_custom_api = true;
-        assert_eq!(
-            inline.to_save(&draft, &saved).api_key,
-            "fixture-inline-secret"
-        );
-        assert_eq!(
-            inline.draft(&draft),
-            draft,
-            "explicit Lexington settings take priority"
-        );
         fs::write(
             home.join("config.toml"),
             "model_provider='work'\n[model_providers.work]\nenv_key='FIXTURE_API_KEY'\n",
@@ -183,7 +111,6 @@ requires_openai_auth = false
         })
         .unwrap();
         assert_eq!(key.api_key, "fixture-env-secret");
-        assert!(key.base_url.is_empty());
         fs::remove_dir_all(home).unwrap();
     }
 
@@ -195,7 +122,6 @@ requires_openai_auth = false
         fs::write(home.join("auth.json"), r#"{"OPENAI_API_KEY":"fixture-auth-secret","tokens":{"access_token":"never-use-oauth"}}"#).unwrap();
         let local = LocalCodexConfig::read_with_env(&home, |_| None).unwrap();
         assert_eq!(local.api_key, "fixture-auth-secret");
-        assert_eq!(local.base_url, "https://api.openai.com/v1");
         fs::write(
             home.join("auth.json"),
             r#"{"tokens":{"access_token":"never-use-oauth"}}"#,

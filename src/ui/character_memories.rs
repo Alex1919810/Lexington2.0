@@ -1,4 +1,4 @@
-use super::app::Pet;
+use super::app::Wife;
 use crate::{
     backend::{
         codex::{Client, Event},
@@ -48,7 +48,7 @@ pub(super) struct MemoryBrowser {
     error: String,
 }
 
-impl Pet {
+impl Wife {
     pub(super) fn open_character_memories(&mut self) {
         if !self.character_memory_ui.open {
             self.character_memory_ui.browser = MemoryBrowser {
@@ -404,7 +404,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn frame(app: &mut Pet, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
+    fn frame(app: &mut Wife, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
         let output = ctx.run(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -423,7 +423,7 @@ mod tests {
         app.apply_character_memory_action();
         output
     }
-    fn click(app: &mut Pet, ctx: &egui::Context, label: &str) {
+    fn click(app: &mut Wife, ctx: &egui::Context, label: &str) {
         let position = frame(app, ctx, vec![])
             .shapes
             .iter()
@@ -463,7 +463,7 @@ mod tests {
         ));
         let ctx = egui::Context::default();
         ctx.style_mut(|style| style.animation_time = 0.0);
-        let mut app = Pet::from_root(&ctx, true, root.clone());
+        let mut app = Wife::from_root(&ctx, true, root.clone());
         app.library.character = "a".into();
         app.open_character_memories();
         app.text = "正常聊天保持原样".into();
@@ -493,7 +493,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("lexington-memory-queue-{}", rand::random::<u64>()));
         let ctx = egui::Context::default();
-        let mut app = Pet::from_root(&ctx, true, root.clone());
+        let mut app = Wife::from_root(&ctx, true, root.clone());
         app.codex_character = Some("a".into());
         // Old optional fields are preserved as unknown data, but no longer control extraction.
         app.codex_role_card =
@@ -531,12 +531,12 @@ mod tests {
             rand::random::<u64>()
         ));
         let ctx = egui::Context::default();
-        let mut app = Pet::from_root(&ctx, true, root);
+        let mut app = Wife::from_root(&ctx, true, root);
         app.character_memory_ui.queue.push_back(Queued {
             source: Extraction::new("a".into(), "private fixture text", "reply"),
             connection: app.config.codex.clone(),
         });
-        app.config.codex.model = "different-model".into();
+        app.config.codex.development_mode = true;
         app.character_memory_ui.running = true;
         app.poll_character_memories(&ctx);
         assert!(app.character_memory_ui.active.is_none());
@@ -552,7 +552,7 @@ mod tests {
                 rand::random::<u64>()
             ));
             let ctx = egui::Context::default();
-            let mut app = Pet::from_root(&ctx, true, root.clone());
+            let mut app = Wife::from_root(&ctx, true, root.clone());
             std::fs::create_dir_all(&root).unwrap();
             app.text = "正常角色回复".into();
             app.input = "用户草稿".into();

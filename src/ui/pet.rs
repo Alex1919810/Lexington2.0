@@ -1,8 +1,8 @@
-use super::app::Pet;
+use super::app::Wife;
 use eframe::egui::{self, Color32, Mesh, Painter, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
 use std::time::{Duration, Instant};
 
-impl Pet {
+impl Wife {
     pub(super) fn pet_ui(
         &mut self,
         ctx: &egui::Context,

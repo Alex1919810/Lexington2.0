@@ -1,4 +1,4 @@
-use super::app::Pet;
+use super::app::Wife;
 use crate::roleplay::{self, RoleCard, Rule, WorldEntry};
 use eframe::egui;
 
@@ -25,7 +25,7 @@ fn editor(ui: &mut egui::Ui, label: &str, text: &mut String) {
     );
 }
 
-impl Pet {
+impl Wife {
     pub(super) fn roleplay_file_stamp(&self) -> [Option<(std::time::SystemTime, u64)>; 2] {
         ["roleplay.json", "roleplay-memory.json"].map(|name| {
             std::fs::metadata(self.root.join("config").join(name))
@@ -329,7 +329,7 @@ mod tests {
     use super::*;
     use egui::{pos2, vec2};
 
-    fn frame(app: &mut Pet, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
+    fn frame(app: &mut Wife, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
         let mut action = None;
         let output = ctx.run(
             egui::RawInput {
@@ -353,7 +353,7 @@ mod tests {
         output
     }
 
-    fn click(app: &mut Pet, ctx: &egui::Context, label: &str) {
+    fn click(app: &mut Wife, ctx: &egui::Context, label: &str) {
         let output = frame(app, ctx, vec![]);
         let position = output
             .shapes
@@ -388,7 +388,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("lexington-role-ui-{}", rand::random::<u64>()));
         let ctx = egui::Context::default();
-        let mut app = Pet::from_root(&ctx, true, root.clone());
+        let mut app = Wife::from_root(&ctx, true, root.clone());
         app.library.character = "a".into();
         frame(&mut app, &ctx, vec![]);
         click(&mut app, &ctx, "附加规则");
@@ -459,7 +459,7 @@ mod tests {
         };
         roleplay::save_role_card(&root, "a", &card).unwrap();
         let ctx = egui::Context::default();
-        let mut app = Pet::from_root(&ctx, true, root.clone());
+        let mut app = Wife::from_root(&ctx, true, root.clone());
         app.library.character = "a".into();
         app.codex_character = Some("a".into());
         app.codex_role_card = Some(card);
@@ -512,7 +512,7 @@ mod tests {
         };
         roleplay::save_role_card(&root, "a", &card).unwrap();
         let ctx = egui::Context::default();
-        let mut app = Pet::from_root(&ctx, true, root.clone());
+        let mut app = Wife::from_root(&ctx, true, root.clone());
         app.library.character = "a".into();
         app.codex_character = Some("a".into());
         app.codex_role_card = Some(card);
@@ -598,7 +598,7 @@ mod tests {
         });
         roleplay::save_role_card(&root, "a", &card).unwrap();
         let ctx = egui::Context::default();
-        let mut app = Pet::from_root(&ctx, true, root.clone());
+        let mut app = Wife::from_root(&ctx, true, root.clone());
         app.library.character = "a".into();
         app.codex = Some(crate::backend::codex::Client::mock_session(
             "context",

@@ -1,7 +1,7 @@
-use super::{app::Pet, style};
+use super::{app::Wife, style};
 use eframe::egui::{self, Color32, Rect, pos2, vec2};
 use std::time::{Duration, Instant};
-fn frame(app: &mut Pet, ctx: &egui::Context, events: Vec<egui::Event>) {
+fn frame(app: &mut Wife, ctx: &egui::Context, events: Vec<egui::Event>) {
     let _ = ctx.run(
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(pos2(0., 0.), vec2(800., 600.))),
@@ -11,7 +11,7 @@ fn frame(app: &mut Pet, ctx: &egui::Context, events: Vec<egui::Event>) {
         |ctx| app.ui(ctx),
     );
 }
-fn click(app: &mut Pet, ctx: &egui::Context, point: egui::Pos2) {
+fn click(app: &mut Wife, ctx: &egui::Context, point: egui::Pos2) {
     frame(app, ctx, vec![egui::Event::PointerMoved(point)]);
     frame(
         app,
@@ -52,7 +52,7 @@ fn character_switch_discards_old_codex_session_and_missing_persona_cannot_reuse_
     )
     .unwrap();
     let ctx = egui::Context::default();
-    let mut app = Pet::from_root(&ctx, true, root.clone());
+    let mut app = Wife::from_root(&ctx, true, root.clone());
     app.codex = Some(crate::backend::codex::Client::mock("normal"));
     app.codex_character = Some("a".into());
     app.busy = true;
@@ -99,7 +99,7 @@ fn window_position_persists_without_size_or_dev_mode_leaking_and_recovers_offscr
     let root = std::env::temp_dir().join(format!("lexington-position-{}", rand::random::<u64>()));
     crate::backend::config::Config::save_no_approval(&root, false).unwrap();
     let ctx = egui::Context::default();
-    let run = |app: &mut Pet, position: egui::Pos2| {
+    let run = |app: &mut Wife, position: egui::Pos2| {
         let mut raw = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(500., 500.))),
             ..Default::default()
@@ -110,7 +110,7 @@ fn window_position_persists_without_size_or_dev_mode_leaking_and_recovers_offscr
         ctx.run(raw, |ctx| app.ui(ctx))
     };
     let mut storage = Storage::default();
-    let mut app = Pet::from_root(&ctx, false, root.clone());
+    let mut app = Wife::from_root(&ctx, false, root.clone());
     run(&mut app, egui::Pos2::ZERO);
     let edge = pos2(-260., 480.);
     run(&mut app, edge);
@@ -121,7 +121,7 @@ fn window_position_persists_without_size_or_dev_mode_leaking_and_recovers_offscr
     );
     assert!(storage.0["window"].is_empty());
 
-    let mut reopened = Pet::from_root(&ctx, true, root.clone());
+    let mut reopened = Wife::from_root(&ctx, true, root.clone());
     reopened.restore_state(&storage);
     let output = run(&mut reopened, egui::Pos2::ZERO);
     assert_eq!(
@@ -132,7 +132,7 @@ fn window_position_persists_without_size_or_dev_mode_leaking_and_recovers_offscr
     assert!(!reopened.pinned);
     assert!(output.viewport_output[&egui::ViewportId::ROOT].commands.iter().any(|cmd| matches!(cmd, egui::ViewportCommand::InnerSize(size) if *size == vec2(500.,500.))));
 
-    let mut dev = Pet::from_root(&ctx, true, root.clone());
+    let mut dev = Wife::from_root(&ctx, true, root.clone());
     dev.dev = true;
     dev.restore_state(&storage);
     assert!(dev.window_position.is_none());
@@ -152,7 +152,7 @@ fn window_position_persists_without_size_or_dev_mode_leaking_and_recovers_offscr
         "invalid",
     ] {
         storage.0.insert("windowPosition".into(), value.into());
-        let mut app = Pet::from_root(&ctx, true, root.clone());
+        let mut app = Wife::from_root(&ctx, true, root.clone());
         app.restore_state(&storage);
         run(&mut app, egui::Pos2::ZERO);
         assert_eq!(
@@ -169,7 +169,7 @@ fn input_regions_exclude_blank_background_and_clear_closed_windows() {
         std::env::temp_dir().join(format!("lexington-input-regions-{}", rand::random::<u64>()));
     crate::backend::config::Config::save_no_approval(&root, false).unwrap();
     let ctx = egui::Context::default();
-    let mut app = Pet::from_root(&ctx, false, root.clone());
+    let mut app = Wife::from_root(&ctx, false, root.clone());
     for _ in 0..3 {
         frame(&mut app, &ctx, vec![]);
     }
@@ -218,7 +218,7 @@ fn settings_approval_checkbox_persists_without_restarting_and_controls_next_turn
         std::env::temp_dir().join(format!("lexington-approval-ui-{}", rand::random::<u64>()));
     let ctx = egui::Context::default();
     crate::backend::config::Config::save_no_approval(&root, false).unwrap();
-    let mut app = Pet::from_root(&ctx, false, root.clone());
+    let mut app = Wife::from_root(&ctx, false, root.clone());
     app.codex = Some(crate::backend::codex::Client::mock("normal"));
     app.settings = true;
     frame(&mut app, &ctx, vec![]);
@@ -270,89 +270,12 @@ fn settings_approval_checkbox_persists_without_restarting_and_controls_next_turn
     std::fs::remove_dir_all(root).unwrap();
 }
 #[test]
-fn api_key_is_visible_only_while_reveal_button_is_held_in_focused_window() {
-    let ctx = egui::Context::default();
-    let mut app = Pet::from_context(&ctx, true);
-    app.settings = true;
-    app.settings_page = 1;
-    app.connection_draft = Some(crate::backend::config::CodexConfig {
-        api_key: "fixture-reveal-secret".into(),
-        ..Default::default()
-    });
-    let mut target = None;
-    for stage in 0..16 {
-        let events = match stage {
-            10 => vec![
-                egui::Event::PointerMoved(target.expect("reveal button")),
-                egui::Event::PointerButton {
-                    pos: target.unwrap(),
-                    button: egui::PointerButton::Primary,
-                    pressed: true,
-                    modifiers: Default::default(),
-                },
-            ],
-            12 => vec![egui::Event::WindowFocused(false)],
-            13 => vec![
-                egui::Event::WindowFocused(true),
-                egui::Event::PointerButton {
-                    pos: target.unwrap(),
-                    button: egui::PointerButton::Primary,
-                    pressed: false,
-                    modifiers: Default::default(),
-                },
-            ],
-            14 => vec![egui::Event::PointerButton {
-                pos: target.unwrap(),
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: Default::default(),
-            }],
-            15 => vec![egui::Event::PointerButton {
-                pos: target.unwrap(),
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: Default::default(),
-            }],
-            _ => vec![],
-        };
-        let output = ctx.run(
-            egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(pos2(0., 0.), vec2(800., 600.))),
-                events,
-                focused: stage != 12,
-                ..Default::default()
-            },
-            |ctx| app.ui(ctx),
-        );
-        let mut visible = false;
-        let mut shapes: Vec<_> = output
-            .shapes
-            .iter()
-            .map(|s| (s.clip_rect, &s.shape))
-            .collect();
-        while let Some((clip, shape)) = shapes.pop() {
-            match shape {
-                egui::Shape::Vec(children) => shapes.extend(children.iter().map(|s| (clip, s))),
-                egui::Shape::Text(text) => {
-                    let point = text.pos + text.galley.size() / 2.;
-                    if text.galley.job.text == "按住显示" && clip.contains(point) {
-                        target = Some(point);
-                    }
-                    visible |= text.galley.job.text.contains("fixture-reveal-secret");
-                }
-                _ => (),
-            }
-        }
-        assert_eq!(visible, matches!(stage, 10 | 11 | 14), "stage {stage}");
-    }
-}
-#[test]
 fn config_hot_reload_keeps_valid_settings_and_defers_connection_changes_until_idle() {
     let root = std::env::temp_dir().join(format!("lexington-hot-config-{}", rand::random::<u64>()));
     crate::backend::config::Config::save_no_approval(&root, false).unwrap();
     let path = root.join("config/config.json");
     let ctx = egui::Context::default();
-    let mut app = Pet::from_root(&ctx, false, root.clone());
+    let mut app = Wife::from_root(&ctx, false, root.clone());
     app.codex = Some(crate::backend::codex::Client::mock("normal"));
     app.input = "interrupt".into();
     app.submit(&ctx);
@@ -378,164 +301,25 @@ fn config_hot_reload_keeps_valid_settings_and_defers_connection_changes_until_id
     frame(&mut app, &ctx, vec![]);
     assert_eq!(app.config.dialog.width, 314.);
     assert!(!app.config_error.is_empty());
-    // A model/API edit must wait for the current generation, just like executable changes.
-    document["codex"]["model"] = "fixture-new-model".into();
-    document["codex"]["useCustomApi"] = true.into();
-    document["codex"]["baseUrl"] = "https://example.invalid/v1".into();
-    document["codex"]["apiKey"] = "fixture-hot-key".into();
+    // Legacy provider fields no longer override the inherited Codex environment.
+    document["codex"]["model"] = "ignored-model".into();
+    document["codex"]["apiKey"] = "ignored-secret".into();
     std::fs::write(&path, document.to_string()).unwrap();
-    app.last_config_check = Instant::now() - Duration::from_secs(1);
-    frame(&mut app, &ctx, vec![]);
-    assert!(app.codex_restart_pending && app.busy && app.codex.is_some());
-    assert_eq!(app.config.codex.model, "fixture-new-model");
-    document["codex"]["executable"] = root.join("missing-codex").to_str().unwrap().into();
+    app.reload_config();
+    assert!(!app.codex_restart_pending);
+    document["codex"]["developmentMode"] = true.into();
     std::fs::write(&path, document.to_string()).unwrap();
-    app.last_config_check = Instant::now() - Duration::from_secs(1);
-    frame(&mut app, &ctx, vec![]);
-    assert!(app.codex_restart_pending && app.busy && app.codex.is_some());
-    assert!(app.config_error.is_empty());
-    app.codex.as_ref().unwrap().interrupt();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while app.codex_restart_pending && Instant::now() < deadline {
-        frame(&mut app, &ctx, vec![]);
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    assert!(!app.busy && !app.codex_restart_pending);
-    assert!(
-        app.codex.is_none(),
-        "the updated executable must be used after the old turn ends"
-    );
-    assert_eq!(app.codex_status, "启动失败");
-    drop(app);
-    std::fs::remove_dir_all(root).unwrap();
-}
-#[test]
-fn connection_form_masks_key_validates_save_and_defers_restart_while_busy() {
-    let root = std::env::temp_dir().join(format!("lexington-api-ui-{}", rand::random::<u64>()));
-    crate::backend::config::Config::save_no_approval(&root, false).unwrap();
-    let ctx = egui::Context::default();
-    let mut app = Pet::from_root(&ctx, false, root.clone());
-    let local_home = root.join("codex-home");
-    std::fs::create_dir_all(&local_home).unwrap();
-    std::fs::write(
-        local_home.join("config.toml"),
-        "model='fixture-local-model'\nmodel_provider='fixture'\n[model_providers.fixture]\nbase_url='https://example.invalid/v1'\nexperimental_bearer_token='fixture-local-secret'\n",
-    ).unwrap();
-    app.local_codex_home = Some(local_home);
-    app.codex = Some(crate::backend::codex::Client::mock("normal"));
-    app.input = "interrupt".into();
-    app.submit(&ctx);
-    app.settings = true;
-    app.settings_page = 1;
-    let original = std::fs::read(root.join("config/config.json")).unwrap();
-    frame(&mut app, &ctx, vec![]);
-    let inherited = app.connection_draft.as_ref().unwrap();
-    assert_eq!(inherited.model, "fixture-local-model");
-    assert_eq!(inherited.base_url, "https://example.invalid/v1");
-    assert_eq!(inherited.api_key, "fixture-local-secret");
-    assert!(!inherited.use_custom_api);
-    assert_eq!(
-        std::fs::read(root.join("config/config.json")).unwrap(),
-        original
-    );
-    for mode in ["inherited", "invalid", "custom"] {
-        let valid = mode == "custom";
-        if mode != "inherited" {
-            let draft = app.connection_draft.as_mut().unwrap();
-            draft.use_custom_api = true;
-            draft.model = "fixture-ui-model".into();
-            draft.base_url = if valid {
-                "http://127.0.0.1:9999/v1"
-            } else {
-                "not-a-url"
-            }
-            .into();
-            draft.api_key = "fixture-hidden-ui-key".into();
-        }
-        let mut save = None;
-        for _ in 0..12 {
-            let output = ctx.run(
-                egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(pos2(0., 0.), vec2(800., 600.))),
-                    events: vec![egui::Event::PointerMoved(pos2(530., 330.))],
-                    ..Default::default()
-                },
-                |ctx| app.ui(ctx),
-            );
-            let mut shapes: Vec<_> = output
-                .shapes
-                .iter()
-                .map(|s| (s.clip_rect, &s.shape))
-                .collect();
-            while let Some((clip, shape)) = shapes.pop() {
-                match shape {
-                    egui::Shape::Vec(children) => shapes.extend(children.iter().map(|s| (clip, s))),
-                    egui::Shape::Text(text) => {
-                        assert!(
-                            !text.galley.job.text.contains("fixture-hidden-ui-key")
-                                && !text.galley.job.text.contains("fixture-local-secret"),
-                            "key must be masked"
-                        );
-                        if text.galley.job.text == "保存" {
-                            let point = text.pos + text.galley.size() / 2.;
-                            if clip.contains(point) {
-                                save = Some(point);
-                            }
-                        }
-                    }
-                    _ => (),
-                }
-            }
-            if save.is_some() {
-                break;
-            }
-            frame(
-                &mut app,
-                &ctx,
-                vec![
-                    egui::Event::PointerMoved(pos2(530., 330.)),
-                    egui::Event::MouseWheel {
-                        unit: egui::MouseWheelUnit::Point,
-                        delta: vec2(0., -90.),
-                        modifiers: Default::default(),
-                    },
-                ],
-            );
-        }
-        click(
-            &mut app,
-            &ctx,
-            save.expect("visible connection save button"),
-        );
-        let saved = crate::backend::config::Config::read(&root).unwrap();
-        if mode == "inherited" {
-            assert!(app.connection_error.is_empty());
-            assert!(!saved.codex.use_custom_api);
-            assert!(saved.codex.model.is_empty());
-            assert!(saved.codex.api_key.is_empty());
-            assert!(saved.codex.base_url.is_empty());
-            assert!(!app.codex_restart_pending);
-        } else if valid {
-            assert!(app.connection_error.is_empty(), "{}", app.connection_error);
-            assert_eq!(saved.codex.model, "fixture-ui-model");
-            assert_eq!(saved.codex.api_key, "fixture-hidden-ui-key");
-            assert!(app.busy && app.codex_restart_pending);
-        } else {
-            assert!(!app.connection_error.is_empty());
-            assert!(!saved.codex.use_custom_api);
-            assert!(!app.codex_restart_pending);
-        }
-    }
-    app.settings = false;
-    frame(&mut app, &ctx, vec![]);
-    assert!(app.connection_draft.is_none());
+    app.reload_config();
+    assert!(app.codex_restart_pending && app.busy);
+    assert!(app.config.codex.development_mode);
+    assert!(app.development.reset_sessions_pending);
     drop(app);
     std::fs::remove_dir_all(root).unwrap();
 }
 #[test]
 fn sidebar_switches_damage_and_format_and_refresh_preserves_selection() {
     let ctx = egui::Context::default();
-    let mut app = Pet::from_context(&ctx, true);
+    let mut app = Wife::from_context(&ctx, true);
     assert_eq!(app.library.character, "lexington");
     assert_eq!(app.library.format, "gif");
     assert!(app.picture.is_some());
@@ -575,7 +359,7 @@ fn sidebar_switches_damage_and_format_and_refresh_preserves_selection() {
 #[test]
 fn native_pointer_events_drive_sidebar_and_pet_click_cycle() {
     let ctx = egui::Context::default();
-    let mut app = Pet::from_context(&ctx, true);
+    let mut app = Wife::from_context(&ctx, true);
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![]);
     click(&mut app, &ctx, pos2(110., 175.));
@@ -596,7 +380,7 @@ fn native_pointer_events_drive_sidebar_and_pet_click_cycle() {
 #[test]
 fn clock_cancel_expiry_and_dialog_inactivity() {
     let ctx = egui::Context::default();
-    let mut app = Pet::from_context(&ctx, true);
+    let mut app = Wife::from_context(&ctx, true);
     app.clock();
     app.clock();
     assert!(!app.clock_state.running());
@@ -618,7 +402,7 @@ fn context_menu_close_receives_input_outside_artwork_and_exits() {
     let root = std::env::temp_dir().join(format!("lexington-menu-{}", rand::random::<u64>()));
     crate::backend::config::Config::save_no_approval(&root, false).unwrap();
     let ctx = egui::Context::default();
-    let mut app = Pet::from_root(&ctx, false, root.clone());
+    let mut app = Wife::from_root(&ctx, false, root.clone());
     for _ in 0..3 {
         frame(&mut app, &ctx, vec![]);
     }
@@ -703,7 +487,7 @@ fn context_menu_close_receives_input_outside_artwork_and_exits() {
 fn right_click_in_drag_circle_opens_context_menu() {
     for label in ["设置", "人物记忆"] {
         let ctx = egui::Context::default();
-        let mut app = Pet::from_context(&ctx, true);
+        let mut app = Wife::from_context(&ctx, true);
         frame(&mut app, &ctx, vec![]);
         frame(&mut app, &ctx, vec![]);
         let point = pos2(340., 280.);
@@ -765,7 +549,7 @@ fn right_click_in_drag_circle_opens_context_menu() {
 fn input_hides_after_blur_and_restores_draft_and_error_on_hover_in_both_window_sizes() {
     for size in [vec2(500., 500.), vec2(800., 600.)] {
         let ctx = egui::Context::default();
-        let mut app = Pet::from_context(&ctx, true);
+        let mut app = Wife::from_context(&ctx, true);
         let mut run = |events| {
             let _ = ctx.run(
                 egui::RawInput {
@@ -896,7 +680,7 @@ fn input_hides_after_blur_and_restores_draft_and_error_on_hover_in_both_window_s
 #[test]
 fn input_focus_enter_error_and_escape_use_real_ui_events() {
     let ctx = egui::Context::default();
-    let mut app = Pet::from_context(&ctx, true);
+    let mut app = Wife::from_context(&ctx, true);
     app.codex = Some(crate::backend::codex::Client::mock("error"));
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![]);
@@ -932,7 +716,7 @@ fn input_focus_enter_error_and_escape_use_real_ui_events() {
 #[test]
 fn sidebar_cancel_keeps_new_message_when_dialog_already_open() {
     let ctx = egui::Context::default();
-    let mut app = Pet::from_context(&ctx, true);
+    let mut app = Wife::from_context(&ctx, true);
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![]);
     click(&mut app, &ctx, pos2(110., 475.));
@@ -947,7 +731,7 @@ fn sidebar_cancel_keeps_new_message_when_dialog_already_open() {
 #[test]
 fn enter_delivers_streamed_codex_reply_through_the_native_ui() {
     let ctx = egui::Context::default();
-    let mut app = Pet::from_context(&ctx, true);
+    let mut app = Wife::from_context(&ctx, true);
     app.codex = Some(crate::backend::codex::Client::mock("normal"));
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![]);
@@ -993,7 +777,7 @@ fn context_requests_wait_for_current_turn_and_send_without_replacing_drafts() {
 
     let path = std::env::temp_dir().join(format!("lexington-ui-inbox-{}", rand::random::<u64>()));
     let ctx = egui::Context::default();
-    let mut app = Pet::from_context(&ctx, true);
+    let mut app = Wife::from_context(&ctx, true);
     app.inbox = Some(Endpoint::bind_at(&path).unwrap().unwrap().start(|| {}));
     app.codex = Some(crate::backend::codex::Client::mock("normal"));
     app.input = "interrupt".into();
@@ -1015,6 +799,8 @@ fn context_requests_wait_for_current_turn_and_send_without_replacing_drafts() {
             files: vec![selected_path.clone()],
             source: "VS Code".into(),
             line: Some(17),
+            workspace: None,
+            diagnostics: None,
         };
         #[cfg(windows)]
         crate::backend::handoff::deliver_at(&path, &request).unwrap();
@@ -1074,7 +860,7 @@ fn empty_library_character_format_fallback_and_resource_reload() {
         std::env::temp_dir().join(format!("lexington-characters-{}", rand::random::<u64>()));
     std::fs::create_dir_all(&fixture).unwrap();
     let ctx = egui::Context::default();
-    let mut app = Pet::from_root(&ctx, true, fixture.clone());
+    let mut app = Wife::from_root(&ctx, true, fixture.clone());
     assert!(app.picture.is_none());
     assert!(app.library.selected.is_none());
     assert_eq!(app.library.format, "gif");
@@ -1145,7 +931,7 @@ fn empty_library_character_format_fallback_and_resource_reload() {
 #[test]
 fn browser_sized_cjk_wraps_and_reserves_full_typewriter_height() {
     let ctx = egui::Context::default();
-    let mut app = Pet::from_context(&ctx, true);
+    let mut app = Wife::from_context(&ctx, true);
     app.say("一二三四五六七八九十一二三".into());
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![]);
@@ -1182,7 +968,7 @@ fn automatic_clock_notice_undo_settings_and_hot_reload_use_saved_state() {
     Config::save_auto_clock(&root, true).unwrap();
     let path = root.join("clock.json");
     let ctx = egui::Context::default();
-    let mut app = Pet::from_root(&ctx, false, root.clone());
+    let mut app = Wife::from_root(&ctx, false, root.clone());
     let now = clock::now();
     let tick = Instant::now();
     app.clock_state = ClockState::load(path.clone(), now - 180).unwrap();
@@ -1290,13 +1076,13 @@ fn alarm_settings_save_edit_toggle_delete_and_reminder_requires_acknowledgement(
     let root = std::env::temp_dir().join(format!("lexington-alarm-ui-{}", rand::random::<u64>()));
     crate::backend::config::Config::save_no_approval(&root, false).unwrap();
     let ctx = egui::Context::default();
-    let mut app = Pet::from_root(&ctx, false, root.clone());
+    let mut app = Wife::from_root(&ctx, false, root.clone());
     let path = root.join("alarms.json");
     app.alarm.state = crate::backend::alarm::AlarmState::load(path.clone()).unwrap();
     app.settings = true;
     app.settings_page = 3;
     // Render the full production settings page and locate actual control text.
-    let render = |app: &mut Pet| {
+    let render = |app: &mut Wife| {
         ctx.run(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(pos2(0., 0.), vec2(500., 500.))),
@@ -1321,7 +1107,7 @@ fn alarm_settings_save_edit_toggle_delete_and_reminder_requires_acknowledgement(
     render(&mut app);
     let output = render(&mut app);
     let add = find(&output, "添加闹钟");
-    let pointer = |app: &mut Pet, position, pressed| {
+    let pointer = |app: &mut Wife, position, pressed| {
         let _ = ctx.run(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(pos2(0., 0.), vec2(500., 500.))),
@@ -1417,11 +1203,11 @@ fn input_keeps_typing_visible_across_multiple_cjk_characters() {
         let root =
             std::env::temp_dir().join(format!("lexington-input-text-{}", rand::random::<u64>()));
         crate::backend::config::Config::save_no_approval(&root, false).unwrap();
-        let mut app = Pet::from_root(&ctx, true, root.clone());
+        let mut app = Wife::from_root(&ctx, true, root.clone());
         app.library
             .refresh(std::path::Path::new(env!("CARGO_MANIFEST_DIR")));
         app.load_picture(&ctx);
-        let run = |app: &mut Pet, events| {
+        let run = |app: &mut Wife, events| {
             ctx.run(
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)),

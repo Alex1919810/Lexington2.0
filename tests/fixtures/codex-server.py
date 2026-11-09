@@ -60,7 +60,10 @@ for line in sys.stdin:
         pass
     elif method == "config/read" and mode.startswith("memory-"):
         send({"id":message["id"],"result":{"config":{"mcp_servers":{"fixture.with.dot":{"command":"fixture-only","required":True}}}}})
-    elif method == "thread/start":
+    elif method in ("thread/start", "thread/resume"):
+        session_method = method
+        if method == "thread/resume":
+            assert params["threadId"] == thread
         assert os.path.isabs(params["cwd"])
         assert os.path.samefile(params["cwd"], os.getcwd())
         assert 'baseInstructions' not in params
@@ -72,11 +75,31 @@ for line in sys.stdin:
             assert params.get('developerInstructions')
         elif mode == "persona":
             assert params.get("developerInstructions") == "角色甲\n只属于甲"
+        elif mode.startswith("development-"):
+            instructions = params.get("developerInstructions", "")
+            assert ("[Lexington development]" in instructions) == (mode == "development-on")
         elif mode == "context":
             assert params.get("developerInstructions")
         else:
             assert "developerInstructions" not in params
         send({"id": message["id"], "result": {"thread": {"id": thread}, "approvalPolicy": {"granular": {"sandbox_approval": True, "rules": False, "skill_approval": True, "request_permissions": True, "mcp_elicitations": True}} if mode == "granular" else "on-request"}})
+    elif method == "command/exec":
+        assert os.path.samefile(params['cwd'], os.getcwd())
+        assert 'sandboxPolicy' not in params and 'env' not in params, 'inherit local execution policy'
+        assert params['outputBytesCap']==262144
+        assert params['timeoutMs'] > 0
+        assert params['command'][0]=='fixture-test'
+        if params['command'][1]=='wait':
+            pending=('standalone-test',message['id'],params['processId'])
+        elif params['command'][1]=='error':
+            send({'id':message['id'],'error':{'code':-32000,'message':'fixture execution error'}})
+        else:
+            send({'id':message['id'],'result':{'exitCode':1 if params['command'][1]=='fail' else 0,'stdout':json.dumps(params['command'],ensure_ascii=False),'stderr':'fixture failure' if params['command'][1]=='fail' else ''}})
+    elif method == "command/exec/terminate":
+        assert pending[0]=='standalone-test' and pending[2]==params['processId']
+        send({'id':message['id'],'result':{}})
+        send({'id':pending[1],'result':{'exitCode':130,'stdout':'cancelled output','stderr':''}})
+        pending=None
     elif method == "turn/start":
         assert params["threadId"] == thread
         if deferred_ack is not None:
@@ -112,6 +135,19 @@ for line in sys.stdin:
                 complete(json.dumps(result,ensure_ascii=False))
         elif text.startswith("world-"):
             complete(json.dumps(params["input"], ensure_ascii=False))
+        elif text == "resume-status":
+            complete(session_method + ":" + os.getcwd())
+        elif text == "execution":
+            notify("item/commandExecution/outputDelta", {"itemId":"command-1","delta":"第一段\n"})
+            notify("item/started", {"item":{"id":"command-1","type":"commandExecution","command":"cargo test affected","cwd":os.getcwd(),"status":"inProgress"}})
+            notify("item/commandExecution/outputDelta", {"itemId":"command-1","delta":"第二段\n"})
+            notify("item/completed", {"item":{"id":"command-1","type":"commandExecution","command":"cargo test affected","cwd":os.getcwd(),"status":"completed","aggregatedOutput":"第一段\n第二段\n","exitCode":0,"durationMs":25}})
+            notify("turn/plan/updated", {"explanation":"验证受影响模块","plan":[{"step":"运行检查","status":"completed"}]})
+            notify("item/started", {"item":{"id":"patch-1","type":"fileChange","status":"inProgress","changes":[{"path":"example.rs","kind":{"type":"update"},"diff":"-before\n+after"}]}})
+            notify("item/fileChange/patchUpdated", {"itemId":"patch-1","changes":[{"path":"example.rs","kind":{"type":"update"},"diff":"-before\n+after"}]})
+            notify("item/completed", {"item":{"id":"patch-1","type":"fileChange","status":"completed","changes":[{"path":"example.rs","kind":{"type":"update"},"diff":"-before\n+after"}]}})
+            notify("turn/diff/updated", {"diff":"--- a/example.rs\n+++ b/example.rs\n-before\n+after"})
+            complete("```rust\nfn fixed() {}\n```\n已完成受影响检查")
         elif text == "persona-status":
             complete(params.get("developerInstructions", "turn-has-no-persona") + ":" + str(count))
         elif text == "descendant":

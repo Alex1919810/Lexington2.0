@@ -15,12 +15,7 @@
     "clockInCancelMessage": "打卡已终止"
   },
   "codex": {
-    "executable": "codex",
-    "workingDirectory": null,
     "noApproval": false,
-    "model": "",
-    "useCustomApi": false,
-    "baseUrl": "",
-    "apiKey": ""
+    "developmentMode": false
   }
 }

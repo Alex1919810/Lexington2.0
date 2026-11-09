@@ -1,4 +1,4 @@
-use super::app::Pet;
+use super::app::Wife;
 use crate::{
     roleplay::{self, RoleCard},
     tools::file_dialog,
@@ -25,7 +25,7 @@ impl CharacterCreation {
     }
 }
 
-impl Pet {
+impl Wife {
     pub(super) fn new_character_ui(&mut self, ui: &mut egui::Ui) {
         let busy = self.character_creation.busy();
         let Some(draft) = &mut self.role_editor.creating else {
@@ -190,7 +190,7 @@ mod tests {
     use super::*;
     use std::time::Instant;
 
-    fn frame(app: &mut Pet, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
+    fn frame(app: &mut Wife, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
         ctx.run(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -207,7 +207,7 @@ mod tests {
             },
         )
     }
-    fn click(app: &mut Pet, ctx: &egui::Context, label: &str) {
+    fn click(app: &mut Wife, ctx: &egui::Context, label: &str) {
         let output = frame(app, ctx, vec![]);
         let position = output
             .shapes
@@ -241,7 +241,7 @@ mod tests {
     fn new_card_imports_artwork_becomes_selectable_and_survives_closing_settings() {
         let root = tempfile::tempdir().unwrap();
         let ctx = egui::Context::default();
-        let mut app = Pet::from_root(&ctx, true, root.path().into());
+        let mut app = Wife::from_root(&ctx, true, root.path().into());
         let path = root.path().join("立绘.png");
         image::RgbaImage::from_pixel(4, 4, image::Rgba([1, 2, 3, 255]))
             .save(&path)

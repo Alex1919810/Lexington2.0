@@ -1,4 +1,4 @@
-use super::app::Pet;
+use super::app::Wife;
 use crate::roleplay::{ContextPlan, SceneState};
 use eframe::egui;
 
@@ -12,7 +12,7 @@ pub(super) struct ContextUi {
     pub notice: String,
 }
 
-impl Pet {
+impl Wife {
     pub(super) fn role_context_ui(&mut self, ui: &mut egui::Ui) {
         ui.label(format!("运行角色：{}", self.library.character));
         ui.small(

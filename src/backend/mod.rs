@@ -139,75 +139,25 @@ mod tests {
         }
     }
     #[test]
-    fn api_connection_saves_atomically_preserves_unknown_fields_and_rejects_invalid_input() {
+    fn development_setting_preserves_legacy_config_but_never_loads_connection_fields() {
         let root = Fixture::new();
-        root.write("config/config.json", r#"{"codex":{"executable":"custom","noApproval":true,"future":7},"llm":{"apiKey":"old-fixture"},"other":42}"#);
-        let mut connection = Config::load(&root.0).codex;
-        connection.model = " fixture-model ".into();
-        connection.use_custom_api = true;
-        connection.base_url = " https://example.invalid/v1/ ".into();
-        connection.api_key = " fixture-api-key ".into();
-        Config::save_connection(&root.0, &connection).unwrap();
-        let path = root.0.join("config/config.json");
-        let saved = fs::read(&path).unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        root.write("config/config.json",r#"{"codex":{"executable":"ignored","workingDirectory":"missing","model":"ignored","apiKey":"fixture-secret","useCustomApi":true,"future":7},"other":42}"#);
+        Config::save_development_mode(&root.0, true).unwrap();
+        let config = Config::read(&root.0).unwrap();
+        assert!(config.codex.development_mode);
+        assert_eq!(config.codex.executable, "codex");
+        assert!(config.codex.working_directory.is_none());
+        assert!(!format!("{:?}", config.codex).contains("fixture-secret"));
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.0.join("config/config.json")).unwrap()).unwrap();
         assert_eq!(value["codex"]["future"], 7);
-        assert_eq!(value["codex"]["executable"], "custom");
-        assert_eq!(value["codex"]["noApproval"], true);
-        assert_eq!(value["llm"]["apiKey"], "old-fixture");
+        assert_eq!(value["codex"]["apiKey"], "fixture-secret");
         assert_eq!(value["other"], 42);
-        let loaded = Config::read(&root.0).unwrap().codex;
-        assert_eq!(loaded.model, "fixture-model");
-        assert_eq!(loaded.base_url, "https://example.invalid/v1");
-        assert_eq!(loaded.api_key, "fixture-api-key");
-        assert!(!format!("{loaded:?}").contains("fixture-api-key"));
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-        }
-        for url in [
-            "not-a-url",
-            "file:///tmp/api",
-            "https://user:password@example.invalid/v1",
-            "https://example.invalid/?key=secret",
-            "https://example.invalid/#fragment",
-        ] {
-            let invalid = CodexConfig {
-                base_url: url.into(),
-                ..loaded.clone()
-            };
-            assert!(Config::save_connection(&root.0, &invalid).is_err());
-            assert_eq!(fs::read(&path).unwrap(), saved);
-        }
-        for invalid in [
-            CodexConfig {
-                api_key: String::new(),
-                ..loaded.clone()
-            },
-            CodexConfig {
-                api_key: "bad\nkey".into(),
-                ..loaded.clone()
-            },
-            CodexConfig {
-                model: String::new(),
-                ..loaded.clone()
-            },
-        ] {
-            assert!(Config::save_connection(&root.0, &invalid).is_err());
-            assert_eq!(fs::read(&path).unwrap(), saved);
-        }
-        let mut toggle = loaded.clone();
-        toggle.no_approval = !toggle.no_approval;
-        assert!(!toggle.connection_changed(&loaded));
-        toggle.model = "other-model".into();
-        assert!(toggle.connection_changed(&loaded));
-        fs::write(&path, b"invalid").unwrap();
-        assert!(Config::save_connection(&root.0, &loaded).is_err());
-        assert_eq!(fs::read(&path).unwrap(), b"invalid");
-        assert_eq!(fs::read_dir(root.0.join("config")).unwrap().count(), 1);
+        root.write("config/config.json", "invalid");
+        assert!(Config::save_development_mode(&root.0, false).is_err());
+        assert_eq!(
+            fs::read_to_string(root.0.join("config/config.json")).unwrap(),
+            "invalid"
+        );
     }
 }

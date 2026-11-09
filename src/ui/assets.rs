@@ -186,7 +186,7 @@ mod tests {
     };
     #[test]
     fn live2d_sidebar_and_transformed_body_clicks_trigger_only_local_actions() {
-        use crate::ui::app::Pet;
+        use crate::ui::app::Wife;
         let ctx = egui::Context::default();
         ctx.style_mut(|s| s.animation_time = 0.);
         let root = tempfile::tempdir().unwrap();
@@ -209,7 +209,7 @@ mod tests {
                 std::fs::copy(source, destination).unwrap();
             }
         }
-        let mut app = Pet::from_root(&ctx, true, root.path().to_path_buf());
+        let mut app = Wife::from_root(&ctx, true, root.path().to_path_buf());
         // Pin this regression to the legacy outfit as the library grows.
         app.library.selected = app
             .library
@@ -217,7 +217,7 @@ mod tests {
             .iter()
             .position(|i| i.format == "gif" && i.outfit == "WeddingDress" && !i.damaged);
         app.load_picture(&ctx);
-        let run = |app: &mut Pet, events| {
+        let run = |app: &mut Wife, events| {
             let _ = ctx.run(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
@@ -232,7 +232,7 @@ mod tests {
         };
         run(&mut app, vec![]);
         run(&mut app, vec![]);
-        let click = |app: &mut Pet, p: egui::Pos2| {
+        let click = |app: &mut Wife, p: egui::Pos2| {
             run(app, vec![egui::Event::PointerMoved(p)]);
             for pressed in [true, false] {
                 run(

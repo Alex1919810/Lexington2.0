@@ -1,8 +1,8 @@
-use super::app::Pet;
+use super::app::Wife;
 use crate::roleplay::{Memory, UserProfile};
 use eframe::egui;
 
-impl Pet {
+impl Wife {
     pub(super) fn role_memory_ui(&mut self, ui: &mut egui::Ui) {
         if self.role_editor.profile.is_none() {
             match UserProfile::load(

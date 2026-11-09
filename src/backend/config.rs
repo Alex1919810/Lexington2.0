@@ -24,67 +24,22 @@ impl Default for DialogConfig {
         }
     }
 }
-#[derive(Clone, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct CodexConfig {
+    // Runtime launch options only. Legacy connection fields in config.json are ignored.
+    #[serde(skip)]
     pub executable: String,
+    #[serde(skip)]
     pub working_directory: Option<PathBuf>,
     pub no_approval: bool,
-    pub model: String,
-    pub use_custom_api: bool,
-    pub base_url: String,
-    pub api_key: String,
-}
-impl std::fmt::Debug for CodexConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CodexConfig")
-            .field("executable", &self.executable)
-            .field("working_directory", &self.working_directory)
-            .field("no_approval", &self.no_approval)
-            .field("model", &self.model)
-            .field("use_custom_api", &self.use_custom_api)
-            .field("base_url", &self.base_url)
-            .field("api_key", &"[hidden]")
-            .finish()
-    }
+    pub development_mode: bool,
 }
 impl CodexConfig {
-    pub fn validate_connection(&self) -> Result<(), String> {
-        if self.model.len() > 200 || self.model.chars().any(char::is_control) {
-            return Err("模型名称无效。".into());
-        }
-        if !self.use_custom_api {
-            return Ok(());
-        }
-        if self.model.trim().is_empty() {
-            return Err("请输入模型名称。".into());
-        }
-        let valid = url::Url::parse(&self.base_url).is_ok_and(|url| {
-            matches!(url.scheme(), "http" | "https")
-                && url.host_str().is_some()
-                && url.username().is_empty()
-                && url.password().is_none()
-                && url.query().is_none()
-                && url.fragment().is_none()
-        });
-        if !valid {
-            return Err("API 地址需为 http/https 基础地址，不含账号、查询参数或片段。".into());
-        }
-        if self.api_key.trim().is_empty()
-            || self.api_key.len() > 8192
-            || self.api_key.chars().any(char::is_control)
-        {
-            return Err("请输入有效的 API Key。".into());
-        }
-        Ok(())
-    }
     pub fn connection_changed(&self, other: &Self) -> bool {
         self.executable != other.executable
             || self.working_directory != other.working_directory
-            || self.model != other.model
-            || self.use_custom_api != other.use_custom_api
-            || (self.use_custom_api
-                && (self.base_url != other.base_url || self.api_key != other.api_key))
+            || self.development_mode != other.development_mode
     }
 }
 impl Default for CodexConfig {
@@ -93,10 +48,7 @@ impl Default for CodexConfig {
             executable: "codex".into(),
             working_directory: None,
             no_approval: false,
-            model: String::new(),
-            use_custom_api: false,
-            base_url: String::new(),
-            api_key: String::new(),
+            development_mode: false,
         }
     }
 }
@@ -150,22 +102,8 @@ impl Config {
     pub fn save_auto_clock(root: &Path, enabled: bool) -> Result<(), String> {
         Self::save_settings(root, "clockIn", [("autoStart", enabled.into())])
     }
-    pub fn save_connection(root: &Path, config: &CodexConfig) -> Result<(), String> {
-        let mut config = config.clone();
-        config.model = config.model.trim().to_owned();
-        config.base_url = config.base_url.trim().trim_end_matches('/').to_owned();
-        config.api_key = config.api_key.trim().to_owned();
-        config.validate_connection()?;
-        Self::save_settings(
-            root,
-            "codex",
-            [
-                ("model", config.model.clone().into()),
-                ("useCustomApi", config.use_custom_api.into()),
-                ("baseUrl", config.base_url.clone().into()),
-                ("apiKey", config.api_key.clone().into()),
-            ],
-        )
+    pub fn save_development_mode(root: &Path, enabled: bool) -> Result<(), String> {
+        Self::save_settings(root, "codex", [("developmentMode", enabled.into())])
     }
     fn save_settings(
         root: &Path,
@@ -221,15 +159,6 @@ impl Config {
             fs::read(root.join("config/config.json")).map_err(|e| format!("读取配置失败：{e}"))?;
         let mut config: Self = serde_json::from_slice(&bytes)
             .map_err(|_| "配置格式错误，保留上次有效设置。".to_owned())?;
-        config.codex.model = config.codex.model.trim().to_owned();
-        config.codex.base_url = config
-            .codex
-            .base_url
-            .trim()
-            .trim_end_matches('/')
-            .to_owned();
-        config.codex.api_key = config.codex.api_key.trim().to_owned();
-        config.codex.validate_connection()?;
         if let Some(city) = &config.weather.city {
             city.validate()?;
         }

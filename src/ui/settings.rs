@@ -1,8 +1,5 @@
-use super::{app::Pet, clock::ClockAction};
-use crate::backend::{
-    codex_config::LocalCodexConfig,
-    config::{CodexConfig, Config},
-};
+use super::{app::Wife, clock::ClockAction};
+use crate::backend::config::Config;
 use eframe::egui::{self, vec2};
 use std::time::{Duration, Instant};
 
@@ -13,17 +10,15 @@ struct SettingsActions {
     no_approval: Option<bool>,
     clock_auto_changed: bool,
     clock_action: Option<ClockAction>,
-    connection: Option<CodexConfig>,
+    development_mode: Option<bool>,
     weather: Option<super::weather::WeatherAction>,
     role_card: Option<(String, crate::roleplay::RoleCard)>,
 }
 
-impl Pet {
+impl Wife {
     pub(super) fn settings_ui(&mut self, ctx: &egui::Context) {
         if !self.settings {
             self.role_editor = Default::default();
-            self.connection_draft = None;
-            self.connection_error.clear();
             self.settings_viewport_open = false;
             self.settings_drag = None;
             self.settings_pointer_down = false;
@@ -234,8 +229,6 @@ impl Pet {
         self.settings = open;
         if !open {
             self.role_editor = Default::default();
-            self.connection_draft = None;
-            self.connection_error.clear();
             self.settings_viewport_open = false;
             self.settings_drag = None;
             self.settings_pointer_down = false;
@@ -265,14 +258,10 @@ impl Pet {
         if let Some(action) = actions.clock_action {
             self.clock_action(action);
         }
-        if let Some(connection) = actions.connection {
-            match Config::save_connection(&self.root, &connection) {
-                Ok(()) => {
-                    self.reload_config();
-                    self.connection_draft = Some(self.local_codex_config.draft(&self.config.codex));
-                    self.connection_error.clear();
-                }
-                Err(error) => self.connection_error = error,
+        if let Some(enabled) = actions.development_mode {
+            match Config::save_development_mode(&self.root, enabled) {
+                Ok(()) => self.reload_config(),
+                Err(error) => self.config_error = error,
             }
         }
         if let Some(action) = actions.weather {
@@ -289,7 +278,7 @@ impl Pet {
         }
         if actions.restart_codex {
             self.reload_config();
-            self.start_codex(ctx);
+            self.new_development_task(ctx);
         }
     }
     fn settings_contents(&mut self, ui: &mut egui::Ui) -> SettingsActions {
@@ -300,7 +289,8 @@ impl Pet {
         let mut approval_changed = false;
         let mut clock_auto_changed = false;
         let mut clock_action = None;
-        let mut connection = None;
+        let mut development_mode = self.config.codex.development_mode;
+        let mut development_mode_changed = false;
         let mut weather = None;
         let mut role_card = None;
         for (text_style, size) in [
@@ -360,94 +350,13 @@ impl Pet {
                             } else if self.settings_page == 2 {
                                 (clock_auto_changed, clock_action) = self.clock_settings_ui(ui);
                             } else if self.settings_page == 1 {
-                                if self.connection_draft.is_none() {
-                                    if let Some(home) = &self.local_codex_home {
-                                        match LocalCodexConfig::read(home) {
-                                            Ok(local) => self.local_codex_config = local,
-                                            Err(error) => self.connection_error = error,
-                                        }
-                                    }
-                                    self.connection_draft = Some(self.local_codex_config.draft(&self.config.codex));
+                                ui.label("模型、API 和登录继承当前环境与本机 Codex 配置。");
+                                ui.small("修改外部配置后重启会话。Lexington 不保存连接参数或凭据。");
+                                development_mode_changed = ui.checkbox(&mut development_mode, "development 模式").changed();
+                                ui.small("开启后注入代码开发指令。切换将在当前任务结束后新建会话。");
+                                if ui.button("打开 development").clicked() {
+                                    self.development.open = true;
                                 }
-                                if ui.small_button("读取本机配置")
-                                    .on_hover_text("读取本机 Codex 的模型、API 地址及 Key；点击保存后才应用自定义 API。")
-                                    .clicked()
-                                    && let Some(home) = &self.local_codex_home
-                                {
-                                    match LocalCodexConfig::read(home) {
-                                        Ok(local) => {
-                                            self.local_codex_config = local;
-                                            // Explicitly importing prepares the fields without changing the active connection.
-                                            let custom_api = self.connection_draft.as_ref()
-                                                .is_some_and(|draft| draft.use_custom_api);
-                                            let mut saved = self.config.codex.clone();
-                                            saved.use_custom_api = false;
-                                            saved.model.clear();
-                                            let mut draft = self.local_codex_config.draft(&saved);
-                                            draft.use_custom_api = custom_api;
-                                            self.connection_draft = Some(draft);
-                                            self.connection_error.clear();
-                                        }
-                                        Err(error) => self.connection_error = error,
-                                    }
-                                }
-                                let draft = self.connection_draft
-                                    .get_or_insert_with(|| self.config.codex.clone());
-                                egui::Frame::group(ui.style())
-                                    .fill(egui::Color32::WHITE)
-                                    .inner_margin(12)
-                                    .corner_radius(8)
-                                    .show(ui, |ui| {
-                                        ui.set_width(ui.available_width());
-                                        ui.strong("模型与 API");
-                                        if !draft.use_custom_api {
-                                            ui.weak("沿用本机 Codex")
-                                                .on_hover_text("显示 CODEX_HOME（默认 ~/.codex）中的用户配置；未设置模型时由 Codex 决定。保存时保留继承方式。");
-                                        }
-                                        ui.label("模型");
-                                        ui.add(egui::TextEdit::singleline(&mut draft.model)
-                                            .id(egui::Id::new("connection-model"))
-                                            .desired_width(f32::INFINITY)
-                                            .hint_text("留空沿用本机配置"));
-                                        ui.checkbox(&mut draft.use_custom_api, "自定义 API")
-                                            .on_hover_text("兼容 OpenAI Responses API；关闭时使用本机 Codex 服务。更改后点击保存。");
-                                        ui.add_enabled_ui(draft.use_custom_api, |ui| {
-                                            ui.label("API 地址");
-                                            ui.add(egui::TextEdit::singleline(&mut draft.base_url)
-                                                .id(egui::Id::new("connection-url"))
-                                                .desired_width(f32::INFINITY)
-                                                .hint_text("https://api.openai.com/v1"))
-                                                .on_hover_text("填写基础地址（通常以 /v1 结尾），不要填写 /responses。");
-                                        });
-                                        let mut reveal_key = false;
-                                        ui.horizontal(|ui| {
-                                            ui.label("API Key");
-                                            let reveal = ui.add(egui::Button::new("按住显示")
-                                                .sense(egui::Sense::click_and_drag()))
-                                                .on_hover_text("按住暂时显示密钥，松开或窗口失焦后恢复隐藏。");
-                                            reveal_key = reveal.is_pointer_button_down_on()
-                                                && ui.input(|i| i.focused && i.pointer.primary_down());
-                                        });
-                                        ui.add_enabled(draft.use_custom_api,
-                                            egui::TextEdit::singleline(&mut draft.api_key)
-                                                .id(egui::Id::new("connection-key"))
-                                                .password(!reveal_key)
-                                                .hint_text("未读取到 API Key")
-                                                .desired_width(f32::INFINITY))
-                                                .on_hover_text("开启自定义 API 时必须填写；保存后仅用于 Lexington。");
-                                        ui.horizontal(|ui| {
-                                            if ui.button("保存").clicked() {
-                                                connection = Some(self.local_codex_config.to_save(draft, &self.config.codex));
-                                            }
-                                            if ui.button("取消修改").clicked() {
-                                                *draft = self.local_codex_config.draft(&self.config.codex);
-                                                self.connection_error.clear();
-                                            }
-                                        });
-                                        if !self.connection_error.is_empty() {
-                                            ui.colored_label(egui::Color32::from_rgb(180, 45, 45), &self.connection_error);
-                                        }
-                                    });
                                 ui.add_space(4.);
                                 egui::Frame::group(ui.style())
                                     .fill(egui::Color32::WHITE)
@@ -469,14 +378,9 @@ impl Pet {
                                             );
                                         });
                                         ui.separator();
-                                        let directory = self
-                                            .config
-                                            .codex
-                                            .working_directory
-                                            .as_ref()
-                                            .map_or_else(|| self.root.clone(), |dir| self.root.join(dir));
+                                        let directory = self.development.book.active.clone().unwrap_or_else(||self.root.clone());
                                         for (title, value) in [
-                                            ("程序", self.config.codex.executable.clone()),
+                                            ("程序", std::env::var("LEXINGTON_CODEX_EXECUTABLE").unwrap_or_else(|_|"codex（继承环境）".into())),
                                             ("工作目录", directory.display().to_string()),
                                         ] {
                                             ui.weak(title);
@@ -550,7 +454,7 @@ impl Pet {
             no_approval: approval_changed.then_some(no_approval),
             clock_auto_changed,
             clock_action,
-            connection,
+            development_mode: development_mode_changed.then_some(development_mode),
             weather,
             role_card,
         }

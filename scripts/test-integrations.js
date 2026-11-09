@@ -10,7 +10,8 @@ const messages = [];
 let errors = [];
 let configuredExecutable = '/tmp/带 空格/lexington';
 const vscode = {
-    workspace: { getConfiguration: () => ({ get: () => configuredExecutable }) },
+    workspace: { getConfiguration: () => ({ get: () => configuredExecutable }), getWorkspaceFolder: () => undefined, textDocuments: [] },
+    languages: { getDiagnostics: () => [] },
     window: { showErrorMessage: message => errors.push(message) },
     commands: { registerCommand: (name, callback) => { commands[name] = callback; return {}; } }
 };
@@ -58,6 +59,46 @@ if (process.platform === 'win32') {
     assert.equal(invocation.executable, path.join(process.env.LOCALAPPDATA || path.join(require('os').homedir(), 'AppData', 'Local'), 'lexington', 'lexington.exe'));
 }
 messages.pop();
+
+const workspace = { uri: { scheme: 'file', fsPath: '/tmp/project', toString: () => 'file:///tmp/project' } };
+vscode.workspace.getWorkspaceFolder = () => workspace;
+vscode.window.activeTextEditor.document.uri = localFile;
+vscode.window.activeTextEditor.document.isUntitled = false;
+commands['lexington.askSelection']();
+assert.equal(messages.pop().workspace, workspace.uri.fsPath);
+commands['lexington.askFile'](localFile, [localFile]);
+assert.equal(messages.pop().workspace, workspace.uri.fsPath);
+vscode.workspace.getWorkspaceFolder = file => file === localFile ? workspace : undefined;
+const previousErrors = errors.length;
+commands['lexington.askFile'](localFile, [localFile, { scheme: 'file', fsPath: '/tmp/other.rs' }]);
+assert.equal(errors.length, previousErrors + 1);
+assert.match(errors.at(-1), /不同项目/);
+
+const issue = { severity: 0, message: '类型不匹配', source: 'rust-analyzer', code: { value: 'E0308' },
+    range: { start: { line: 3, character: 2 }, end: { line: 3, character: 5 } } };
+vscode.workspace.getWorkspaceFolder = uri => uri === localFile ? workspace : undefined;
+vscode.workspace.textDocuments = [{ uri: localFile, version: 7, isDirty: true }];
+vscode.languages.getDiagnostics = () => [[localFile, [issue]], [{ scheme: 'file', fsPath: '/elsewhere/a.rs', toString: () => 'file:///elsewhere/a.rs' }, [issue]]];
+commands['lexington.sendDiagnostics'](localFile);
+const diagnosticRequest = messages.pop();
+assert.equal(diagnosticRequest.text, '');assert.equal(diagnosticRequest.workspace, workspace.uri.fsPath);
+assert.equal(diagnosticRequest.diagnostics.documents.length, 1);
+assert.equal(diagnosticRequest.diagnostics.documents[0].version, 7);
+assert.equal(diagnosticRequest.diagnostics.documents[0].dirty, true);
+assert.deepEqual(diagnosticRequest.diagnostics.documents[0].diagnostics[0], {
+    severity: 'error', message: '类型不匹配', source: 'rust-analyzer', code: 'E0308', startLine: 4, startColumn: 3, endLine: 4, endColumn: 6
+});
+vscode.languages.getDiagnostics = () => [[localFile, Array.from({ length: 210 }, () => issue)]];
+commands['lexington.sendDiagnostics'](localFile);
+const capped = messages.pop();assert.equal(capped.diagnostics.truncated, true);assert.equal(capped.diagnostics.documents[0].diagnostics.length, 200);
+vscode.languages.getDiagnostics = () => [[localFile, Array.from({ length: 200 }, () => ({ ...issue, message: '长'.repeat(4000) }))]];
+commands['lexington.sendDiagnostics'](localFile);const byteCapped = messages.pop();assert.ok(byteCapped.diagnostics.truncated);assert.ok(Buffer.byteLength(JSON.stringify(byteCapped.diagnostics)) < 512 * 1024);
+vscode.languages.getDiagnostics = () => [[localFile, [{ ...issue, message: 'x'.repeat(3999) + '🚨', source: '源'.repeat(128) }]]];
+commands['lexington.sendDiagnostics'](localFile);const unicodeBoundary = messages.pop().diagnostics.documents[0].diagnostics[0];assert.equal(unicodeBoundary.message, 'x'.repeat(3999));assert.equal(unicodeBoundary.source, '源'.repeat(128));
+vscode.languages.getDiagnostics = () => [[localFile, [{ ...issue, code: null }]]];commands['lexington.sendDiagnostics'](localFile);assert.equal(messages.pop().diagnostics.documents[0].diagnostics[0].code, '');
+vscode.languages.getDiagnostics = () => [];
+commands['lexington.sendDiagnostics'](localFile);assert.deepEqual(messages.pop().diagnostics.documents, []);
+commands['lexington.askSelection']();assert.ok(messages.pop().diagnostics);
 
 let installed;
 let clicked;

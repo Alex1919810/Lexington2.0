@@ -11,12 +11,27 @@ pub struct Request {
     pub files: Vec<String>,
     pub source: String,
     pub line: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostics: Option<crate::development::diagnostics::DiagnosticSnapshot>,
 }
 
 impl Request {
     pub fn validate(&self) -> io::Result<()> {
-        if self.text.trim().is_empty() && self.files.is_empty() {
+        if self.text.trim().is_empty() && self.files.is_empty() && self.diagnostics.is_none() {
             return Err(io::Error::other("没有选中文字或文件"));
+        }
+        if let Some(workspace) = &self.workspace
+            && (!std::path::Path::new(workspace).is_absolute() || workspace.contains('\0'))
+        {
+            return Err(io::Error::other("项目目录需为本地绝对路径"));
+        }
+        if let Some(snapshot) = &self.diagnostics {
+            if self.workspace.is_none() {
+                return Err(io::Error::other("项目诊断需带来源工作区。"));
+            }
+            snapshot.validate(None).map_err(io::Error::other)?;
         }
         if self.files.len() > 32
             || self
@@ -34,9 +49,11 @@ impl Request {
 
     pub fn prompt(&self) -> String {
         // JSON preserves filename boundaries, quotes and newlines without shell parsing.
+        let mut value = serde_json::to_value(self).expect("request serialization");
+        value.as_object_mut().unwrap().remove("diagnostics");
         format!(
             "看看Lexington怎么说：请阅读以下选中文字及其来源，或查看指定文件，给出你的分析与建议。\n{}",
-            serde_json::to_string_pretty(self).expect("request serialization")
+            serde_json::to_string_pretty(&value).expect("request serialization")
         )
     }
 }
@@ -415,6 +432,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn diagnostic_only_requests_are_valid_scoped_data_and_omitted_from_chat_prompt() {
+        let mut request = Request {
+            workspace: Some(std::env::temp_dir().display().to_string()),
+            diagnostics: Some(crate::development::diagnostics::DiagnosticSnapshot {
+                captured_at: 1,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        request.validate().unwrap();
+        assert!(!request.prompt().contains("diagnostics"));
+        request.workspace = None;
+        assert!(request.validate().is_err());
+    }
+
+    #[test]
     fn requests_preserve_sources_and_reject_empty_relative_or_oversized_input() {
         let request = Request {
             text: "你好\n第二行".into(),
@@ -426,6 +459,8 @@ mod tests {
             ],
             source: "VS Code".into(),
             line: Some(12),
+            workspace: None,
+            diagnostics: None,
         };
         request.validate().unwrap();
         let prompt = request.prompt();

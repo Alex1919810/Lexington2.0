@@ -1,8 +1,8 @@
-use super::app::Pet;
+use super::app::Wife;
 use crate::roleplay::EmbeddingSource;
 use eframe::egui;
 
-impl Pet {
+impl Wife {
     pub(super) fn role_vector_ui(&mut self, ui: &mut egui::Ui) {
         let Some(card) = &mut self.role_editor.draft else {
             return;

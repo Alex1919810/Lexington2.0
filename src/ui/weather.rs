@@ -1,4 +1,4 @@
-use super::app::Pet;
+use super::app::Wife;
 use crate::backend::{
     clock,
     config::Config,
@@ -30,7 +30,7 @@ pub(super) enum WeatherAction {
     Select(Option<City>),
     Retry,
 }
-impl Pet {
+impl Wife {
     pub(super) fn queue_clock_weather(&mut self, message: String) {
         let Some(city) = self.config.weather.city.clone() else {
             return;
@@ -268,14 +268,14 @@ mod tests {
             timezone: "Asia/Shanghai".into(),
         }
     }
-    fn app() -> (Pet, egui::Context, std::path::PathBuf) {
+    fn app() -> (Wife, egui::Context, std::path::PathBuf) {
         let root =
             std::env::temp_dir().join(format!("lexington-weather-ui-{}", rand::random::<u64>()));
         Config::save_weather(&root, None).unwrap();
         let ctx = egui::Context::default();
-        (Pet::from_root(&ctx, false, root.clone()), ctx, root)
+        (Wife::from_root(&ctx, false, root.clone()), ctx, root)
     }
-    fn frame(app: &mut Pet, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
+    fn frame(app: &mut Wife, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
         ctx.run(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(

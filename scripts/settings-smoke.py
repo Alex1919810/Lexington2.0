@@ -126,7 +126,9 @@ try:
         v = json.loads(cfg.read_text())
         v['codex']['noApproval'] = False
         cfg.write_text(json.dumps(v))
-        env = {**os.environ, 'LEXINGTON_HOME': str(base), 'XDG_DATA_HOME': str(data), 'XDG_RUNTIME_DIR': str(base / 'run'), 'WINIT_X11_SCALE_FACTOR': str(scale)}
+        env = {**os.environ, 'LEXINGTON_HOME': str(base), 'XDG_DATA_HOME': str(data), 'CODEX_HOME': str(base / 'codex'), 'LEXINGTON_CODEX_EXECUTABLE': str(base / 'missing-codex'), 'XDG_RUNTIME_DIR': str(base / 'run'), 'WINIT_X11_SCALE_FACTOR': str(scale)}
+        for credential in ("OPENAI_API_KEY", "LEXINGTON_MODEL_API_KEY"):
+            env.pop(credential, None)
         p = launch(env, label)
         try:
             pet = waitfor(lambda: next((w for w in find(p.pid) if prop(w, '_NET_WM_NAME', 0) == 'Lexington 桌面宠物'.encode()), None))

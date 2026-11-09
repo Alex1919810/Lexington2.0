@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod backend;
+mod development;
 mod roleplay;
 mod tools;
 mod ui;
@@ -109,7 +110,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Lexington",
         options,
         Box::new(move |cc| {
-            Ok(Box::new(ui::Pet::new(
+            Ok(Box::new(ui::Wife::new(
                 cc,
                 #[cfg(any(target_os = "linux", windows))]
                 endpoint,

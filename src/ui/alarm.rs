@@ -1,4 +1,4 @@
-use super::app::Pet;
+use super::app::Wife;
 use crate::{
     backend::{
         alarm::AlarmState,
@@ -39,7 +39,7 @@ impl Default for AlarmUi {
         }
     }
 }
-impl Pet {
+impl Wife {
     pub(super) fn load_alarms(&mut self) {
         match AlarmState::load(paths::alarm_state_file(self.dev)) {
             Ok(state) => self.alarm.state = state,

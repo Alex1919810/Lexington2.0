@@ -1,14 +1,14 @@
-use super::app::Pet;
+use super::app::Wife;
 use super::style::{self, draw_bubble};
 use eframe::egui::{self, Color32, Rect, vec2};
 use eframe::egui::{Sense, Stroke};
 
-impl Pet {
+impl Wife {
     pub(super) fn submit(&mut self, ctx: &egui::Context) {
         if self.input.trim().is_empty() || self.busy {
             return;
         }
-        self.send_message(ctx, self.input.trim().to_owned(), false);
+        self.send_message(ctx, self.input.trim().to_owned(), None);
     }
     #[cfg(any(target_os = "linux", windows))]
     pub(super) fn poll_handoff(&mut self, ctx: &egui::Context) {
@@ -16,28 +16,161 @@ impl Pet {
             && let Some(request) = self.inbox.as_ref().and_then(|inbox| inbox.poll())
         {
             self.last_activity = std::time::Instant::now();
-            self.send_message(ctx, request.prompt(), true);
+            let route = if request.workspace.is_none() && self.development.book.projects.is_empty()
+            {
+                Ok(None)
+            } else {
+                self.development
+                    .book
+                    .route(request.workspace.as_deref(), &request.files)
+            };
+            match route {
+                Ok(Some(path)) => {
+                    if let Err(error) = self.switch_development_workspace(Some(path), ctx) {
+                        self.error = error;
+                        return;
+                    }
+                }
+                Ok(None) => {
+                    if self.development.book.active.is_some() {
+                        self.error = "来源未指定项目，未发送到当前项目；请先切换普通会话。".into();
+                        self.text = self.error.clone();
+                        return;
+                    }
+                }
+                Err(error) => {
+                    self.error = error;
+                    self.text = self.error.clone();
+                    self.full_text = true;
+                    return;
+                }
+            }
+            if let Some(mut snapshot) = request.diagnostics.clone()
+                && let Some(project) = self.development.book.current_mut()
+            {
+                if let Err(error) = snapshot.capture(&project.path) {
+                    self.error = error;
+                    self.text = self.error.clone();
+                    return;
+                }
+                if let Some(client) = &self.codex {
+                    snapshot.redact(|text| client.sanitize(text));
+                }
+                project.diagnostics = Some(snapshot);
+                self.development.diagnostics_ui.refresh = true;
+                self.save_development(true);
+                if request.text.trim().is_empty() && request.files.is_empty() {
+                    self.development.open = true;
+                    self.development.page = 1;
+                    return;
+                }
+            }
+            self.send_message(ctx, request.prompt(), Some(&request));
             if !self.error.is_empty() {
                 self.text = self.error.clone();
                 self.full_text = true;
             }
         }
     }
-    fn send_message(&mut self, ctx: &egui::Context, text: String, external: bool) {
-        let mut remembered_input = text.clone();
-        if !self.config.codex.api_key.is_empty() {
-            remembered_input = remembered_input.replace(&self.config.codex.api_key, "[hidden]");
+    pub(super) fn send_message(
+        &mut self,
+        ctx: &egui::Context,
+        text: String,
+        external: Option<&crate::backend::handoff::Request>,
+    ) {
+        if self.busy {
+            self.error = "当前任务仍在运行。".into();
+            return;
         }
+        let memory_plan = if self.config.codex.development_mode {
+            self.development
+                .book
+                .current()
+                .map(|project| {
+                    crate::development::memory::context(&project.path, &project.memories)
+                })
+                .unwrap_or_default()
+        } else {
+            Default::default()
+        };
+        if self.config.codex.development_mode && memory_plan.0 != self.development.memory_context {
+            self.new_development_task(ctx);
+        }
+        self.development.memory_ui.report = memory_plan.1;
+        self.development.diagnostics_ui.refresh = true;
+        let context = if self.config.codex.development_mode {
+            self.development
+                .book
+                .current()
+                .map(|project| {
+                    let mut parts = vec![self.development.memory_context.clone()];
+                    if let Some(snapshot) = &project.diagnostics {
+                        parts.push(snapshot.context());
+                    }
+                    let mut tests = String::from(
+                        "[登记的测试命令，仅供选择，未自动运行；历史结果不代表当前代码]\n",
+                    );
+                    for definition in &project.tests {
+                        let line =
+                            format!("{}: {}\n", definition.name, definition.display_command());
+                        if tests.chars().count() + line.chars().count() > 6000 {
+                            break;
+                        }
+                        tests.push_str(&line);
+                    }
+                    if !project.tests.is_empty() {
+                        parts.push(tests);
+                    }
+                    parts
+                        .into_iter()
+                        .filter(|part| !part.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("\n\n")
+                })
+                .filter(|context| !context.is_empty())
+        } else {
+            None
+        };
+        if self.codex_restart_pending && !self.busy {
+            self.start_codex(ctx);
+        }
+        let remembered_input = self
+            .codex
+            .as_ref()
+            .map_or_else(|| text.clone(), |client| client.sanitize(&text));
         let result = self
             .codex
             .as_ref()
             .ok_or_else(|| "Codex 未启动，请在设置中重启会话。".to_owned())
-            .and_then(|codex| codex.submit(text, self.config.codex.no_approval));
+            .and_then(|codex| {
+                codex.submit_with_context(text, self.config.codex.no_approval, context)
+            });
         match result {
             Ok(()) => {
+                let display = external.map_or_else(
+                    || remembered_input.clone(),
+                    |request| {
+                        let mut display = request.text.trim().to_owned();
+                        if !request.source.is_empty() {
+                            display.push_str(&format!("\n\n来源：{}", request.source));
+                        }
+                        for file in &request.files {
+                            display.push_str(&format!("\n文件：{file}"));
+                        }
+                        if let Some(line) = request.line {
+                            display.push_str(&format!("\n起始行：{line}"));
+                        }
+                        if let Some(client) = &self.codex {
+                            client.sanitize(display.trim())
+                        } else {
+                            display
+                        }
+                    },
+                );
+                self.record_development_start(display);
                 self.context_ui.last_input = remembered_input;
                 self.busy = true;
-                self.external_turn = external;
+                self.external_turn = external.is_some();
                 self.codex_status = "Lexington正在思考".into();
                 self.error.clear();
                 self.codex_messages.clear();

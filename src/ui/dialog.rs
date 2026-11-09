@@ -1,9 +1,9 @@
-use super::app::Pet;
+use super::app::Wife;
 use super::style::{self, draw_bubble};
 use eframe::egui::{self, Color32, Rect, pos2, vec2};
 use std::time::Instant;
 
-impl Pet {
+impl Wife {
     pub(super) fn say(&mut self, text: String) {
         self.text = text;
         self.typed_at = Instant::now();
@@ -111,7 +111,7 @@ mod tests {
     fn preset_lines_do_not_replace_pending_or_dismissed_ai_output() {
         let root = tempfile::tempdir().unwrap();
         let ctx = egui::Context::default();
-        let mut app = Pet::from_root(&ctx, true, root.path().into());
+        let mut app = Wife::from_root(&ctx, true, root.path().into());
         app.library.texts = vec!["预设台词夹具".into()];
         app.click_pet();
         assert_eq!(app.text, "预设台词夹具");

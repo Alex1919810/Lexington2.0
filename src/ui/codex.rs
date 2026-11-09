@@ -1,4 +1,4 @@
-use super::app::Pet;
+use super::app::Wife;
 use crate::backend::codex::{Client, Event, Prompt};
 use eframe::egui;
 use serde_json::json;
@@ -8,8 +8,44 @@ pub(super) struct PendingPrompt {
     request: Prompt,
     answers: Vec<String>,
 }
-impl Pet {
+impl Wife {
     pub(super) fn start_codex(&mut self, ctx: &egui::Context) {
+        self.interrupt_development_test("会话已重建。");
+        self.finish_development("interrupted", "会话已重建。");
+        if self.development.reset_sessions_pending {
+            for project in &mut self.development.book.projects {
+                project.current_task = None;
+            }
+            self.development.reset_sessions_pending = false;
+        }
+        let plan = if self.config.codex.development_mode {
+            self.development
+                .book
+                .current()
+                .map(|project| {
+                    crate::development::memory::context(&project.path, &project.memories)
+                })
+                .unwrap_or_default()
+        } else {
+            Default::default()
+        };
+        let compatible = self.development.book.task().is_none_or(|task| {
+            task.character == self.library.character
+                && task.development_mode == self.config.codex.development_mode
+                && (!self.config.codex.development_mode
+                    || self.development.book.current().is_some_and(|project| {
+                        project.memory_revision == task.memory_revision
+                            && task.memory_context_stamp
+                                == crate::development::memory::context_stamp(&plan.0)
+                    }))
+        });
+        if !compatible && let Some(project) = self.development.book.current_mut() {
+            project.current_task = None;
+        }
+        self.development.memory_context = plan.0;
+        self.development.memory_ui.report = plan.1;
+        self.development.thread_id = None;
+        self.development.session_mode = self.config.codex.development_mode;
         self.context_ui = Default::default();
         self.codex_restart_pending = false;
         // Drop the previous process before replacing it, so restarts cannot leave orphan servers.
@@ -26,10 +62,18 @@ impl Pet {
         self.codex_prompts.clear();
         self.error.clear();
         let ctx = ctx.clone();
-        match Client::start(
-            &self.config.codex,
+        let mut config = self.config.codex.clone();
+        config.working_directory = self.development.book.active.clone();
+        let resume = self
+            .development
+            .book
+            .task()
+            .and_then(|task| task.thread_id.clone());
+        match Client::start_in_workspace(
+            &config,
             &self.root,
             &self.library.character,
+            resume,
             move || ctx.request_repaint(),
         ) {
             Ok(client) => {
@@ -46,11 +90,30 @@ impl Pet {
         let mut changed = false;
         while let Some(event) = self.codex.as_ref().and_then(Client::poll) {
             match event {
+                Event::TestResult(result) => self.receive_test_result(*result),
                 Event::Context(plan) => {
                     if plan.preview {
                         self.context_ui.preview = Some(*plan);
                     } else {
                         self.context_ui.last = Some(*plan);
+                    }
+                }
+                Event::ThreadReady(id) => {
+                    self.development.thread_id = Some(id.clone());
+                    if let Some(task) = self.development.book.task_mut() {
+                        task.thread_id = Some(id);
+                        self.save_development(true);
+                    }
+                }
+                Event::Activity(activity) => {
+                    if self.busy
+                        && let Some(turn) = self.development.book.turn_mut()
+                    {
+                        turn.activity(activity);
+                        if let Some(client) = &self.codex {
+                            turn.sanitize(|text| client.sanitize(text));
+                        }
+                        self.save_development(false);
                     }
                 }
                 Event::Ready => {
@@ -59,6 +122,15 @@ impl Pet {
                     }
                 }
                 Event::Text { id, text, replace } => {
+                    if self.busy
+                        && let Some(turn) = self.development.book.turn_mut()
+                    {
+                        turn.text(id.clone(), text.clone(), replace);
+                        if let Some(client) = &self.codex {
+                            turn.sanitize(|text| client.sanitize(text));
+                        }
+                        self.save_development(false);
+                    }
                     let index = self
                         .codex_messages
                         .iter()
@@ -72,10 +144,22 @@ impl Pet {
                     } else {
                         self.codex_messages[index].1.push_str(&text);
                     }
+                    if let Some(client) = &self.codex {
+                        self.codex_messages[index].1 =
+                            client.sanitize(&self.codex_messages[index].1);
+                    }
                     changed = true;
                 }
                 Event::Finished { interrupted } => {
-                    if !interrupted {
+                    self.finish_development(
+                        if interrupted {
+                            "interrupted"
+                        } else {
+                            "completed"
+                        },
+                        "",
+                    );
+                    if !interrupted && !self.development.session_mode {
                         self.queue_character_memory();
                     }
                     self.busy = false;
@@ -93,6 +177,8 @@ impl Pet {
                     self.last_activity = Instant::now();
                 }
                 Event::Failed(error) | Event::Stopped(error) => {
+                    self.interrupt_development_test(&error);
+                    self.finish_development("failed", &error);
                     self.busy = false;
                     if self.external_turn {
                         self.text = error.clone();

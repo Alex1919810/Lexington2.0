@@ -14,6 +14,9 @@ use std::{
 pub enum Event {
     Context(Box<crate::roleplay::ContextPlan>),
     Ready,
+    ThreadReady(String),
+    Activity(crate::development::Activity),
+    TestResult(Box<crate::development::testing::TestRun>),
     Text {
         id: String,
         text: String,
@@ -44,7 +47,8 @@ pub struct Question {
 }
 
 enum Input {
-    Submit(String, bool),
+    Submit(String, bool, Option<String>),
+    Execute(crate::development::testing::TestRequest),
     Preview(String),
     Scene(crate::roleplay::SceneState),
     Interrupt,
@@ -61,12 +65,14 @@ pub struct Client {
     child: Arc<Mutex<Process>>,
     worker: Option<JoinHandle<()>>,
     temporary_directory: Option<tempfile::TempDir>,
+    secrets: Vec<String>,
 }
 
 struct ProtocolSetup {
     instructions: Option<String>,
     session: Option<crate::roleplay::RoleplaySession>,
-    secret: Option<String>,
+    secrets: Vec<String>,
+    resume: Option<String>,
     schema: Option<Value>,
 }
 #[cfg(windows)]
@@ -160,28 +166,45 @@ impl Client {
             command.args(["-c", setting]);
         }
         let mut client =
-            Self::launch_options(command, Some(instructions), None, wake, Some(schema))?;
+            Self::launch_options(command, Some(instructions), None, wake, Some(schema), None)?;
         client.temporary_directory = Some(temporary);
         Ok(client)
     }
-    pub fn start(
+    pub fn start_in_workspace(
         config: &CodexConfig,
         root: &Path,
         character: &str,
+        resume: Option<String>,
         wake: impl Fn() + Send + 'static,
     ) -> Result<Self, String> {
-        let card = crate::roleplay::session_card(root, character)?;
+        let mut card = crate::roleplay::session_card(root, character)?;
+        if config.development_mode
+            && let Some(card) = &mut card
+        {
+            card.vector_memory.enabled = false;
+        }
         let session = card
             .map(|card| crate::roleplay::RoleplaySession::new(card).with_memory(root, character));
-        let instructions = if let Some(session) = &session {
+        let mut instructions = if let Some(session) = &session {
             Some(session.initial_plan().text(true))
         } else {
             crate::roleplay::agent_instructions(root, character)?
         };
-        Self::launch_session(Self::command(config, root)?, instructions, session, wake)
+        if config.development_mode {
+            let instructions = instructions.get_or_insert_with(String::new);
+            instructions.push_str("\n\n");
+            instructions.push_str(crate::development::INSTRUCTIONS);
+        }
+        Self::launch_options(
+            Self::command(config, root)?,
+            instructions,
+            session,
+            wake,
+            None,
+            resume,
+        )
     }
     fn command(config: &CodexConfig, root: &Path) -> Result<Command, String> {
-        config.validate_connection()?;
         let directory = config.working_directory.as_ref().map_or_else(
             || root.to_path_buf(),
             |dir| {
@@ -195,38 +218,28 @@ impl Client {
         let directory = directory
             .canonicalize()
             .map_err(|e| format!("Codex 工作目录不可用：{e}"))?;
-        #[cfg(windows)]
-        let executable = if config.executable == "codex" {
-            windows_executable()
-                .ok_or("找不到原生 codex.exe，请安装 Codex CLI 或在连接设置中指定完整 exe 路径。")?
+        let configured = if config.executable == "codex" {
+            std::env::var("LEXINGTON_CODEX_EXECUTABLE")
+                .unwrap_or_else(|_| config.executable.clone())
         } else {
-            std::path::PathBuf::from(&config.executable)
+            config.executable.clone()
         };
         #[cfg(windows)]
-        if executable
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| {
-                extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
-            })
-        {
-            return Err("Windows 请指定原生 codex.exe，不能使用 .cmd/.bat 启动器。".into());
-        }
+        let executable = if configured == "codex" {
+            windows_executable().ok_or(
+                "找不到原生 codex.exe，请安装 Codex CLI 或设置 LEXINGTON_CODEX_EXECUTABLE。",
+            )?
+        } else {
+            std::path::PathBuf::from(&configured)
+        };
         #[cfg(not(windows))]
-        let mut executable = std::path::PathBuf::from(&config.executable);
-        // Desktop launchers often omit the user's CLI installation directory from PATH.
+        let mut executable = std::path::PathBuf::from(&configured);
         #[cfg(not(windows))]
-        if config.executable == "codex" {
+        if configured == "codex" {
             let in_path = std::env::var_os("PATH").is_some_and(|paths| {
-                std::env::split_paths(&paths).any(|p| {
-                    p.join(if cfg!(windows) { "codex.exe" } else { "codex" })
-                        .is_file()
-                })
+                std::env::split_paths(&paths).any(|p| p.join("codex").is_file())
             });
-            if !in_path
-                && let Some(home) =
-                    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
-            {
+            if !in_path && let Some(home) = std::env::var_os("HOME") {
                 for suffix in [".local/bin/codex", ".cargo/bin/codex"] {
                     let path = Path::new(&home).join(suffix);
                     if path.is_file() {
@@ -236,48 +249,21 @@ impl Client {
                 }
             }
         }
+        #[cfg(windows)]
+        if executable
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"))
+        {
+            return Err("请使用原生 codex.exe。".into());
+        }
         let mut command = Command::new(executable);
         command
             .args(["app-server", "--stdio"])
             .current_dir(directory);
-        if !config.model.is_empty() {
-            command.args(["-c", &format!("model={}", json!(config.model))]);
-        }
-        if config.use_custom_api {
-            for (name, value) in [
-                ("model_provider", json!("lexington_api")),
-                ("model_providers.lexington_api.name", json!("Lexington API")),
-                (
-                    "model_providers.lexington_api.base_url",
-                    json!(config.base_url),
-                ),
-                (
-                    "model_providers.lexington_api.env_key",
-                    json!("LEXINGTON_MODEL_API_KEY"),
-                ),
-                ("model_providers.lexington_api.wire_api", json!("responses")),
-                (
-                    "model_providers.lexington_api.requires_openai_auth",
-                    json!(false),
-                ),
-            ] {
-                command.args(["-c", &format!("{name}={value}")]);
-            }
-            command.env("LEXINGTON_MODEL_API_KEY", &config.api_key);
-        } else {
-            command.env_remove("LEXINGTON_MODEL_API_KEY");
-        }
         #[cfg(windows)]
         crate::tools::proxy::inherit_system_proxy(&mut command);
         Ok(command)
-    }
-    fn launch_session(
-        command: Command,
-        instructions: Option<String>,
-        session: Option<crate::roleplay::RoleplaySession>,
-        wake: impl Fn() + Send + 'static,
-    ) -> Result<Self, String> {
-        Self::launch_options(command, instructions, session, wake, None)
     }
     fn launch_options(
         mut command: Command,
@@ -285,13 +271,47 @@ impl Client {
         session: Option<crate::roleplay::RoleplaySession>,
         wake: impl Fn() + Send + 'static,
         schema: Option<Value>,
+        resume: Option<String>,
     ) -> Result<Self, String> {
-        let secret = command
+        let environment: HashMap<_, _> = command
             .get_envs()
-            .find(|(key, _)| *key == "LEXINGTON_MODEL_API_KEY")
-            .and_then(|(_, value)| value)
-            .map(|value| value.to_string_lossy().into_owned())
-            .filter(|value| !value.is_empty());
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.map(|v| v.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        let lookup = |name: &str| {
+            environment.get(name).cloned().unwrap_or_else(|| {
+                if cfg!(test) {
+                    None
+                } else {
+                    std::env::var(name).ok()
+                }
+            })
+        };
+        let mut secrets: Vec<String> = ["OPENAI_API_KEY", "LEXINGTON_MODEL_API_KEY"]
+            .iter()
+            .filter_map(|name| lookup(name))
+            .filter(|v| !v.is_empty())
+            .collect();
+        let home = lookup("CODEX_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                lookup("HOME")
+                    .or_else(|| lookup("USERPROFILE"))
+                    .map(|home| Path::new(&home).join(".codex"))
+            });
+        if let Some(home) = home
+            && let Ok(local) = super::codex_config::LocalCodexConfig::read(&home)
+            && !local.api_key.is_empty()
+        {
+            secrets.push(local.api_key);
+        }
+        secrets.sort_by_key(|key| std::cmp::Reverse(key.len()));
+        secrets.dedup();
+        let client_secrets = secrets.clone();
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -312,7 +332,9 @@ impl Client {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| {
-                format!("无法启动 Codex：{e}。请安装并登录 Codex，或配置 codex.executable。")
+                format!(
+                    "无法启动 Codex：{e}。请安装并登录 Codex，或设置 LEXINGTON_CODEX_EXECUTABLE。"
+                )
             })?;
         #[cfg(windows)]
         let job = match crate::tools::windows::Job::attach(&child) {
@@ -361,9 +383,13 @@ impl Client {
             });
             let emit = |mut event| {
                 // Provider errors can echo request details. Keep credentials out of UI/logs.
-                if let Some(secret) = &secret {
+                for secret in &secrets {
                     match &mut event {
                         Event::Context(plan) => plan.redact(secret),
+                        Event::Activity(activity) => activity.redact(secret),
+                        Event::TestResult(run) => {
+                            run.sanitize(|text| text.replace(secret, "[hidden]"))
+                        }
                         Event::Failed(text)
                         | Event::Stopped(text)
                         | Event::Notice(text)
@@ -384,7 +410,8 @@ impl Client {
                 ProtocolSetup {
                     instructions,
                     session,
-                    secret: secret.clone(),
+                    secrets: secrets.clone(),
+                    resume,
                     schema,
                 },
                 receiver,
@@ -404,12 +431,35 @@ impl Client {
             child,
             worker: Some(worker),
             temporary_directory: None,
+            secrets: client_secrets,
         })
     }
+    pub fn sanitize(&self, text: &str) -> String {
+        self.secrets
+            .iter()
+            .fold(text.to_owned(), |text, key| text.replace(key, "[hidden]"))
+    }
     pub fn submit(&self, text: String, no_approval: bool) -> Result<(), String> {
+        self.submit_with_context(text, no_approval, None)
+    }
+    pub fn submit_with_context(
+        &self,
+        text: String,
+        no_approval: bool,
+        context: Option<String>,
+    ) -> Result<(), String> {
         self.input
-            .send(Input::Submit(text, no_approval))
+            .send(Input::Submit(text, no_approval, context))
             .map_err(|_| "Codex 已停止，请在设置中重启会话。".into())
+    }
+    pub fn run_test(
+        &self,
+        request: crate::development::testing::TestRequest,
+    ) -> Result<(), String> {
+        request.definition.validate()?;
+        self.input
+            .send(Input::Execute(request))
+            .map_err(|_| "Codex 已停止。".into())
     }
     pub fn interrupt(&self) {
         let _ = self.input.send(Input::Interrupt);
@@ -477,16 +527,15 @@ fn communicate(
     let ProtocolSetup {
         instructions,
         mut session,
-        secret,
+        secrets,
+        resume,
         schema,
     } = setup;
-    let secret = secret.as_deref();
     let structured = schema.is_some();
     let sanitize = |text: &str| {
-        secret.map_or_else(
-            || text.to_owned(),
-            |secret| text.replace(secret, "[hidden]"),
-        )
+        secrets
+            .iter()
+            .fold(text.to_owned(), |text, key| text.replace(key, "[hidden]"))
     };
     let mut pending = HashMap::new();
     let mut next = 1;
@@ -502,20 +551,43 @@ fn communicate(
     let mut turn_id: Option<String> = None;
     let mut active_request = None;
     let mut approval_items = HashMap::<String, Value>::new();
-    let mut queued: Option<(String, bool)> = None;
+    let mut queued: Option<(String, bool, Option<String>)> = None;
+    let mut queued_test: Option<crate::development::testing::TestRequest> = None;
+    let mut running_test: Option<(crate::development::testing::TestRequest, Instant, bool)> = None;
     let mut active = false;
     let mut interrupt = false;
     let mut before_turn = None;
     let mut final_messages = std::collections::BTreeMap::<String, String>::new();
     loop {
-        if pending
-            .values()
-            .any(|(_, started)| started.elapsed() > Duration::from_secs(30))
-        {
+        if pending.values().any(|(method, started)| {
+            *method != "command/exec" && started.elapsed() > Duration::from_secs(30)
+        }) {
             return Err("Codex 连接超时，请检查登录状态并在设置中重启会话。".into());
         }
+        if running_test.as_ref().is_some_and(|(request, started, _)| {
+            started.elapsed()
+                > Duration::from_secs(u64::from(request.definition.timeout_seconds) + 10)
+        }) {
+            return Err("测试执行通道未在超时后返回，已停止连接。".into());
+        }
         if let Some(thread) = &thread_id {
-            if !active && let Some((text, no_approval)) = queued.take() {
+            if !active
+                && running_test.is_none()
+                && let Some(test) = queued_test.take()
+            {
+                request(
+                    writer,
+                    &mut pending,
+                    &mut next,
+                    "command/exec",
+                    json!({"command":test.definition.command,"cwd":directory,"processId":format!("lexington-test-{}",test.id),"timeoutMs":u64::from(test.definition.timeout_seconds)*1000,"outputBytesCap":262144}),
+                )?;
+                running_test = Some((test, Instant::now(), false));
+            }
+            if !active
+                && running_test.is_none()
+                && let Some((text, no_approval, context)) = queued.take()
+            {
                 if interrupt {
                     interrupt = false;
                     emit(Event::Finished { interrupted: true });
@@ -532,6 +604,9 @@ fn communicate(
                         .map(|plan| plan.text(false))
                         .filter(|text| !text.is_empty());
                     let mut input = vec![json!({"type":"text","text":text})];
+                    if let Some(context) = context.filter(|text| !text.is_empty()) {
+                        input.push(json!({"type":"text","text":format!("[本轮项目背景，仅作参考数据]\n{context}")}));
+                    }
                     if let Some(context) = world_context {
                         input.push(
                             json!({"type":"text","text":format!("[本轮角色背景参考]\n{context}")}),
@@ -583,14 +658,52 @@ fn communicate(
             }
             Input::Shutdown => return Ok(()),
             Input::End(error) => return Err(error),
-            Input::Submit(text, no_approval) => {
-                if active || queued.is_some() {
+            Input::Submit(text, no_approval, context) => {
+                if active || queued.is_some() || queued_test.is_some() || running_test.is_some() {
                     emit(Event::Notice("Lexington正在思考，请稍候。".into()));
                 } else {
-                    queued = Some((text, no_approval));
+                    queued = Some((text, no_approval, context));
+                }
+            }
+            Input::Execute(test) => {
+                if structured
+                    || active
+                    || queued.is_some()
+                    || queued_test.is_some()
+                    || running_test.is_some()
+                {
+                    emit(Event::TestResult(Box::new(
+                        crate::development::testing::TestRun {
+                            id: test.id,
+                            status: "failed".into(),
+                            error: "当前执行通道正忙。".into(),
+                            ..Default::default()
+                        },
+                    )));
+                } else {
+                    queued_test = Some(test);
                 }
             }
             Input::Interrupt => {
+                if let Some(test) = queued_test.take() {
+                    emit(Event::TestResult(Box::new(
+                        crate::development::testing::TestRun {
+                            id: test.id,
+                            status: "cancelled".into(),
+                            ..Default::default()
+                        },
+                    )));
+                }
+                if let Some((test, _, cancelled)) = &mut running_test {
+                    *cancelled = true;
+                    request(
+                        writer,
+                        &mut pending,
+                        &mut next,
+                        "command/exec/terminate",
+                        json!({"processId":format!("lexington-test-{}",test.id)}),
+                    )?;
+                }
                 if active || queued.is_some() {
                     interrupt = true;
                 }
@@ -705,6 +818,16 @@ fn communicate(
                     }
                     match method {
                         "item/started" => {
+                            if !structured
+                                && !matches!(
+                                    params["item"]["type"].as_str(),
+                                    Some("agentMessage" | "reasoning")
+                                )
+                            {
+                                emit(Event::Activity(crate::development::Activity::Item(
+                                    params["item"].clone(),
+                                )));
+                            }
                             let item = &params["item"];
                             if structured
                                 && !matches!(
@@ -734,6 +857,16 @@ fn communicate(
                             }
                         }
                         "item/completed" => {
+                            if !structured
+                                && !matches!(
+                                    params["item"]["type"].as_str(),
+                                    Some("agentMessage" | "reasoning")
+                                )
+                            {
+                                emit(Event::Activity(crate::development::Activity::Item(
+                                    params["item"].clone(),
+                                )));
+                            }
                             let item = &params["item"];
                             if item["type"] == "agentMessage"
                                 && let (Some(id), Some(text)) =
@@ -758,6 +891,16 @@ fn communicate(
                                 continue;
                             }
                             for item in params["turn"]["items"].as_array().into_iter().flatten() {
+                                if !structured
+                                    && !matches!(
+                                        item["type"].as_str(),
+                                        Some("agentMessage" | "reasoning")
+                                    )
+                                {
+                                    emit(Event::Activity(crate::development::Activity::Item(
+                                        item.clone(),
+                                    )));
+                                }
                                 if item["type"] == "agentMessage"
                                     && let (Some(id), Some(text)) =
                                         (item["id"].as_str(), item["text"].as_str())
@@ -802,6 +945,34 @@ fn communicate(
                             turn_id = None;
                             interrupt = false;
                         }
+                        "item/commandExecution/outputDelta" => {
+                            if let (Some(id), Some(delta)) =
+                                (params["itemId"].as_str(), params["delta"].as_str())
+                            {
+                                emit(Event::Activity(crate::development::Activity::Output {
+                                    id: id.into(),
+                                    delta: delta.into(),
+                                }));
+                            }
+                        }
+                        "turn/diff/updated" => {
+                            if let Some(diff) = params["diff"].as_str() {
+                                emit(Event::Activity(crate::development::Activity::Diff(
+                                    diff.into(),
+                                )));
+                            }
+                        }
+                        "turn/plan/updated" => emit(Event::Activity(
+                            crate::development::Activity::Plan(params.clone()),
+                        )),
+                        "item/fileChange/patchUpdated" => {
+                            if let Some(id) = params["itemId"].as_str() {
+                                emit(Event::Activity(crate::development::Activity::Patch {
+                                    id: id.into(),
+                                    changes: params["changes"].clone(),
+                                }));
+                            }
+                        }
                         // Recoverable errors are followed by retries; terminal errors by turn/completed.
                         "error" => emit(Event::Notice(
                             params["error"]["message"]
@@ -818,6 +989,49 @@ fn communicate(
                     if method == "turn/start" && active_request != Some(id) {
                         continue;
                     }
+                    if method == "command/exec" {
+                        if let Some((test, started, cancelled)) = running_test.take() {
+                            let exit_code = message["result"]["exitCode"].as_i64();
+                            let error = message
+                                .get("error")
+                                .and_then(|e| e["message"].as_str())
+                                .unwrap_or(if exit_code.is_none() {
+                                    "测试结果缺少退出码。"
+                                } else {
+                                    ""
+                                });
+                            emit(Event::TestResult(Box::new(
+                                crate::development::testing::TestRun {
+                                    id: test.id,
+                                    definition_id: test.definition.id,
+                                    name: test.definition.name,
+                                    command: test.definition.command,
+                                    duration_ms: started.elapsed().as_millis().min(u64::MAX as u128)
+                                        as u64,
+                                    status: if cancelled {
+                                        "cancelled"
+                                    } else if exit_code == Some(0) && error.is_empty() {
+                                        "passed"
+                                    } else {
+                                        "failed"
+                                    }
+                                    .into(),
+                                    exit_code,
+                                    stdout: message["result"]["stdout"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .into(),
+                                    stderr: message["result"]["stderr"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .into(),
+                                    error: error.into(),
+                                    ..Default::default()
+                                },
+                            )));
+                        }
+                        continue;
+                    }
                     if let Some(error) = message.get("error") {
                         let error = error["message"]
                             .as_str()
@@ -832,7 +1046,9 @@ fn communicate(
                                 interrupt = false;
                                 emit(Event::Failed(error));
                             }
-                            "turn/interrupt" => emit(Event::Notice(error)),
+                            "turn/interrupt" | "command/exec/terminate" => {
+                                emit(Event::Notice(error))
+                            }
                             _ => return Err(error),
                         }
                         continue;
@@ -854,7 +1070,13 @@ fn communicate(
                             if let Some(instructions) = &instructions {
                                 params["developerInstructions"] = instructions.as_str().into();
                             }
-                            request(writer, &mut pending, &mut next, "thread/start", params)?;
+                            let method = if let Some(id) = &resume {
+                                params["threadId"] = id.clone().into();
+                                "thread/resume"
+                            } else {
+                                "thread/start"
+                            };
+                            request(writer, &mut pending, &mut next, method, params)?;
                             if let Some(session) = &session {
                                 emit(Event::Context(Box::new(session.initial_plan())));
                             }
@@ -879,7 +1101,7 @@ fn communicate(
                                 json!({"cwd":directory,"developerInstructions":instructions,"ephemeral":true,"sandbox":"read-only","approvalPolicy":"never","config":{"mcp_servers":disabled}}),
                             )?;
                         }
-                        "thread/start" => {
+                        "thread/start" | "thread/resume" => {
                             // turn/start overrides persist, so retain the local baseline to restore it.
                             original_approval_policy = message["result"]
                                 .get("approvalPolicy")
@@ -892,6 +1114,7 @@ fn communicate(
                                     .ok_or("Codex 未返回会话编号")?
                                     .into(),
                             );
+                            emit(Event::ThreadReady(thread_id.clone().unwrap()));
                             emit(Event::Ready);
                         }
                         "turn/start" => {
@@ -958,7 +1181,7 @@ impl Client {
                 mode,
             ])
             .current_dir(std::env::temp_dir().canonicalize().unwrap());
-        Self::launch_options(command, instructions, session, || {}, schema).unwrap()
+        Self::launch_options(command, instructions, session, || {}, schema, None).unwrap()
     }
 }
 #[cfg(test)]
@@ -1130,89 +1353,95 @@ mod tests {
     }
 
     #[test]
-    fn native_launch_configuration_preserves_unicode_and_isolates_credentials() {
-        let root =
-            std::env::temp_dir().join(format!("lexington launch 中文 {}", rand::random::<u64>()));
-        std::fs::create_dir_all(&root).unwrap();
-        let root = root.canonicalize().unwrap();
-        for (custom, mode) in [(true, "api-config"), (false, "inherit-config")] {
-            let config = CodexConfig {
-                executable: "fixture-only.exe".into(),
-                model: "fixture-model\"with-quote".into(),
-                use_custom_api: custom,
-                base_url: "http://127.0.0.1:9999/v1".into(),
-                api_key: "fixture-key-not-a-real-secret".into(),
-                ..Default::default()
-            };
-            let configured = Client::command(&config, &root).unwrap();
-            assert_eq!(configured.get_current_dir(), Some(root.as_path()));
-            assert!(
-                !configured
-                    .get_args()
-                    .any(|argument| argument.to_string_lossy().contains(&config.api_key))
-            );
-            let mut command = Command::new(
-                std::env::var_os("LEXINGTON_TEST_PYTHON")
-                    .unwrap_or_else(|| if cfg!(windows) { "python" } else { "python3" }.into()),
-            );
-            command.args([
-                "-X",
-                "utf8",
-                "-u",
-                "-c",
-                include_str!("../../tests/fixtures/codex-server.py"),
-                mode,
-            ]);
-            command.args(configured.get_args()).current_dir(&root);
-            for (key, value) in configured.get_envs() {
-                if let Some(value) = value {
-                    command.env(key, value);
-                } else {
-                    command.env_remove(key);
-                }
-            }
-            let session = custom.then(|| {
-                let mut card = crate::roleplay::RoleCard::default();
-                card.vector_memory.enabled = true;
-                card.vector_memory.source = crate::roleplay::EmbeddingSource::Remote;
-                card.vector_memory.model = "fixture".into();
-                card.vector_memory.base_url = "http://127.0.0.1:1/v1".into();
-                crate::roleplay::RoleplaySession::new(card).with_memory(&root, "a")
-            });
-            let client = Client::launch_session(command, None, session, || {}).unwrap();
+    fn structured_background_clients_cannot_run_standalone_tests() {
+        let client = Client::mock_structured("memory-success");
+        client
+            .run_test(crate::development::testing::TestRequest {
+                id: 1,
+                definition: crate::development::testing::TestDefinition {
+                    id: 1,
+                    name: "fixture".into(),
+                    command: vec!["fixture-test".into(), "pass".into()],
+                    timeout_seconds: 10,
+                },
+            })
+            .unwrap();
+        let Event::TestResult(result) =
+            wait_for(&client, |event| matches!(event, Event::TestResult(_)))
+        else {
+            unreachable!()
+        };
+        assert_eq!(result.status, "failed");
+        assert!(result.exit_code.is_none());
+    }
+
+    #[test]
+    fn standalone_tests_use_the_existing_sandbox_channel_without_model_turns_and_cancel() {
+        use crate::development::testing::{TestDefinition, TestRequest};
+        let client = Client::mock("normal");
+        for (id, argument, status) in [
+            (1, "pass", "passed"),
+            (2, "fail", "failed"),
+            (3, "error", "failed"),
+            (4, "wait", "cancelled"),
+        ] {
             client
-                .submit(
-                    if custom {
-                        format!("确认配置 {}", config.api_key)
-                    } else {
-                        "确认配置".into()
+                .run_test(TestRequest {
+                    id,
+                    definition: TestDefinition {
+                        id: 11,
+                        name: "fixture".into(),
+                        command: vec![
+                            "fixture-test".into(),
+                            argument.into(),
+                            "literal with spaces".into(),
+                        ],
+                        timeout_seconds: 60,
                     },
-                    false,
-                )
+                })
                 .unwrap();
-            wait_for(&client, |event| {
-                matches!(event, Event::Finished { interrupted: false })
-            });
-            if custom {
-                client.submit("echo-secret".into(), false).unwrap();
-                assert!(
-                    matches!(wait_for(&client, |event| matches!(event, Event::Text { .. })), Event::Text { text, .. } if text == "[hidden]")
-                );
-                wait_for(&client, |event| matches!(event, Event::Finished { .. }));
-                let store = crate::tools::vector_store::VectorStore::open(
-                    &root.join("config/roleplay-vectors.sqlite3"),
-                )
-                .unwrap();
-                let documents = store.pending("a", "inspection", 8).unwrap();
-                assert_eq!(documents.len(), 4);
-                assert!(
-                    documents
-                        .iter()
-                        .all(|doc| !doc.text.contains(&config.api_key))
-                );
+            if argument == "wait" {
+                std::thread::sleep(Duration::from_millis(40));
+                client.interrupt();
+            }
+            let event = wait_for(&client, |event| matches!(event, Event::TestResult(_)));
+            let Event::TestResult(run) = event else {
+                unreachable!()
+            };
+            assert_eq!(run.id, id);
+            assert_eq!(run.status, status);
+            if argument == "pass" {
+                assert_eq!(run.exit_code, Some(0));
+                assert!(run.stdout.contains("literal with spaces"));
             }
         }
-        std::fs::remove_dir_all(root).unwrap();
+        client.submit("resume-status".into(), false).unwrap();
+        let Event::Text { text, .. } = wait_for(&client, |event| {
+            matches!(event, Event::Text { replace: true, .. })
+        }) else {
+            unreachable!()
+        };
+        assert!(text.starts_with("thread/start:"));
+        wait_for(&client, |event| matches!(event, Event::Finished { .. }));
+    }
+
+    #[test]
+    fn inherited_launch_has_no_model_or_provider_overrides() {
+        let root = tempfile::tempdir().unwrap();
+        let config = CodexConfig {
+            executable: "fixture-only.exe".into(),
+            ..Default::default()
+        };
+        let command = Client::command(&config, root.path()).unwrap();
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            ["app-server", "--stdio"]
+        );
+        assert!(
+            !command
+                .get_envs()
+                .any(|(name, _)| name == "LEXINGTON_MODEL_API_KEY")
+        );
     }
 
     #[cfg(windows)]
@@ -1245,46 +1474,6 @@ mod tests {
                 "unexpected disconnect: {event:?}"
             );
         }
-    }
-    #[test]
-    #[cfg(unix)]
-    fn custom_api_overrides_are_process_local_and_keys_never_enter_arguments() {
-        use std::os::unix::fs::PermissionsExt;
-        let root =
-            std::env::temp_dir().join(format!("lexington-provider-{}", rand::random::<u64>()));
-        std::fs::create_dir(&root).unwrap();
-        let executable = root.join("mock-codex");
-        for (custom, mode) in [(true, "api-config"), (false, "inherit-config")] {
-            let source = format!(
-                "#!/usr/bin/env python3\nimport sys\nsys.argv.insert(1, {mode:?})\n{}",
-                include_str!("../../tests/fixtures/codex-server.py")
-            );
-            std::fs::write(&executable, source).unwrap();
-            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
-            let config = CodexConfig {
-                executable: executable.to_string_lossy().into_owned(),
-                model: "fixture-model\"with-quote".into(),
-                use_custom_api: custom,
-                base_url: "http://127.0.0.1:9999/v1".into(),
-                api_key: "fixture-key-not-a-real-secret".into(),
-                ..Default::default()
-            };
-            let client = Client::start(&config, &root, "", || {}).unwrap();
-            client.submit("确认配置".into(), false).unwrap();
-            wait_for(&client, |event| {
-                matches!(event, Event::Finished { interrupted: false })
-            });
-            if custom {
-                client.submit("echo-secret".into(), false).unwrap();
-                let event = wait_for(&client, |event| matches!(event, Event::Text { .. }));
-                assert!(matches!(event, Event::Text { text, .. } if text == "[hidden]"));
-                wait_for(&client, |event| {
-                    matches!(event, Event::Finished { interrupted: false })
-                });
-            }
-            drop(client);
-        }
-        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn no_approval_applies_per_turn_and_restores_original_policy_without_restarting() {

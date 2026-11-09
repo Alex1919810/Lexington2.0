@@ -156,9 +156,11 @@ def run(binary, artwork=None, pet_point=(250, 250)):
             'codex': {'executable': str(root / 'deliberately-unavailable.exe')},
             'clockIn': {'autoStart': False},
         }), encoding='utf-8')
-        env = dict(os.environ, LEXINGTON_HOME=str(root), CODEX_HOME=str(root / 'codex'),
+        env = dict(os.environ, LEXINGTON_HOME=str(root), CODEX_HOME=str(root / 'codex'), LEXINGTON_CODEX_EXECUTABLE=str(root / 'deliberately-unavailable.exe'),
                    APPDATA=str(root / 'roaming'), LOCALAPPDATA=str(root / 'local'),
                    HOME=str(root), USERPROFILE=str(root))
+        for credential in ("OPENAI_API_KEY", "LEXINGTON_MODEL_API_KEY"):
+            env.pop(credential, None)
         counter = root / 'clicks.txt'
 
         def launch():

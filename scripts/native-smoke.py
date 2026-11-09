@@ -8,6 +8,7 @@ import argparse
 import ctypes as C
 import ctypes.util
 import json
+import os
 import subprocess
 import time
 
@@ -147,7 +148,7 @@ def main():
                    "20" if args.mode in ("drag-edges", "click-through") else "7"]
         if not args.production:
             command.append("--dev")
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={**{key: value for key, value in os.environ.items() if key not in ("OPENAI_API_KEY", "LEXINGTON_MODEL_API_KEY")}, "LEXINGTON_CODEX_EXECUTABLE": "/lexington-smoke-unavailable-codex", "CODEX_HOME": "/lexington-smoke-no-credentials"})
         deadline = time.monotonic() + 10
         window = None
         while not window and time.monotonic() < deadline:
@@ -277,7 +278,7 @@ def main():
             warp(0, 0)
         assert process.wait(timeout=25 if args.mode in ("drag-edges", "click-through") else 15) == 0, process.stderr.read().decode()
         if args.mode == "position":
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={**{key: value for key, value in os.environ.items() if key not in ("OPENAI_API_KEY", "LEXINGTON_MODEL_API_KEY")}, "LEXINGTON_CODEX_EXECUTABLE": "/lexington-smoke-unavailable-codex", "CODEX_HOME": "/lexington-smoke-no-credentials"})
             deadline = time.monotonic() + 10
             window = None
             while not window and time.monotonic() < deadline:
