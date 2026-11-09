@@ -66,7 +66,7 @@ impl Wife {
         let id = egui::ViewportId::from_hash_of("lexington-character-memories");
         let mut builder = egui::ViewportBuilder::default()
             .with_title("人物记忆")
-            .with_inner_size(egui::vec2(620., 480.))
+            .with_inner_size(egui::vec2(760., 600.))
             .with_min_inner_size(egui::vec2(400., 300.))
             .with_decorations(true)
             .with_resizable(true)
@@ -85,11 +85,9 @@ impl Wife {
                     .open(&mut open)
                     .order(egui::Order::Foreground)
                     .collapsible(false)
-                    .default_size(egui::vec2(596., 430.))
+                    .default_size(egui::vec2(728., 550.))
                     .show(memory, |ui| {
-                        egui::ScrollArea::vertical()
-                            .drag_to_scroll(false)
-                            .show(ui, |ui| self.character_memories_ui(ui));
+                        self.character_memories_ui(ui);
                     })
                     && open
                 {
@@ -106,11 +104,17 @@ impl Wife {
                     self.character_memory_ui.window_raised = true;
                 }
                 open = !memory.input(|i| i.viewport().close_requested());
-                egui::CentralPanel::default().show(memory, |ui| {
-                    egui::ScrollArea::vertical()
-                        .drag_to_scroll(false)
-                        .show(ui, |ui| self.character_memories_ui(ui));
-                });
+                egui::CentralPanel::default()
+                    .frame(
+                        egui::Frame::new()
+                            .fill(super::style::PANEL_BG)
+                            .inner_margin(if memory.screen_rect().height() < 440. {
+                                12
+                            } else {
+                                20
+                            }),
+                    )
+                    .show(memory, |ui| self.character_memories_ui(ui));
             }
         });
         self.apply_character_memory_action();
@@ -253,28 +257,97 @@ impl Wife {
     }
 
     pub(super) fn character_memories_ui(&mut self, ui: &mut egui::Ui) {
+        super::style::panel_style(ui);
+        let compact = ui.available_height() < 400.;
+        ui.label(
+            egui::RichText::new("人物记忆")
+                .size(if compact { 20. } else { 24. })
+                .strong(),
+        );
+        if !compact {
+            ui.weak("翻阅与你有关的故事，留住相处中的点滴");
+            ui.add_space(4.);
+        }
         let browser = &mut self.character_memory_ui.browser;
         let previous = browser.character.clone();
-        egui::ComboBox::from_id_salt("memory-character")
-            .selected_text(&browser.character)
-            .show_ui(ui, |ui| {
-                for name in self.library.characters() {
-                    ui.selectable_value(&mut browser.character, name.clone(), name);
+        let mut refresh = false;
+        super::style::card()
+            .inner_margin(if compact { 8 } else { 16 })
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.horizontal_wrapped(|ui| {
+                    if !compact {
+                        ui.strong("记忆归属");
+                    }
+                    egui::ComboBox::from_id_salt("memory-character")
+                        .width(if compact { 110. } else { 150. })
+                        .selected_text(if browser.character.is_empty() {
+                            "请选择角色"
+                        } else {
+                            &browser.character
+                        })
+                        .show_ui(ui, |ui| {
+                            for name in self.library.characters() {
+                                ui.selectable_value(&mut browser.character, name.clone(), name);
+                            }
+                        });
+                    refresh = ui.button("刷新人物记忆").clicked();
+                });
+                if previous != browser.character {
+                    *browser = MemoryBrowser {
+                        character: browser.character.clone(),
+                        ..Default::default()
+                    };
+                }
+                let search_changed = ui
+                    .add(
+                        egui::TextEdit::singleline(&mut browser.query)
+                            .desired_width(f32::INFINITY)
+                            .margin(egui::Margin::symmetric(8, if compact { 3 } else { 7 }))
+                            .hint_text(
+                                egui::RichText::new("搜索事件、参与者或原文依据")
+                                    .color(super::style::MUTED),
+                            ),
+                    )
+                    .changed();
+                let previous_filter = (browser.category.clone(), browser.important_only);
+                ui.horizontal_wrapped(|ui| {
+                    egui::ComboBox::from_id_salt("character-memory-category")
+                        .selected_text(if browser.category.is_empty() {
+                            "所有事件"
+                        } else {
+                            &browser.category
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut browser.category, String::new(), "所有事件");
+                            for category in character_memory::CATEGORIES {
+                                ui.selectable_value(
+                                    &mut browser.category,
+                                    category.into(),
+                                    category,
+                                );
+                            }
+                        });
+                    ui.checkbox(&mut browser.important_only, "只看重要记忆");
+                    if (!browser.query.is_empty()
+                        || !browser.category.is_empty()
+                        || browser.important_only)
+                        && ui.small_button("清除筛选").clicked()
+                    {
+                        browser.query.clear();
+                        browser.category.clear();
+                        browser.important_only = false;
+                        browser.shown = 50;
+                    }
+                });
+                if search_changed
+                    || previous_filter != (browser.category.clone(), browser.important_only)
+                {
+                    browser.shown = 50;
                 }
             });
-        if previous != browser.character {
-            *browser = MemoryBrowser {
-                character: browser.character.clone(),
-                ..Default::default()
-            };
-        }
         let character = browser.character.clone();
-        if character.is_empty() {
-            ui.label("暂无记忆");
-            return;
-        }
-        let refresh = ui.button("刷新人物记忆").clicked();
-        if browser.loaded_for.as_deref() != Some(&character) || refresh {
+        if !character.is_empty() && (browser.loaded_for.as_deref() != Some(&character) || refresh) {
             match character_memory::list(&self.root, &character) {
                 Ok(records) => {
                     browser.records = records;
@@ -288,24 +361,6 @@ impl Wife {
         if !browser.error.is_empty() {
             ui.colored_label(egui::Color32::DARK_RED, &browser.error);
         }
-        ui.add(
-            egui::TextEdit::singleline(&mut browser.query).hint_text("搜索事件、参与者或原文依据"),
-        );
-        ui.horizontal_wrapped(|ui| {
-            egui::ComboBox::from_id_salt("character-memory-category")
-                .selected_text(if browser.category.is_empty() {
-                    "所有事件"
-                } else {
-                    &browser.category
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut browser.category, String::new(), "所有事件");
-                    for category in character_memory::CATEGORIES {
-                        ui.selectable_value(&mut browser.category, category.into(), category);
-                    }
-                });
-            ui.checkbox(&mut browser.important_only, "只看重要记忆");
-        });
         let query = browser.query.trim().to_lowercase();
         let records: Vec<_> = browser
             .records
@@ -325,48 +380,108 @@ impl Wife {
                         .contains(&query))
             })
             .collect();
-        ui.label(format!("{} 条人物记忆", records.len()));
-        if records.is_empty() {
-            ui.small("暂无记忆");
-        }
-        for event in records.iter().take(browser.shown) {
-            ui.separator();
-            egui::CollapsingHeader::new(format!(
-                "{} · {}",
-                format_time(event.recorded_at),
-                event.title
-            ))
-            .id_salt(&event.id)
+        ui.horizontal(|ui| {
+            ui.strong(format!("{} 条人物记忆", records.len()));
+            if records.len() != browser.records.len() {
+                ui.weak(format!("共 {} 条", browser.records.len()));
+            }
+        });
+        egui::ScrollArea::vertical()
+            .id_salt(("character-memory-list", &character))
+            .drag_to_scroll(false)
+            .min_scrolled_height(0.)
+            .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.label(format!(
-                    "{} · {} · {}",
-                    event.category,
-                    event.perspective,
-                    match event.importance {
-                        3 => "里程碑",
-                        2 => "重要",
-                        _ => "日常",
-                    }
-                ));
-                ui.label(&event.description);
-                ui.label(format!("事件时间：{}", event.happened_at));
-                ui.label(format!("参与者：{}", event.participants.join("、")));
-                ui.label("模型提炼依据");
-                ui.label(&event.evidence);
-                ui.collapsing("对应对话", |ui| {
-                    ui.label(format!(
-                        "用户：{}\n\n角色：{}",
-                        event.source_user, event.source_assistant
-                    ));
-                });
-                if ui.button("删除此条记忆").clicked() {
-                    browser.pending_delete = Some((character.clone(), event.id.clone()));
+                ui.set_min_width(ui.available_width());
+                if records.is_empty() {
+                    super::style::card().show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        ui.add_space(20.);
+                        ui.vertical_centered(|ui| {
+                            ui.label(
+                                egui::RichText::new(if browser.records.is_empty() {
+                                    "暂无记忆"
+                                } else {
+                                    "没有找到匹配的记忆"
+                                })
+                                .size(18.)
+                                .strong(),
+                            );
+                            ui.weak(if character.is_empty() {
+                                "选择角色后，在这里翻阅人物记忆。"
+                            } else if browser.records.is_empty() {
+                                "与角色聊聊天，让故事从这里开始。"
+                            } else {
+                                "试试其他关键词，或清除筛选。"
+                            });
+                        });
+                        ui.add_space(20.);
+                    });
+                }
+                for event in records.iter().take(browser.shown) {
+                    ui.push_id(&event.id, |ui| {
+                        super::style::card().show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            ui.horizontal_wrapped(|ui| {
+                                ui.colored_label(super::style::ACCENT, &event.category);
+                                let (importance, color) = match event.importance {
+                                    3 => ("里程碑", egui::Color32::from_rgb(153, 102, 35)),
+                                    2 => ("重要", super::style::ACCENT),
+                                    _ => ("日常", super::style::MUTED),
+                                };
+                                egui::Frame::new()
+                                    .fill(color.gamma_multiply(0.10))
+                                    .corner_radius(5)
+                                    .inner_margin(egui::Margin::symmetric(7, 2))
+                                    .show(ui, |ui| {
+                                        ui.label(
+                                            egui::RichText::new(importance).small().color(color),
+                                        );
+                                    });
+                                ui.label(
+                                    egui::RichText::new(format_time(event.recorded_at))
+                                        .small()
+                                        .color(super::style::MUTED),
+                                );
+                            });
+                            ui.label(egui::RichText::new(&event.title).size(18.).strong());
+                            ui.add(egui::Label::new(&event.description).wrap());
+                            egui::CollapsingHeader::new("查看详情与依据")
+                                .id_salt(("memory-detail", &event.id))
+                                .show(ui, |ui| {
+                                    ui.weak(format!("事件时间：{}", event.happened_at));
+                                    ui.weak(format!("参与者：{}", event.participants.join("、")));
+                                    ui.weak(format!("记录视角：{}", event.perspective));
+                                    ui.separator();
+                                    ui.strong("模型提炼依据");
+                                    ui.add(egui::Label::new(&event.evidence).wrap());
+                                    ui.collapsing("对应对话", |ui| {
+                                        ui.label("用户");
+                                        ui.add(egui::Label::new(&event.source_user).wrap());
+                                        ui.label("角色");
+                                        ui.add(egui::Label::new(&event.source_assistant).wrap());
+                                    });
+                                    ui.add_space(4.);
+                                    if ui
+                                        .add(egui::Button::new(
+                                            egui::RichText::new("删除此条记忆")
+                                                .color(egui::Color32::from_rgb(168, 64, 64)),
+                                        ))
+                                        .clicked()
+                                    {
+                                        browser.pending_delete =
+                                            Some((character.clone(), event.id.clone()));
+                                    }
+                                });
+                        });
+                        ui.add_space(2.);
+                    });
+                }
+                if records.len() > browser.shown && ui.button("显示更多人物记忆").clicked()
+                {
+                    browser.shown += 50;
                 }
             });
-        }
-        if records.len() > browser.shown && ui.button("显示更多人物记忆").clicked() {
-            browser.shown += 50;
-        }
     }
 
     pub(super) fn apply_character_memory_action(&mut self) {
@@ -478,8 +593,29 @@ mod tests {
         let output = frame(&mut app, &ctx, vec![]);
         assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::epaint::Shape::Text(text) if text.galley.job.text=="0 条人物记忆")));
         assert!(!output.shapes.iter().any(|shape|matches!(&shape.shape,egui::epaint::Shape::Text(text) if text.galley.job.text.contains("自动提炼") || text.galley.job.text.contains("保存并应用"))));
-        app.character_memory_ui.browser.query.clear();
-        click(&mut app, &ctx, "温茶偏好");
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::epaint::Shape::Text(text) if text.galley.job.text == "没有找到匹配的记忆")));
+        click(&mut app, &ctx, "清除筛选");
+        assert!(app.character_memory_ui.browser.query.is_empty());
+        // The minimum viewport must keep the first card reachable below the fixed filters.
+        for _ in 0..2 {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400., 300.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| app.character_memories_ui(ui));
+                },
+            );
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::epaint::Shape::Text(text) if text.galley.job.text == "温茶偏好"
+                    && shape.clip_rect.contains(text.pos + text.galley.size() / 2.))));
+        }
+        click(&mut app, &ctx, "查看详情与依据");
         click(&mut app, &ctx, "删除此条记忆");
         assert!(character_memory::list(&root, "a").unwrap().is_empty());
         assert_eq!(app.text, "正常聊天保持原样");

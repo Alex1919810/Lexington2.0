@@ -148,7 +148,7 @@ try:
             assert g[0] < pg[0] - 150, 'settings remains trapped in pet window'
             assert geometry(pet) == pg, 'settings drag moved pet'
             g = drag(settings, 160, -70, scale)
-            for local in [(50, 280), (270, 270)]:
+            for local in [(50, 480), (490, 490)]:
                 g = drag(settings, 80, 20, scale, local)
                 g = drag(settings, -80, -20, scale, local)
             g = geometry(settings)
@@ -167,7 +167,7 @@ try:
             X.XSync(d, 0)
             time.sleep(0.3)
             g = drag(settings, -100, 80, scale)
-            click(g[0] + int(438 * scale), g[1] + int(26 * scale))
+            click(g[0] + int(690 * scale), g[1] + int(26 * scale))
             waitfor(lambda: all((prop(w, '_NET_WM_NAME', 0) != 'Lexington 设置'.encode() for w in find(p.pid))))
             click(cx, cy, 3)
             time.sleep(0.3)
@@ -177,7 +177,7 @@ try:
             g = drag(settings, -200, 100, scale)
             assert geometry(pet) == pg, 'body drag moved pet'
             g = geometry(settings)
-            click(g[0] + int(155 * scale), g[1] + int(136 * scale))
+            click(g[0] + int(220 * scale), g[1] + int(217 * scale))
             assert json.loads(cfg.read_text())['codex']['noApproval'] is True, 'checkbox no longer works'
             print('Title/body drag, controls, unfocus/reopen, exact delta and DPI passed', scale, flush=True)
         finally:

@@ -89,6 +89,57 @@ pub fn font(size: f32) -> egui::FontId {
     egui::FontId::new(size, egui::FontFamily::Name("browser".into()))
 }
 
+pub(super) const PANEL_BG: Color32 = Color32::from_rgb(243, 246, 248);
+pub(super) const INK: Color32 = Color32::from_rgb(37, 55, 70);
+pub(super) const MUTED: Color32 = Color32::from_rgb(100, 116, 130);
+pub(super) const ACCENT: Color32 = Color32::from_rgb(35, 112, 116);
+
+/// Apply only to the current panel, leaving the pet and other viewports unchanged.
+pub(super) fn panel_style(ui: &mut egui::Ui) {
+    let style = ui.style_mut();
+    for (kind, size) in [
+        (egui::TextStyle::Heading, 24.),
+        (egui::TextStyle::Body, 14.),
+        (egui::TextStyle::Button, 14.),
+        (egui::TextStyle::Small, 12.),
+    ] {
+        style
+            .text_styles
+            .insert(kind, egui::FontId::proportional(size));
+    }
+    style.spacing.item_spacing = egui::vec2(10., 10.);
+    style.spacing.button_padding = egui::vec2(12., 7.);
+    style.spacing.interact_size.y = 30.;
+    style.visuals.override_text_color = Some(INK);
+    style.visuals.panel_fill = PANEL_BG;
+    style.visuals.extreme_bg_color = Color32::from_rgb(249, 251, 252);
+    style.visuals.faint_bg_color = Color32::from_rgb(238, 244, 246);
+    style.visuals.selection.bg_fill = Color32::from_rgb(218, 237, 235);
+    style.visuals.selection.stroke = Stroke::new(1_f32, ACCENT);
+    for widget in [
+        &mut style.visuals.widgets.noninteractive,
+        &mut style.visuals.widgets.inactive,
+        &mut style.visuals.widgets.hovered,
+        &mut style.visuals.widgets.active,
+        &mut style.visuals.widgets.open,
+    ] {
+        widget.corner_radius = egui::CornerRadius::same(7);
+        widget.bg_stroke = Stroke::new(1_f32, Color32::from_rgb(219, 228, 233));
+        widget.fg_stroke = Stroke::new(1_f32, INK);
+    }
+    style.visuals.widgets.inactive.weak_bg_fill = Color32::WHITE;
+    style.visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(232, 242, 242);
+    style.visuals.widgets.active.weak_bg_fill = Color32::from_rgb(218, 237, 235);
+}
+
+pub(super) fn card() -> egui::Frame {
+    egui::Frame::new()
+        .fill(Color32::WHITE)
+        .stroke(Stroke::new(1_f32, Color32::from_rgb(222, 230, 235)))
+        .corner_radius(12)
+        .inner_margin(16)
+}
+
 pub fn bubble_tail(rect: egui::Rect, input: bool) -> Vec<Pos2> {
     let x = if input {
         rect.center().x
