@@ -2,6 +2,47 @@ use super::assets::Picture;
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, pos2};
 
 pub(super) fn install(ctx: &egui::Context) {
+    let installed = egui::Id::new("ime-commit-compatibility-installed");
+    if !ctx.data(|data| data.get_temp::<bool>(installed).unwrap_or(false)) {
+        ctx.data_mut(|data| data.insert_temp(installed, true));
+        ctx.on_begin_pass(
+            "ime-commit-compatibility",
+            std::sync::Arc::new(|ctx| {
+                let state_id = egui::Id::new(("ime-composition", ctx.viewport_id()));
+                let focused = ctx.memory(|memory| memory.focused());
+                let mut composing = ctx
+                    .data(|data| data.get_temp::<Option<egui::Id>>(state_id))
+                    .flatten()
+                    .filter(|id| Some(*id) == focused);
+                ctx.input_mut(|input| {
+                    if !input.focused {
+                        composing = None;
+                    }
+                    for event in &mut input.events {
+                        match event {
+                            egui::Event::Ime(
+                                egui::ImeEvent::Enabled | egui::ImeEvent::Preedit(_),
+                            ) => {
+                                composing = focused;
+                            }
+                            egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+                                // egui 0.31 checks Commit against the last preedit cursor.
+                                // XIM may send only Commit, leaving that cursor at the
+                                // first word. Insert these candidates as ordinary text.
+                                if composing.is_none() {
+                                    *event = egui::Event::Text(std::mem::take(text));
+                                }
+                                composing = None;
+                            }
+                            egui::Event::Ime(egui::ImeEvent::Disabled) => composing = None,
+                            _ => {}
+                        }
+                    }
+                });
+                ctx.data_mut(|data| data.insert_temp(state_id, composing));
+            }),
+        );
+    }
     let mut fonts = egui::FontDefinitions::default();
     let mut cjk = egui::FontData::from_static(include_bytes!(
         "../../resource/fonts/NotoSansCJK-Regular.ttc"
@@ -98,4 +139,86 @@ pub(super) fn draw_shadow(painter: &egui::Painter, rect: Rect, radius: f32, blur
         }
         .as_shape(rect, radius as u8),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ime_commit_only_continues_in_singleline_and_multiline_editors() {
+        for multiline in [false, true] {
+            let ctx = egui::Context::default();
+            install(&ctx);
+            let id = egui::Id::new("ime-editor");
+            let mut text = String::new();
+            let run = |text: &mut String, events| {
+                ctx.run(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            let editor = if multiline {
+                                egui::TextEdit::multiline(text)
+                            } else {
+                                egui::TextEdit::singleline(text)
+                            };
+                            ui.add(editor.id(id));
+                        });
+                    },
+                )
+            };
+            run(&mut text, vec![]);
+            ctx.memory_mut(|memory| memory.request_focus(id));
+            run(&mut text, vec![]);
+            let mut expected = String::new();
+            for word in ["你好", "世界", "中文", "测试"] {
+                // XIM can commit a whole candidate without an Enabled/Preedit pair.
+                run(
+                    &mut text,
+                    vec![
+                        egui::Event::Ime(egui::ImeEvent::Disabled),
+                        egui::Event::Ime(egui::ImeEvent::Commit(word.into())),
+                        egui::Event::Ime(egui::ImeEvent::Disabled),
+                    ],
+                );
+                expected.push_str(word);
+                assert_eq!(text, expected, "multiline={multiline}");
+                assert!(ctx.memory(|memory| memory.has_focus(id)));
+            }
+            // Normal preedit still replaces its marked text, even across frames.
+            run(&mut text, vec![egui::Event::Ime(egui::ImeEvent::Enabled)]);
+            for preedit in ["lian", "lianxu"] {
+                run(
+                    &mut text,
+                    vec![egui::Event::Ime(egui::ImeEvent::Preedit(preedit.into()))],
+                );
+            }
+            run(
+                &mut text,
+                vec![
+                    egui::Event::Ime(egui::ImeEvent::Commit("连续".into())),
+                    egui::Event::Ime(egui::ImeEvent::Disabled),
+                ],
+            );
+            expected.push_str("连续");
+            assert_eq!(text, expected);
+            // A bare commit must also replace the selected Unicode range.
+            let mut state = egui::TextEdit::load_state(&ctx, id).unwrap();
+            state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::two(
+                    egui::text::CCursor::new(2),
+                    egui::text::CCursor::new(4),
+                )));
+            state.store(&ctx, id);
+            run(
+                &mut text,
+                vec![egui::Event::Ime(egui::ImeEvent::Commit("替换".into()))],
+            );
+            assert_eq!(text, "你好替换中文测试连续");
+        }
+    }
 }

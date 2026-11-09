@@ -51,3 +51,5 @@
 - 测试与模型任务共用 busy/Client，结果按项目/run ID 回填；独立测试不得写入普通聊天、人物记忆或角色向量历史。中断、退出、角色重建都须结束测试并清队列；保存测试/项目记忆失败保留旧数据。
 
 - 小窗口里的任务详情 ScrollArea 须显式 min_scrolled_height(0)：egui 默认 64px 的最小滚动高度会覆盖更小的 max_height，导致新增页签后仍把发送区挤出窗口。
+
+- 中文输入回归须覆盖没有 Enabled/Preedit 的连续多次 Commit；单次完整预编辑序列不能发现 egui 0.31 首词后丢字的问题。共用兼容回调在 style::install 注册，按 viewport/聚焦控件隔离组合状态；主聊天与 development 均使用该回调，不分别拼接候选文本。
