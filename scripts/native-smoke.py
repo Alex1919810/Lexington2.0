@@ -62,6 +62,8 @@ def main():
     parser.add_argument("screenshot")
     parser.add_argument("mode", choices=["drag", "drag-edges", "position", "click-through", "clock", "input", "pin", "idle"], default="clock", nargs="?")
     parser.add_argument("--production", action="store_true", help="check the default 500x500 window")
+    parser.add_argument("--pet-point", nargs=2, type=int, metavar=("X", "Y"),
+                        help="visible artwork point in native window pixels (for narrower outfits/Live2D)")
     args = parser.parse_args()
     display = X.XOpenDisplay(None)
     assert display, "X11 display is unavailable"
@@ -148,6 +150,7 @@ def main():
         assert {"_NET_WM_STATE_ABOVE", "_NET_WM_STATE_SKIP_TASKBAR", "_NET_WM_STATE_SKIP_PAGER"} <= set(names), names
         original, original_size = position(window), size(window)
         assert original_size == ((500, 500) if args.production else (800, 600)), original_size
+        pet_point = args.pet_point or (original_size[0] // 2 - 60, original_size[1] // 2 - 20)
         print(json.dumps(dict(position=original, size=original_size, states=names)))
         X.XRaiseWindow(display, window)
         X.XSetInputFocus(display, window, 2, 0)
@@ -169,7 +172,7 @@ def main():
                 button(True)
                 button(False)
                 assert X.XCheckWindowEvent(display, underlying, 1 << 2, C.byref(event)), ("blank area blocked click", offset)
-            warp(original[0] + original_size[0] // 2 - 60, original[1] + original_size[1] // 2 - 20)
+            warp(original[0] + pet_point[0], original[1] + pet_point[1])
             button(True)
             button(False)
             assert not X.XCheckWindowEvent(display, underlying, 1 << 2, C.byref(event)), "pet click passed through"
@@ -182,8 +185,7 @@ def main():
         elif args.mode == "drag-edges":
             width, height = size(root)
             # Grab visible artwork; the bundled GIF's canvas center is transparent.
-            start = (original[0] + original_size[0] // 2 - 60,
-                     original[1] + original_size[1] // 2 - 20)
+            start = (original[0] + pet_point[0], original[1] + pet_point[1])
             warp(*start)
             button(True)
             # Pet center follows the pointer while transparent margins cross screen edges.
@@ -210,8 +212,7 @@ def main():
             assert position(window) == original, "window moved back after releasing drag"
             print("Pet drag anchor reaches all screen corners; transparent margins can leave screen: passed")
         elif args.mode == "drag":
-            start = (original[0] + original_size[0] // 2 - 60,
-                     original[1] + original_size[1] // 2 - 20)
+            start = (original[0] + pet_point[0], original[1] + pet_point[1])
             warp(*start)
             button(True)
             warp(start[0] + 3, start[1] + 2)
@@ -229,8 +230,7 @@ def main():
             print("Drag threshold, distance, reversal, capture and size: passed")
         elif args.mode == "position":
             width, height = size(root)
-            start = (original[0] + original_size[0] // 2 - 60,
-                     original[1] + original_size[1] // 2 - 20)
+            start = (original[0] + pet_point[0], original[1] + pet_point[1])
             # Leave transparent margins offscreen while the actual artwork stays reachable.
             expected = (width - original_size[0] // 2 + 46,
                         height - original_size[1] // 2 - 18)

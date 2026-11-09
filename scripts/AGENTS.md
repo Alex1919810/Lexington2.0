@@ -3,6 +3,7 @@
 继承根目录 [AGENTS.md](../AGENTS.md)；此处仅补充本目录约束。模块职责、接口及详细场景见 [docs/MODULES.md](../docs/MODULES.md)。
 
 - 原生指针测试需 libX11/libXtst，优先 Xephyr + WM 隔离，同一 display 必须串行；测试从可见轮廓按下，失败也须释放鼠标并恢复位置。模拟 egui 事件不能验证实际 WM 层级、移动或穿透。
+- Linux 立绘选择器使用 libdbus/XDG Portal，无 FileChooser 后端时回退 Zenity；源码和无源码安装均检查 libdbus-1-3、Zenity 及本地推理所需 libstdc++6，不能归入可跳过的菜单扩展依赖。原生立绘测试用 --pet-point 指定当前素材持续可见的实体点，不能沿用旧 GIF 的抓取坐标验证 Live2D。
 - 打包 `bash scripts/package.sh`，安装 `bash scripts/install-linux.sh`；安装先检查依赖，缺 Codex 下载固定官方原生包并核验 SHA-512、安全解包、保留完整布局，无 Node/npm；已有 CLI/登录保留，不自动登录；可选依赖取消仍保留脚本菜单，必需依赖失败终止。
 - 菜单和桌面显示名固定 Lexington，桌面文件 Lexington.desktop，迁移旧 lexington.desktop 避免重复；菜单 ID 保持 lexington.desktop。用 xdg-user-dir DESKTOP 定位桌面，设置可执行并尝试标记可信，核对快捷方式指向安装版。
 

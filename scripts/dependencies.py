@@ -45,9 +45,12 @@ def system_packages(optional, build=True):
         required.append('build-essential')
     if not shutil.which('xdg-user-dir'):
         required.append('xdg-user-dirs')
+    # rfd uses the desktop portal first, then Zenity if no FileChooser backend exists.
+    if not shutil.which('zenity'):
+        required.append('zenity')
     if shutil.which('dpkg-query'):
         packages = ['ca-certificates', 'libgl1', 'libegl1', 'libx11-6', 'libxcb1',
-                    'libxkbcommon0', 'libxkbcommon-x11-0']
+                    'libxkbcommon0', 'libxkbcommon-x11-0', 'libdbus-1-3', 'libstdc++6']
         for package in packages:
             result = subprocess.run(['dpkg-query', '-W', '-f=${db:Status-Status}', package], capture_output=True, text=True)
             if result.returncode or result.stdout != 'installed':

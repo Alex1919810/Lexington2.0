@@ -173,11 +173,11 @@ resource/illustration/lexington/live2d/WeddingDress_Normal/
 - 只转换主透明窗口，独立设置等原生 viewport 不登记回调。帧纹理仅尺寸变化时重新分配，不累积历史帧，正常绘制不做 GPU→CPU 读回。资源在 Pet::new 的真实 GL 上下文创建，on_exit 中回收；测试构造 from_root 无 GL 资源。GLSL 140/GLES 300 初始化失败保留原绘制并仅报通用错误，专用验证入口返回失败。
 - egui_glow 截图事件将原始帧缓冲字节装入 Color32 容器；经过最终转换后，该容器内容已是桌面 gamma 预乘表示，不能再次按普通 Color32 解码。screenshot_rgba 按字节除 alpha 导出 straight RGBA，透明像素归零；未启用转换的普通 Color32 继续使用 to_srgba_unmultiplied。
 - `cargo run --locked -- --check-transparency` 或安装版 `--check-transparency`：创建独立隐藏 GL 上下文与测试 FBO，实际执行同一着色器，对白色、肤色、蓝色 × 12 种 alpha 共 36 个像素读回校验：alpha 完全相同、RGB 不超过 alpha、与预期颜色误差至多 2/255；不读取资源根、配置、登录、记忆或真实模型。失败返回非零，结果只含验收摘要。单元过滤器 `cargo test --locked ui::transparency::tests::` 检查截图只去预乘一次、透明/不透明像素及低 alpha 白边读回。
-- 本机 Windows 原生窗口链路另用独立 LEXINGTON_HOME/CODEX_HOME/HOME/USERPROFILE/LOCALAPPDATA/APPDATA/XDG_DATA_HOME、禁用自动打卡和不可用 Codex 路径，配置仅含婚纱 Live2D 素材，运行 --dev --screenshot 自动保存后退出；不注入鼠标输入、不读取真实用户记录。实际 GL 截图在深色/白色底合成检查发丝、花瓣与裙摆，透明像素 RGB 为 0；GPU 校验、截图读回单元测试及 fmt/Clippy 通过。Linux 桌面合成尚未实机验收。
+- 本机 Windows 原生窗口链路另用独立 LEXINGTON_HOME/CODEX_HOME/HOME/USERPROFILE/LOCALAPPDATA/APPDATA/XDG_DATA_HOME、禁用自动打卡和不可用 Codex 路径，配置仅含婚纱 Live2D 素材，运行 --dev --screenshot 自动保存后退出；不注入鼠标输入、不读取真实用户记录。实际 GL 截图在深色/白色底合成检查发丝、花瓣与裙摆，透明像素 RGB 为 0；GPU 校验、截图读回单元测试及 fmt/Clippy 通过。Linux x86_64 GPU 与 X11 原生增量验收见验证入口；不据此推断其他合成器。
 
 ## 原生 Live2D 风格角色
 
-侧栏顺序调整同时同步 `scripts/native-smoke.py` 的 clock 模式：打卡按钮距首个按钮中心偏移 300 像素；pin 模式及 PNG/GIF 按钮坐标保持。脚本语法检查不代表已在 Linux 原生桌面复测。
+侧栏顺序调整同时同步 `scripts/native-smoke.py` 的 clock 模式：打卡按钮距首个按钮中心偏移 300 像素；pin 模式及 PNG/GIF 按钮坐标保持。Linux x86_64 已用隔离 X11 实际点击打卡入口；相关验收见验证入口。
 
 - 侧栏在正常/Q版立绘切换按钮下方放置 L 按钮，其后依次为角色切换、打卡；存在当前角色的素材时可切换，当前模式高亮。默认仍为 GIF。目录为 resource/illustration/<角色>/live2d/<换装>_Normal/actor.json，个人角色可在 config/characters/<角色>/live2d 使用相同结构；_Damage 可选。换装前缀与 PNG/GIF 去掉最终状态后缀后的名称一致，例如 Lexington 的 WeddingDress_Normal。只扫描 actor.json 的模型目录；▶ 只遍历当前格式/状态，战损按钮仍需对应资源。
 - backend/resources 只发现路径和角色/换装/状态；CharacterState::can_toggle_live2d/toggle_live2d 保持角色，优先同换装、再匹配状态，无对应换装则选择该角色已有模型。退出 L 优先同换装 PNG，再回退 GIF；普通格式按钮仍切换 GIF/PNG。同角色格式切换保持 Codex 会话。select_first 的三格式回退处理仅有 PNG 或仅有 Live2D 的下一角色，刷新保留当前模型。
@@ -188,7 +188,7 @@ resource/illustration/lexington/live2d/WeddingDress_Normal/
 - ui/assets::Picture 将 Raster 解码器或 Live Actor 装入枚举，UI 持有纹理与单调时钟。Live 以至多 30fps 更新纹理和 alpha 输入遮罩；tools 只输出 RGBA。模型自身提供根摇摆，ui/pet 保留悬停缩放/抬升并取消额外正弦悬浮，避免双重摇摆。Live 使用完整显示图像范围接收部位点击，短按触发局部动作；拖动不触发动作，未配置部位不触发随机台词或其他动作，右键入口保持。平台最终仍仅接收可见 alpha 和控件输入范围，不把整块透明画布变为原生可点击区域。
 - scripts/import-live2d.py 是本次原包的离线格式转换工具，读取 ZIP 中已验证的 NumPy rig/头发数组和 PNG，生成原生 PNG、16 位遮罩与 little-endian float32 场；不执行原包脚本，不覆盖已有输出目录。离线需要 NumPy/Pillow，参考视觉对照另需 OpenCV；应用、安装包和启动流程无 Python/Node/WebView/Cubism SDK 运行依赖。f32 资源禁止 Git 换行转换；现有资源目录复制流程自动分发模型。
 
-验证：tools::live2d::tests:: 覆盖轨道边界、独立通道、重复点击限队列、移动热点、非法轨道及路径；ui::assets::tests::live2d_sidebar_and_transformed_body_clicks_trigger_only_local_actions 使用 egui 指针事件检查 L 入口、变换后头部/花束点击及不产生随机聊天。backend::character::tests:: 补测前缀、格式回退和模型刷新；其余受影响 Picture/GIF、pet transform 与侧栏用例定向回归，不运行全量测试。`cargo test --release --locked live2d_reference_frames -- --ignored --nocapture` 将固定五组原生像素样例写入忽略的 .tools/live2d-verify，包含待机、抬花极值、闭眼和叠加；本机对照原包 Python 参考，预乘 RGBA 的单通道平均差 ≤0.041/255，最大差 11/255，并查看并排图确认轮廓。单次 release 原生帧计算约 5.5～22.2ms，不含纹理上传/原生窗口，不作为性能保证。真实 WM 拖动/穿透及 Linux 运行尚未复测，模拟事件不能替代原生验证。
+验证：tools::live2d::tests:: 覆盖轨道边界、独立通道、重复点击限队列、移动热点、非法轨道及路径；ui::assets::tests::live2d_sidebar_and_transformed_body_clicks_trigger_only_local_actions 使用 egui 指针事件检查 L 入口、变换后头部/花束点击及不产生随机聊天。backend::character::tests:: 补测前缀、格式回退和模型刷新；其余受影响 Picture/GIF、pet transform 与侧栏用例定向回归，不运行全量测试。`cargo test --release --locked live2d_reference_frames -- --ignored --nocapture` 将固定五组原生像素样例写入忽略的 .tools/live2d-verify，包含待机、抬花极值、闭眼和叠加；本机对照原包 Python 参考，预乘 RGBA 的单通道平均差 ≤0.041/255，最大差 11/255，并查看并排图确认轮廓。单次 release 原生帧计算约 5.5～22.2ms，不含纹理上传/原生窗口，不作为性能保证。Linux x86_64 已补测 X11 穿透、打卡及 Xephyr + GNOME WM 拖动，见验证入口；模拟事件不能替代原生验证。
 
 ## Agent 角色设定资料
 
@@ -223,7 +223,7 @@ ui/app.rs 保存 codex_character、codex_role_card 和角色配置文件时间�
 
 切换显示角色（ui/sidebar.rs 或资源刷新回退）立即结束旧任务并创建新会话，清理回复、气泡、审批及重启标记，保留未发送草稿；同角色换装、战损与格式变化保持会话。ui/codex.rs 在启动时记录新的角色卡和文件快照。手动重启重新读取默认资源；默认资源编辑不自动热加载。
 
-定向验证：`cargo test --locked role_card` 覆盖结构化默认/覆盖、配置保留与损坏保护、世界书匹配、真实协议分块、设置规则操作及保存/取消/延后重启。相关回归使用 `cargo test --locked backend::codex::tests::`、`cargo test --locked backend::character::tests::` 和 `cargo test --locked ui::tests::`。测试仅用临时资源与模拟服务。
+定向验证：`cargo test --locked role_card` 覆盖结构化默认/覆盖、配置保留与损坏保护、世界书匹配、真实协议分块、设置规则操作及保存/取消/延后重启。相关回归使用 `cargo test --locked backend::codex::tests::`、`cargo test --locked backend::character::tests::` 和 `cargo test --locked ui::tests::`。测试仅用临时资源与模拟服务。Codex 模拟服务统一经 mock_options → launch_options 启动，复用生产进程隔离；不再保留未被使用的 Unix 专用 launch 包装，以保持 Linux all-targets Clippy 无 dead_code。
 
 ### 上下文规划 场景与记忆
 
@@ -242,7 +242,8 @@ ui/app.rs 保存 codex_character、codex_role_card 和角色配置文件时间�
 - 名称裁首尾空白后作为角色标识；最多 200 字节，拒绝控制字符、路径/Windows 非法文件名字符、隐藏名、尾点/空格及常用系统保留名。内置和个人角色目录按 ASCII 不区分大小写检查冲突，同时拒绝已有角色卡或映射；原文件名与正常/战损后缀保留，单格式内同名文件拒绝导入。
 - 每个新角色独立保存在 config/characters/<名称>/card.json 和 png/、gif/，不改 resource 布局或 characters.json，不覆盖 config/roleplay.json。全部图片复制、限额和首帧验证、紧凑 JSON 保存及 sync 完成后才将 .creating-* 临时目录 rename 为角色目录；失败自动清理暂存，扫描忽略隐藏目录。新建卡片通过 RoleCard::load 的既有接口加载；后续编辑保存仍写 roleplay.json 的覆盖分组，身份关系和提示不继承其他角色。
 - 文件选择和实际导入在工作线程完成，设置 viewport 回调后才启动；CharacterCreation 的任务通道由 Pet 持有，关闭设置只丢弃未提交草稿，已请求创建仍可完成并刷新角色列表。有原活动角色时保持选择/聊天；原无角色时可显示首次导入的立绘，测试构造不会启动真实 Codex。设置仍打开时转入新卡编辑，可继续设置关系、世界书和规则；以后切换显示角色沿用原有新建 Codex 会话流程。
-- 新增个人目录被 Git 忽略，升级安装保留 config；发布包只含空配置，不包含个人卡片/立绘。Linux 重复打包先核对解析后的清理路径位于项目 dist 内，再清除旧生成包的 config/characters，避免旧发布目录中的个人数据进入新包。原生文件选择参考 [rfd 官方说明](https://github.com/PolyMeilex/rfd/tree/0.17.2)；Linux 最小桌面若无可用 Portal/Zenity，仍可拖入文件，Linux 原生对话框尚未实机验证。
+- Linux 源码与无源码安装的必需依赖检查包含 libdbus-1-3 和 Zenity（本地推理另检查 libstdc++6）：rfd 优先使用 XDG Portal FileChooser，缺少服务/后端时回退 Zenity；`--skip-optional` 不跳过文件选择支持。`python3 scripts/test-dependencies.py` 用假包管理器验证两种安装模式、缺失依赖和已有 Zenity 不重复安装，不访问真实系统依赖。
+- 新增个人目录被 Git 忽略，升级安装保留 config；发布包只含空配置，不包含个人卡片/立绘。Linux 重复打包先核对解析后的清理路径位于项目 dist 内，再清除旧生成包的 config/characters，避免旧发布目录中的个人数据进入新包。原生文件选择参考 [rfd 官方说明](https://github.com/PolyMeilex/rfd/tree/0.17.2)；Linux 最小桌面若无可用 Portal/Zenity，仍可拖入文件，Linux x86_64 已在隔离 X11 中通过同一 pick_illustrations 接口实际打开 Zenity 回退并选择 PNG；其他 Portal 后端仍需各桌面验证。
 
 增量验证：roleplay::creation::tests:: 覆盖无图、损坏图、PNG/GIF、非法名称、重名保护、失败无半成品、未知字段/源图保留、编辑覆盖及坏配置拒绝；ui::new_character::tests:: 使用模拟选择结果验证入口、无图禁止、创建后可选择与关闭设置后完成。补测 roleplay::、backend::character::tests::、ui::role_card::tests:: 和 sidebar_switches_damage_and_format_and_refresh_preserves_selection；scripts/test-package.sh 验证重复打包排除个人立绘，均不调用真实模型或原生文件选择器。
 
@@ -259,9 +260,9 @@ ui/app.rs 保存 codex_character、codex_role_card 和角色配置文件时间�
 
 增量入口：`cargo test --locked tools::embedding::tests::`、`cargo test --locked tools::vector_store::tests::`、`cargo test --locked roleplay::`、`cargo test --locked backend::codex::tests::`、`cargo test --locked ui::role_card::tests::`、`bash scripts/test-package.sh` 和 `scripts/test-windows.ps1`。自动测试使用临时数据和模拟服务，新增覆盖默认本地开启、显式关闭保留、缺模型不远程回退、Unicode 分词边界/校验、模式编辑与资源分发。`lexington --check-embedding` 是显式的离线安装验收，仅用固定中文文本加载随包模型，验证 512 维向量、相关/无关排序及默认 0.5 阈值、长文本完整切分，打印 JSON 耗时；不启动 Codex、不打开用户记录。
 
-模型资源：随包 `resource/models/bge-small-zh-v1.5` 含约 24 MB 动态 INT8 ONNX 权重、tokenizer、固定版本哈希清单及 MIT 许可；源模型 [BAAI/bge-small-zh-v1.5](https://huggingface.co/BAAI/bge-small-zh-v1.5)，ONNX 转换 [Xenova/bge-small-zh-v1.5](https://huggingface.co/Xenova/bge-small-zh-v1.5/tree/75c43b069aac4d136ba6bc1122f995fedcfd2781)。Windows x64 随包 `resource/runtime/windows-x86_64/onnxruntime.dll` 为官方 ONNX Runtime 1.24.4 CPU 库，来自经 SHA256 校验的官方发行 wheel，仅提取原生库及许可/第三方声明，不携带 Python 运行链；运行库自身约 16 MB。Linux 构建使用 ort 校验下载并静态链接的 CPU 运行库，仍需 Linux 实机验收。`.gitattributes` 禁止已校验模型 JSON/权重和 Windows 运行库换行转换，避免 Windows checkout 后 SHA 改变。两端打包前检查模型资源完整，Windows 同时检查运行库；所有资源随现有 resource 复制，源码及无源码安装均保留用户配置与数据库。
+模型资源：随包 `resource/models/bge-small-zh-v1.5` 含约 24 MB 动态 INT8 ONNX 权重、tokenizer、固定版本哈希清单及 MIT 许可；源模型 [BAAI/bge-small-zh-v1.5](https://huggingface.co/BAAI/bge-small-zh-v1.5)，ONNX 转换 [Xenova/bge-small-zh-v1.5](https://huggingface.co/Xenova/bge-small-zh-v1.5/tree/75c43b069aac4d136ba6bc1122f995fedcfd2781)。Windows x64 随包 `resource/runtime/windows-x86_64/onnxruntime.dll` 为官方 ONNX Runtime 1.24.4 CPU 库，来自经 SHA256 校验的官方发行 wheel，仅提取原生库及许可/第三方声明，不携带 Python 运行链；运行库自身约 16 MB。Linux 构建使用 ort 校验下载并静态链接的 CPU 运行库；x86_64 安装版已通过离线检查，无外置 ORT 动态库依赖，系统仍需 libstdc++6。`.gitattributes` 禁止已校验模型 JSON/权重和 Windows 运行库换行转换，避免 Windows checkout 后 SHA 改变。两端打包前检查模型资源完整，Windows 同时检查运行库；所有资源随现有 resource 复制，源码及无源码安装均保留用户配置与数据库。
 
-Windows x64 增量验收：27 项相关 Rust 测试、fmt 和 Clippy 通过；Windows 安装/升级/无源码包夹具与 Linux 打包隐私夹具通过。安装版与 release、模型和 CPU DLL 哈希一致，已有配置逐文件哈希保留；实际 ZIP 核验模型、运行库、许可和空配置齐全。安装版 `--check-embedding` 在仅保留 System32 的 PATH 下成功，固定中文样例本机观测加载约 361 ms、样例处理约 29 ms；这是单次安装检查，不代表任意文本延迟或召回质量基准。Linux 实机推理及其他 Windows 架构尚未验收。
+Windows x64 增量验收：27 项相关 Rust 测试、fmt 和 Clippy 通过；Windows 安装/升级/无源码包夹具与 Linux 打包隐私夹具通过。安装版与 release、模型和 CPU DLL 哈希一致，已有配置逐文件哈希保留；实际 ZIP 核验模型、运行库、许可和空配置齐全。安装版 `--check-embedding` 在仅保留 System32 的 PATH 下成功，固定中文样例本机观测加载约 361 ms、样例处理约 29 ms；这是单次安装检查，不代表任意文本延迟或召回质量基准。Linux x86_64 实机推理已补充验收，见验证入口；其他 Windows 架构尚未验收。
 
 参考酒馆的 [Prompt Manager](https://docs.sillytavern.app/usage/prompts/prompt-manager/)、[世界书](https://docs.sillytavern.app/usage/core-concepts/worldinfo/) 与[摘要可修正设计](https://docs.sillytavern.app/extensions/summarize/)。本实现保留 Codex 管理完整历史，不假设能够照搬任意历史插入位置。
 
@@ -402,6 +403,18 @@ Windows 非阻塞字节管道使用 PeekNamedPipe 区分暂时无数据与断开
 
 `cargo test --locked ui::dialog::tests::` 验证预设台词在无 AI 输出时的原有循环、等待 AI 时不抢占、正常回复关闭后反复点击不回退，以及后续无输出失败轮次可恢复回退；使用临时资源和模拟 app-server，不访问真实模型/登录。
 
+### Linux 新功能增量验收（2026-11-09）
+
+从 4cb3c3f 快进到 d834807 后，在 Linux x86_64 上完成以下定向验证；不运行全量测试，不调用真实对话模型，不读取用户记忆或凭据。
+
+- 清理 Codex 已无调用的 Unix 测试包装函数，`cargo fmt --check`、all-targets Clippy 均通过。46 项定向 Rust 测试通过：backend::codex/character、roleplay、tools::embedding/vector_store/live2d、ui::role_card/new_character/character_memories/dialog/transparency 及 assets 的 Live2D 用例；默认忽略的参考帧专项未运行。
+- 依赖安装与发布包隐私夹具通过。源码和无源码安装均补齐 libdbus、Zenity 与 libstdc++6；`--skip-optional` 保留必需依赖检查。真实 rfd 文件选择在隔离 Xephyr、禁用可用会话总线时成功经 Zenity 回退选择 PNG；测试不依赖 GTK 开发包，不代表所有 Portal 后端已验证。
+- 安装版 `--check-embedding` 通过：固定中文相关/无关排序、512 维向量、完整 Unicode 长文本分块；单次本机加载约 177 ms、样例推理约 25 ms。`ldd` 确认没有外置 ONNX Runtime 动态库依赖；不作为通用性能保证。
+- 安装版 `--check-transparency` 的 36 个 GPU 像素校验通过。隔离 Xephyr 使用婚纱 Live2D 运行 native-smoke 的 click-through/clock；实体抓取点显式设为 `--pet-point 400 250`。穿透、实体/侧栏保留输入和打卡入口通过，检查真实 GL 截图。drag 模式另在 Xephyr + GNOME WM 中通过阈值、双轴位移、反向移动及尺寸保持；无 WM 的 X Server 不消费桌宠 EWMH 移动消息，不可据此判定拖动失败。
+- 执行 Linux release 安装并核对二进制及资源；保留原安装配置，安全关闭旧桌宠并启动新版，桌面快捷方式指向安装版。
+
+范围限制：原生 Wayland 局部穿透、多显示器混合 DPI、其他架构及 Portal 后端未在本次复测。
+
 ### Windows 适配验收（2026-11-08）
 
 本机 Windows x64/MSVC，依赖与 Rust 工具链使用清华镜像；测试使用临时配置和模拟服务，不调用真实模型或读取登录凭据。
@@ -448,7 +461,7 @@ node scripts/test-integrations.js
 python3 scripts/test-dependencies.py
 ```
 
-- native-smoke 模式为 `drag`、`drag-edges`、`click-through`、`position`、`clock`、`input`、`pin`、`idle`，`--production` 验证普通尺寸。需要 libX11/libXtst，优先 Xephyr + 窗口管理器隔离，同一 display 的指针测试必须串行；脚本移动并恢复鼠标。GIF 画布中心可能透明，拖动须从可见轮廓按下；验收包括阈值、精确位移、反向移动和尺寸保持，失败也须释放鼠标按钮。
+- native-smoke 模式为 `drag`、`drag-edges`、`click-through`、`position`、`clock`、`input`、`pin`、`idle`，`--production` 验证普通尺寸。需要 libX11/libXtst，优先 Xephyr + 窗口管理器隔离，同一 display 的指针测试必须串行；脚本移动并恢复鼠标。GIF/Live2D 画布或旧 GIF 抓取坐标可能透明；`--pet-point X Y` 可指定原生窗口像素中的实体抓取点（如开发窗口婚纱 Live2D 用 `400 250`），拖动和穿透用例共用此点；验收包括阈值、精确位移、反向移动和尺寸保持，失败也须释放鼠标按钮。
 - 侧栏模式跨启动验证使用独立 `XDG_DATA_HOME`，两次正常退出后检查 `lexington/app.ron` 中的固定模式。
 - settings-smoke 用无资源临时根目录显示粉色测试形象，不代表安装资源丢失；覆盖 1×/1.5× DPI。集成和依赖脚本使用夹具，不调用模型或安装真实依赖；Node 仅是 JS 客户端测试的开发依赖。
 

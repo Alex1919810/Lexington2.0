@@ -271,14 +271,6 @@ impl Client {
         crate::tools::proxy::inherit_system_proxy(&mut command);
         Ok(command)
     }
-    #[cfg(all(test, unix))]
-    fn launch(
-        command: Command,
-        instructions: Option<String>,
-        wake: impl Fn() + Send + 'static,
-    ) -> Result<Self, String> {
-        Self::launch_session(command, instructions, None, wake)
-    }
     fn launch_session(
         command: Command,
         instructions: Option<String>,

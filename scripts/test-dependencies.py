@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
 from pathlib import Path
 import tarfile
 import tempfile
@@ -90,4 +91,28 @@ with tempfile.TemporaryDirectory(prefix='lexington-dependency-tests-') as tempor
             pass
         else:
             raise AssertionError('untrusted download URL accepted')
-print('Missing/existing Codex, integrity, archive traversal and config preservation checks passed.')
+# A minimal desktop still needs a picker when no portal FileChooser backend exists.
+for build in (True, False):
+    for picker_present in (True, False):
+        calls = []
+
+        def which(command):
+            return None if command == 'zenity' and not picker_present else '/fixture/' + command
+
+        def run(command, **kwargs):
+            calls.append(command)
+            missing = command[0] == 'dpkg-query' and command[-1] in ('libdbus-1-3', 'libstdc++6')
+            return subprocess.CompletedProcess(command, 0, stdout=(
+                'not-installed' if missing else 'installed'
+            ))
+
+        with patch.object(installer.shutil, 'which', side_effect=which), \
+             patch.object(installer.subprocess, 'run', side_effect=run), \
+             patch.object(installer.os, 'geteuid', return_value=0):
+            installer.system_packages(False, build=build)
+        install = next(command for command in calls if 'install' in command)
+        assert 'libdbus-1-3' in install
+        assert 'libstdc++6' in install
+        assert ('zenity' in install) == (not picker_present)
+        assert 'build-essential' not in install
+print('Codex integrity/config preservation and source/runtime file-picker dependency checks passed.')

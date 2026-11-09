@@ -17,6 +17,7 @@
 - 向量存储保持通用命名空间接口，不读取角色卡、不调用 Embedding。sqlite-vec 静态注册一次；原文为本体、向量为可重建索引，编辑正文使索引失效，回填必须核对原文。查询先限定命名空间/模型空间/维度；未知版本或损坏库报错，禁止自动重置。
 - 通用 JSON records 与向量 documents 分表、共用命名空间数据库；版本 1 到 2 仅事务新增 records 表并保留原文/向量。向量删除不得连带删除 JSON records；JSON 格式损坏报错，不自动覆盖。角色事件策略由 roleplay 实现。
 - 本地 Embedding 封装只读取随包固定模型，禁止自动查 HF 缓存/下载或读取凭据。模型和 Windows CPU DLL 必须校验内置清单 SHA，相关资源禁用 Git 换行转换。动态 INT8 使用单条序列以稳定量化范围；token 分块使用原文 UTF-8 offset，关闭 tokenizer 截断后保留完整文本。显式选 CPU、限制线程并关闭 spinning/telemetry；不在 GUI 线程加载模型。
+- Linux x86_64 的 ONNX Runtime 静态链接，安装版不需要外置 ORT 动态库或 Windows DLL，但仍依赖系统 libstdc++。用安装版 --check-embedding 验证固定中文检索/完整分块，不能只以 cargo check/Clippy 通过认定推理可用。
 
 - 按改动选择 `cargo test --locked tools::gif::tests::`、`cargo test --locked tools::platform::tests::` 或具体用例；GIF/透明度变化补测对应 `ui::assets::tests::`，解码变化按模块文档运行 release 参考像素专项用例。
 - 平台窗口改动仅运行相关 native-smoke 模式，遵守 `scripts/AGENTS.md` 的隔离和串行要求。
