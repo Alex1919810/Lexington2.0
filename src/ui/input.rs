@@ -3,12 +3,18 @@ use super::style::{self, draw_bubble};
 use eframe::egui::{self, Color32, Rect, vec2};
 use eframe::egui::{Sense, Stroke};
 
+pub(super) enum MessageSource<'a> {
+    Main,
+    Development,
+    External(&'a crate::backend::handoff::Request),
+}
+
 impl Wife {
     pub(super) fn submit(&mut self, ctx: &egui::Context) {
         if self.input.trim().is_empty() || self.busy {
             return;
         }
-        self.send_message(ctx, self.input.trim().to_owned(), None);
+        self.send_message(ctx, self.input.trim().to_owned(), MessageSource::Main);
     }
     #[cfg(any(target_os = "linux", windows))]
     pub(super) fn poll_handoff(&mut self, ctx: &egui::Context) {
@@ -65,7 +71,7 @@ impl Wife {
                     return;
                 }
             }
-            self.send_message(ctx, request.prompt(), Some(&request));
+            self.send_message(ctx, request.prompt(), MessageSource::External(&request));
             if !self.error.is_empty() {
                 self.text = self.error.clone();
                 self.full_text = true;
@@ -76,7 +82,7 @@ impl Wife {
         &mut self,
         ctx: &egui::Context,
         text: String,
-        external: Option<&crate::backend::handoff::Request>,
+        source: MessageSource<'_>,
     ) {
         if self.busy {
             self.error = "当前任务仍在运行。".into();
@@ -134,6 +140,11 @@ impl Wife {
         if self.codex_restart_pending && !self.busy {
             self.start_codex(ctx);
         }
+        self.development_turn = matches!(source, MessageSource::Development);
+        let external = match source {
+            MessageSource::External(request) => Some(request),
+            _ => None,
+        };
         let remembered_input = self
             .codex
             .as_ref()
@@ -189,13 +200,13 @@ impl Wife {
         center: egui::Pos2,
         image_height: f32,
     ) {
-        if self.turn_ui_hidden {
+        if self.turn_ui_hidden || (self.busy && self.development_turn) {
             self.input_bounds = None;
             ctx.memory_mut(|memory| memory.surrender_focus("message-input".into()));
             return;
         }
         let width = self.config.dialog.width;
-        let error_height = if self.error.is_empty() || self.busy {
+        let error_height = if self.error.is_empty() || self.busy || self.development_turn {
             0.
         } else {
             ctx.fonts(|fonts| {

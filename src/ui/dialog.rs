@@ -12,6 +12,9 @@ impl Wife {
         self.dialog_clicks = 0;
     }
     pub(super) fn click_pet(&mut self) {
+        if self.busy && self.development_turn {
+            return;
+        }
         if self.turn_ui_hidden {
             self.turn_ui_hidden = false;
             self.text = self
@@ -60,6 +63,7 @@ impl Wife {
     pub(super) fn bubble(&mut self, ctx: &egui::Context, center: egui::Pos2) -> Option<Rect> {
         let waiting = self.text.is_empty()
             && self.busy
+            && !self.development_turn
             && !self.turn_ui_hidden
             && self.development.tests_ui.running.is_none();
         if self.text.is_empty() && !waiting {

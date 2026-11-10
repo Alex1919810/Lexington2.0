@@ -1138,6 +1138,16 @@ impl Client {
     pub(crate) fn mock(mode: &str) -> Self {
         Self::mock_with_instructions(mode, None)
     }
+    pub(crate) fn mock_events(events: Vec<Event>, secrets: Vec<String>) -> Self {
+        let mut client = Self::mock("normal");
+        let (sender, receiver) = mpsc::channel();
+        for event in events {
+            sender.send(event).unwrap();
+        }
+        client.events = receiver;
+        client.secrets = secrets;
+        client
+    }
     pub(crate) fn mock_with_instructions(mode: &str, instructions: Option<String>) -> Self {
         Self::mock_session(mode, instructions, None)
     }

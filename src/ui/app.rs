@@ -63,6 +63,7 @@ pub struct Wife {
     pub(super) codex: Option<Client>,
     pub(super) codex_status: String,
     pub(super) busy: bool,
+    pub(super) development_turn: bool,
     pub(super) codex_messages: Vec<(String, String)>,
     pub(super) codex_prompts: VecDeque<super::codex::PendingPrompt>,
     pub(super) capture: Option<PathBuf>,
@@ -198,6 +199,7 @@ impl Wife {
             codex: None,
             codex_status: "未启动".into(),
             busy: false,
+            development_turn: false,
             codex_messages: vec![],
             codex_prompts: VecDeque::new(),
             capture: std::env::args()
@@ -500,7 +502,9 @@ impl Wife {
         if ctx.input(|i| i.pointer.delta() != Vec2::ZERO) {
             self.last_activity = Instant::now();
         }
-        self.poll_codex();
+        if self.poll_codex() {
+            ctx.request_repaint();
+        }
         self.poll_character_creation(ctx);
         self.poll_character_memories(ctx);
         if self.last_config_check.elapsed() >= Duration::from_millis(500) {

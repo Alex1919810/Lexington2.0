@@ -1,5 +1,5 @@
 //! Native development viewport and UI session coordination.
-use super::app::Wife;
+use super::{app::Wife, input::MessageSource};
 use crate::development::{Task, Workspaces};
 use eframe::egui;
 use std::{collections::HashMap, path::PathBuf, sync::mpsc, time::Duration};
@@ -30,6 +30,7 @@ pub(super) struct DevelopmentUi {
     search: String,
     dirty: bool,
     last_saved: Option<std::time::Instant>,
+    save_worker: Option<std::thread::JoinHandle<Result<(), String>>>,
     picker: Option<mpsc::Receiver<Option<PathBuf>>>,
     pending_project: Option<PathBuf>,
 }
@@ -52,6 +53,10 @@ impl Wife {
     }
     pub(super) fn save_development(&mut self, force: bool) {
         self.development.dirty = true;
+        self.complete_development_save(force);
+        if self.development.save_worker.is_some() {
+            return;
+        }
         if !force
             && self
                 .development
@@ -63,13 +68,33 @@ impl Wife {
         if self.development.storage_ok
             && let Some(path) = &self.development.storage
         {
-            match self.development.book.save(path) {
-                Ok(()) => {
-                    self.development.dirty = false;
-                    self.development.last_saved = Some(std::time::Instant::now());
+            self.development.last_saved = Some(std::time::Instant::now());
+            if force {
+                match self.development.book.save(path) {
+                    Ok(()) => self.development.dirty = false,
+                    Err(error) => self.development.error = error,
                 }
-                Err(error) => self.development.error = error,
+            } else {
+                let path = path.clone();
+                let book = self.development.book.clone();
+                self.development.save_worker = Some(std::thread::spawn(move || book.save(&path)));
+                self.development.dirty = false;
             }
+        }
+    }
+    fn complete_development_save(&mut self, wait: bool) {
+        if self
+            .development
+            .save_worker
+            .as_ref()
+            .is_some_and(|worker| wait || worker.is_finished())
+            && let Some(worker) = self.development.save_worker.take()
+            && let Err(error) = worker
+                .join()
+                .unwrap_or_else(|_| Err("无法保存 development 记录。".into()))
+        {
+            self.development.error = error;
+            self.development.dirty = true;
         }
     }
     pub(super) fn switch_development_workspace(
@@ -145,6 +170,7 @@ impl Wife {
         }
     }
     pub(super) fn development_window(&mut self, ctx: &egui::Context) {
+        self.complete_development_save(false);
         self.poll_development_test_queue(ctx);
         if let Some(picker) = &self.development.picker {
             match picker.try_recv() {
@@ -181,7 +207,7 @@ impl Wife {
                 .last_saved
                 .is_none_or(|saved| saved.elapsed().as_secs() >= 2)
         {
-            self.save_development(true);
+            self.save_development(false);
         }
         if !self.development.open {
             self.development.viewport_open = false;
@@ -374,13 +400,13 @@ impl Wife {
                             let current = self.development.book.task().map(|task|task.title.as_str()).unwrap_or("新任务");
                             ui.add(egui::Label::new(egui::RichText::new(format!("发送到：{current}")).size(12.).color(egui::Color32::from_gray(100))).truncate()).on_hover_text(current);
                             let editor_id = egui::Id::new("development-input");
-                            let send_shortcut = ui.memory(|memory|memory.has_focus(editor_id)) && ui.input_mut(|input|input.consume_key(egui::Modifiers::CTRL,egui::Key::Enter));
+                            let send_shortcut = ui.memory(|memory|memory.has_focus(editor_id)) && ui.input_mut(|input|input.consume_key(egui::Modifiers::NONE,egui::Key::Enter));
                             let mut editor_focused = false;
                             egui::ScrollArea::vertical().id_salt("development-editor-scroll").max_height(64.).show(ui, |ui| {
-                                editor_focused = ui.add(egui::TextEdit::multiline(&mut self.development.input).id(editor_id).frame(false).desired_rows(3).desired_width(f32::INFINITY).hint_text("描述需求，或补充任务信息…")).has_focus();
+                                editor_focused = ui.add(egui::TextEdit::multiline(&mut self.development.input).id(editor_id).return_key(egui::KeyboardShortcut::new(egui::Modifiers::CTRL,egui::Key::Enter)).frame(false).desired_rows(3).desired_width(f32::INFINITY).hint_text("描述需求，或补充任务信息…")).has_focus();
                             });
                             ui.horizontal(|ui| {
-                                ui.weak("Ctrl+Enter 发送");
+                                ui.weak("Enter 发送 · Ctrl+Enter 换行");
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     let enabled = !self.busy && self.development.picker.is_none() && self.development.pending_project.is_none() && !self.development.input.trim().is_empty();
                                     let button = egui::Button::new(egui::RichText::new("发送").color(egui::Color32::WHITE)).fill(accent).min_size(egui::vec2(76.,30.));
@@ -458,13 +484,13 @@ impl Wife {
             self.send_message(
                 ctx,
                 "请根据当前项目诊断定位原因，先核对对应的代码和未保存版本，给出修复建议。".into(),
-                None,
+                MessageSource::Development,
             );
             self.development.page = 0;
         }
         if submit {
             let text = self.development.input.trim().to_owned();
-            self.send_message(ctx, text, None);
+            self.send_message(ctx, text, MessageSource::Development);
             if self.busy {
                 self.development.input.clear();
             }
@@ -555,7 +581,17 @@ fn task_details(ui: &mut egui::Ui, task: &Task, project: &std::path::Path) {
                 } else {
                     item.command.as_str()
                 };
-                egui::CollapsingHeader::new(format!("{} · {}", status_text(&item.status), title))
+                // CollapsingHeader always extends its text, even inside a vertical
+                // ScrollArea. Bound the galley before handing it the command title.
+                let title = format!("{} · {}", status_text(&item.status), title);
+                let header = egui::WidgetText::from(title.as_str()).into_galley(
+                    ui,
+                    Some(egui::TextWrapMode::Truncate),
+                    (ui.available_width() - ui.spacing().indent - ui.spacing().button_padding.x)
+                        .max(0.),
+                    egui::TextStyle::Button,
+                );
+                egui::CollapsingHeader::new(header)
                     .id_salt(&item.id)
                     .default_open(item.status == "inProgress")
                     .show(ui, |ui| {
@@ -572,7 +608,7 @@ fn task_details(ui: &mut egui::Ui, task: &Task, project: &std::path::Path) {
                             ui.weak("输出过长，仅保留最后 256 KiB。");
                         }
                         if !item.output.is_empty() {
-                            rich_text(ui, &format!("```\n{}\n```", item.output));
+                            code_text(ui, &item.output, false);
                         }
                         for change in &item.changes {
                             ui.strong(format!("{} · {}", change.kind, change.path));
@@ -586,7 +622,9 @@ fn task_details(ui: &mut egui::Ui, task: &Task, project: &std::path::Path) {
                             }
                             diff_text(ui, &change.diff);
                         }
-                    });
+                    })
+                    .header_response
+                    .on_hover_text(title);
             }
             if !turn.diff.is_empty() {
                 ui.collapsing("本轮累计变更", |ui| diff_text(ui, &turn.diff));
@@ -608,25 +646,53 @@ fn task_details(ui: &mut egui::Ui, task: &Task, project: &std::path::Path) {
     }
 }
 fn diff_text(ui: &mut egui::Ui, diff: &str) {
-    if ui.small_button("复制 diff").clicked() {
-        ui.ctx().copy_text(diff.into());
-    }
-    egui::ScrollArea::horizontal().show(ui, |ui| {
-        for line in diff.lines() {
-            let color = if line.starts_with('+') {
-                egui::Color32::from_rgb(25, 125, 65)
-            } else if line.starts_with('-') {
-                egui::Color32::from_rgb(190, 55, 55)
-            } else {
-                ui.visuals().text_color()
-            };
-            ui.add(
-                egui::Label::new(egui::RichText::new(line).monospace().color(color))
-                    .selectable(true)
-                    .wrap_mode(egui::TextWrapMode::Extend),
-            );
-        }
-    });
+    code_text(ui, diff, true);
+}
+fn code_text(ui: &mut egui::Ui, text: &str, diff: bool) {
+    egui::Frame::NONE
+        .fill(egui::Color32::from_rgb(242, 244, 248))
+        .corner_radius(6)
+        .inner_margin(10)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.weak(if diff { "diff" } else { "代码 / 输出" });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button(if diff { "复制 diff" } else { "复制代码" })
+                        .clicked()
+                    {
+                        ui.ctx().copy_text(text.into());
+                    }
+                });
+            });
+            // A changing 256 KiB galley is expensive even when most of it is
+            // clipped. Layout only visible fixed-height rows, including blank ones.
+            let lines: Vec<_> = text.lines().collect();
+            let row_height = ui.text_style_height(&egui::TextStyle::Monospace);
+            egui::ScrollArea::both()
+                .max_height(240.)
+                .min_scrolled_height(0.)
+                .auto_shrink([false, true])
+                .show_rows(ui, row_height, lines.len(), |ui, rows| {
+                    for row in rows {
+                        let line = lines[row];
+                        let color = if diff && line.starts_with('+') {
+                            egui::Color32::from_rgb(25, 125, 65)
+                        } else if diff && line.starts_with('-') {
+                            egui::Color32::from_rgb(190, 55, 55)
+                        } else {
+                            ui.visuals().text_color()
+                        };
+                        ui.add_sized(
+                            [0., row_height],
+                            egui::Label::new(egui::RichText::new(line).monospace().color(color))
+                                .selectable(true)
+                                .wrap_mode(egui::TextWrapMode::Extend),
+                        );
+                    }
+                });
+        });
 }
 fn rich_text(ui: &mut egui::Ui, text: &str) {
     let mut code = false;
@@ -634,31 +700,7 @@ fn rich_text(ui: &mut egui::Ui, text: &str) {
     for line in text.lines() {
         if line.trim_start().starts_with("```") {
             if code {
-                egui::Frame::NONE
-                    .fill(egui::Color32::from_rgb(242, 244, 248))
-                    .corner_radius(6)
-                    .inner_margin(10)
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            ui.weak("代码");
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if ui.small_button("复制代码").clicked() {
-                                        ui.ctx().copy_text(block.clone());
-                                    }
-                                },
-                            );
-                        });
-                        egui::ScrollArea::horizontal().show(ui, |ui| {
-                            ui.add(
-                                egui::Label::new(egui::RichText::new(block.trim_end()).monospace())
-                                    .selectable(true)
-                                    .wrap_mode(egui::TextWrapMode::Extend),
-                            );
-                        });
-                    });
+                code_text(ui, block.trim_end(), false);
                 block.clear();
             }
             code = !code;
@@ -670,11 +712,7 @@ fn rich_text(ui: &mut egui::Ui, text: &str) {
         }
     }
     if !block.is_empty() {
-        ui.add(
-            egui::Label::new(egui::RichText::new(block).monospace())
-                .selectable(true)
-                .wrap(),
-        );
+        code_text(ui, block.trim_end(), false);
     }
 }
 
@@ -685,6 +723,171 @@ mod tests {
         fs,
         time::{Duration, Instant},
     };
+
+    #[test]
+    fn development_event_bursts_yield_frames_and_sanitize_before_final_save() {
+        use crate::backend::codex::{Client, Event};
+        for development_turn in [true, false] {
+            let root = tempfile::tempdir().unwrap();
+            let ctx = egui::Context::default();
+            let mut app = Wife::from_root(&ctx, false, root.path().into());
+            let path = app.development.book.add(root.path()).unwrap();
+            app.development.book.active = Some(path);
+            app.development
+                .book
+                .begin("burst".into(), "Lexington", false);
+            app.development.storage = Some(root.path().join("history.json"));
+            app.development.storage_ok = true;
+            app.busy = true;
+            app.development_turn = development_turn;
+            // Exercise a secret assembled across event-batch boundaries, in both
+            // tool output and replies. No provider configuration is read.
+            let mut events = Vec::new();
+            for index in 0..512 {
+                let text = match index {
+                    31 => "fixture-",
+                    32 => "secret",
+                    _ => "x",
+                };
+                events.push(Event::Activity(crate::development::Activity::Output {
+                    id: "tool".into(),
+                    delta: text.into(),
+                }));
+                events.push(Event::Text {
+                    id: "reply".into(),
+                    text: text.into(),
+                    replace: false,
+                });
+            }
+            events.push(Event::Finished { interrupted: false });
+            app.codex = Some(Client::mock_events(events, vec!["fixture-secret".into()]));
+            assert!(
+                app.poll_codex(),
+                "a queued burst must request another frame"
+            );
+            assert!(app.busy, "one poll drained the entire event burst");
+            assert!(app.development.book.turn_mut().unwrap().messages[0].1.len() <= 64);
+            let mut frames = 1;
+            while app.busy && frames < 1100 {
+                app.poll_codex();
+                frames += 1;
+            }
+            assert!(!app.busy && frames > 1);
+            let expected = format!("{}[hidden]{}", "x".repeat(31), "x".repeat(479));
+            let saved = Workspaces::read(app.development.storage.as_ref().unwrap()).unwrap();
+            let turn = &saved.task().unwrap().turns[0];
+            assert_eq!(turn.status, "completed");
+            assert_eq!(turn.messages[0].1, expected);
+            assert_eq!(turn.items[0].output, expected);
+            if development_turn {
+                assert!(app.text.is_empty());
+            } else {
+                assert_eq!(app.text, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn development_background_save_preserves_newer_edits_and_final_record() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = Wife::from_root(&ctx, false, root.path().into());
+        let path = app.development.book.add(root.path()).unwrap();
+        app.development.book.active = Some(path);
+        app.development
+            .book
+            .begin("save".into(), "Lexington", false);
+        let path = root.path().join("history.json");
+        app.development.storage = Some(path.clone());
+        app.development.storage_ok = true;
+        // Hold a real snapshot write in flight until the UI has consumed another
+        // change. A frame must never join this worker while it is still running.
+        let (release, wait) = mpsc::channel();
+        let book = app.development.book.clone();
+        let destination = path.clone();
+        app.development.save_worker = Some(std::thread::spawn(move || {
+            wait.recv_timeout(Duration::from_secs(5)).unwrap();
+            book.save(&destination)
+        }));
+        app.development
+            .book
+            .turn_mut()
+            .unwrap()
+            .text("reply".into(), "latest".into(), false);
+        app.save_development(false);
+        assert!(app.development.dirty && app.development.save_worker.is_some());
+        release.send(()).unwrap();
+        app.finish_development("completed", "");
+        assert!(app.development.save_worker.is_none());
+        assert!(!app.development.dirty);
+        let saved = Workspaces::read(&path).unwrap();
+        assert_eq!(saved.task().unwrap().turns[0].messages[0].1, "latest");
+        assert_eq!(saved.task().unwrap().turns[0].status, "completed");
+
+        // Background failures keep the dirty state for retry and protect the
+        // damaged store just as synchronous writes do.
+        fs::write(&path, "broken").unwrap();
+        app.development.last_saved = None;
+        app.save_development(false);
+        app.complete_development_save(true);
+        assert!(app.development.dirty && app.development.error.contains("损坏"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "broken");
+    }
+
+    #[test]
+    fn large_execution_output_only_draws_visible_rows() {
+        let ctx = egui::Context::default();
+        ctx.memory_mut(|memory| memory.set_everything_is_visible(true));
+        let log = "command output with some details\n".repeat(6000);
+        let task = Task {
+            turns: vec![crate::development::Turn {
+                items: vec![crate::development::ExecutionItem {
+                    id: "large-output".into(),
+                    kind: "commandExecution".into(),
+                    status: "inProgress".into(),
+                    output: log.clone(),
+                    ..Default::default()
+                }],
+                diff: log,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        for frame in 0..3 {
+            let started = Instant::now();
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800., 600.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let scroll = egui::ScrollArea::vertical().show(ui, |ui| {
+                            task_details(ui, &task, std::path::Path::new("/fixture"));
+                        });
+                        assert!(
+                            scroll.content_size.y < 2000.,
+                            "large logs expanded the full task: {}",
+                            scroll.content_size.y
+                        );
+                    });
+                },
+            );
+            eprintln!(
+                "large output frame {frame}: {:?}, {} shapes",
+                started.elapsed(),
+                output.shapes.len()
+            );
+            assert!(
+                output.shapes.len() < 500,
+                "offscreen log rows were rendered: {}",
+                output.shapes.len()
+            );
+        }
+    }
 
     fn fixture(root: &std::path::Path, mode: &str) -> String {
         use std::os::unix::fs::PermissionsExt;
@@ -701,7 +904,7 @@ mod tests {
         path.display().to_string()
     }
     fn send(app: &mut Wife, ctx: &egui::Context, text: &str) {
-        app.send_message(ctx, text.into(), None);
+        app.send_message(ctx, text.into(), MessageSource::Main);
         assert!(app.busy, "{}", app.error);
         let deadline = Instant::now() + Duration::from_secs(5);
         while app.busy && Instant::now() < deadline {
@@ -710,6 +913,405 @@ mod tests {
         }
         assert!(!app.busy, "task timed out");
         assert!(app.error.is_empty(), "{}", app.error);
+    }
+
+    #[test]
+    fn task_output_stays_within_scroll_width() {
+        use crate::development::{ExecutionItem, FileChange, Turn};
+
+        let long = "very_long_output_or_path_".repeat(80);
+        for (name, turn) in [
+            (
+                "prose",
+                Turn {
+                    user: long.clone(),
+                    messages: vec![("reply".into(), long.clone())],
+                    ..Default::default()
+                },
+            ),
+            (
+                "code",
+                Turn {
+                    messages: vec![("reply".into(), format!("```rust\n{long}\n```\nafter code"))],
+                    ..Default::default()
+                },
+            ),
+            (
+                "streaming code",
+                Turn {
+                    messages: vec![("reply".into(), format!("```rust\n{long}"))],
+                    ..Default::default()
+                },
+            ),
+            (
+                "command",
+                Turn {
+                    items: vec![ExecutionItem {
+                        id: "command".into(),
+                        kind: "commandExecution".into(),
+                        command: long.clone(),
+                        cwd: long.clone(),
+                        output: long.clone(),
+                        status: "inProgress".into(),
+                        changes: vec![FileChange {
+                            path: long.clone(),
+                            kind: "update".into(),
+                            diff: format!("+{long}"),
+                        }],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ),
+            (
+                "diff",
+                Turn {
+                    diff: format!("+{long}\n-{long}"),
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let ctx = egui::Context::default();
+            ctx.memory_mut(|memory| memory.set_everything_is_visible(true));
+            let task = Task {
+                character: "Lexington".into(),
+                turns: vec![turn],
+                ..Default::default()
+            };
+            for _ in 0..3 {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(400., 300.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            let bounds = ui.available_rect_before_wrap();
+                            let scroll = egui::ScrollArea::vertical()
+                                .max_height(180.)
+                                .min_scrolled_height(0.)
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    task_details(ui, &task, std::path::Path::new("/fixture"))
+                                });
+                            assert!(
+                                scroll.inner_rect.right() <= bounds.right() + 1.,
+                                "{name}: {:?} exceeds {bounds:?}",
+                                scroll.inner_rect
+                            );
+                            assert!(
+                                scroll.content_size.x <= bounds.width() + 1.,
+                                "{name}: content width {} exceeds {}",
+                                scroll.content_size.x,
+                                bounds.width()
+                            );
+                        });
+                    },
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn development_long_output_keeps_editor_inside_small_viewport() {
+        use crate::development::{ExecutionItem, Turn};
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = Wife::from_root(&ctx, false, root.path().into());
+        let path = app.development.book.add(root.path()).unwrap();
+        app.development.book.active = Some(path);
+        app.development
+            .book
+            .begin("Long output".into(), "Lexington", false);
+        let long = "long command output ".repeat(100);
+        *app.development.book.turn_mut().unwrap() = Turn {
+            user: long.clone(),
+            messages: vec![("reply".into(), format!("{long}\n```\n{long}\n```"))],
+            items: vec![ExecutionItem {
+                id: "command".into(),
+                kind: "commandExecution".into(),
+                command: long.clone(),
+                output: long,
+                status: "inProgress".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        app.development.open = true;
+        app.development.input = "draft".into();
+        ctx.set_embed_viewports(false);
+        egui::Context::set_immediate_viewport_renderer(|ctx, mut viewport| {
+            let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(740., 500.));
+            let mut input = egui::RawInput {
+                viewport_id: viewport.ids.this,
+                screen_rect: Some(bounds),
+                ..Default::default()
+            };
+            input
+                .viewports
+                .insert(viewport.ids.this, Default::default());
+            let output = ctx.run(input, &mut viewport.viewport_ui_cb);
+            let mut send_visible = false;
+            let mut draft_visible = false;
+            for shape in output.shapes {
+                if let egui::Shape::Text(text) = shape.shape
+                    && ["发送", "draft"].contains(&text.galley.job.text.as_str())
+                {
+                    let rect = text.galley.rect.translate(text.pos.to_vec2());
+                    assert!(
+                        bounds.contains_rect(rect),
+                        "editor content outside viewport: {rect:?}"
+                    );
+                    assert!(
+                        shape.clip_rect.contains_rect(rect),
+                        "editor content clipped: {rect:?}"
+                    );
+                    send_visible |= text.galley.job.text == "发送";
+                    draft_visible |= text.galley.job.text == "draft";
+                }
+            }
+            assert!(send_visible && draft_visible);
+        });
+        for _ in 0..3 {
+            let _ = ctx.run(Default::default(), |ctx| app.development_window(ctx));
+        }
+    }
+
+    #[test]
+    fn development_enter_sends_and_ctrl_enter_inserts_newline() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = Wife::from_root(&ctx, false, root.path().into());
+        let path = app.development.book.add(root.path()).unwrap();
+        app.development.book.active = Some(path);
+        app.codex = Some(crate::backend::codex::Client::mock("normal"));
+        app.development.open = true;
+        for _ in 0..3 {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200., 900.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| app.development_window(ctx),
+            );
+        }
+        let editor_id = egui::Id::new("development-input");
+        for (focused, events, expected, sent) in [
+            (
+                true,
+                vec![egui::Event::Text("第一行".into())],
+                "第一行",
+                false,
+            ),
+            (
+                true,
+                vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::CTRL,
+                }],
+                "第一行\n",
+                false,
+            ),
+            (
+                true,
+                vec![egui::Event::Text("第二行".into())],
+                "第一行\n第二行",
+                false,
+            ),
+            (
+                false,
+                vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                "第一行\n第二行",
+                false,
+            ),
+            (
+                true,
+                vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                "",
+                true,
+            ),
+        ] {
+            ctx.memory_mut(|memory| {
+                if focused {
+                    memory.request_focus(editor_id);
+                } else {
+                    memory.surrender_focus(editor_id);
+                }
+            });
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200., 900.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.development_window(ctx),
+            );
+            assert_eq!(app.development.input, expected);
+            assert_eq!(app.busy, sent);
+            assert_eq!(app.development_turn, sent);
+        }
+        assert_eq!(
+            app.development.book.turn_mut().unwrap().user,
+            "第一行\n第二行"
+        );
+    }
+
+    #[test]
+    fn development_input_keeps_streams_and_waiting_out_of_main_window() {
+        for development_mode in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let ctx = egui::Context::default();
+            let mut app = Wife::from_root(&ctx, false, root.path().into());
+            app.config.codex.development_mode = development_mode;
+            let path = app.development.book.add(root.path()).unwrap();
+            app.development.book.active = Some(path);
+            app.development.storage = Some(root.path().join("history.json"));
+            app.development.storage_ok = true;
+            app.codex = Some(crate::backend::codex::Client::mock("normal"));
+            app.input = "主窗口草稿".into();
+            app.development.open = true;
+            app.development.input = format!("visibility:{}", root.path().display());
+            for _ in 0..3 {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1200., 900.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| app.development_window(ctx),
+                );
+            }
+            ctx.memory_mut(|memory| memory.request_focus("development-input".into()));
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200., 900.),
+                    )),
+                    modifiers: egui::Modifiers::NONE,
+                    events: vec![egui::Event::Key {
+                        key: egui::Key::Enter,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                },
+                |ctx| app.development_window(ctx),
+            );
+            assert!(app.busy && app.development_turn);
+            assert!(app.development.input.is_empty());
+            // Closing the development viewport must not redirect the active turn.
+            app.development.open = false;
+            let main_frame = |app: &mut Wife| {
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800., 600.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        assert!(app.bubble(ctx, ctx.screen_rect().center()).is_none());
+                        app.input_ui(ctx, ctx.screen_rect(), ctx.screen_rect().center(), 450.);
+                    },
+                );
+                assert!(app.text.is_empty() && app.codex_messages.is_empty());
+                assert!(output.shapes.iter().all(|shape| {
+                    !matches!(&shape.shape, egui::Shape::Text(text)
+                        if text.galley.job.text.contains("Lexington正在思考"))
+                }));
+            };
+            main_frame(&mut app);
+            assert!(app.input_bounds.is_none());
+            for (phase, expected) in [
+                ("first", "首段"),
+                ("next", "首段后续"),
+                ("finish", "首段后续最终"),
+            ] {
+                fs::write(root.path().join(phase), "").unwrap();
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while Instant::now() < deadline {
+                    app.poll_codex();
+                    let turn = app.development.book.turn_mut().unwrap();
+                    if turn.messages.iter().any(|(_, text)| text == expected)
+                        && (phase != "finish" || !app.busy)
+                    {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                assert!(
+                    app.development
+                        .book
+                        .turn_mut()
+                        .unwrap()
+                        .messages
+                        .iter()
+                        .any(|(_, text)| text == expected)
+                );
+                if app.busy {
+                    app.click_pet();
+                    app.click_pet();
+                    assert!(!app.turn_ui_hidden);
+                }
+                main_frame(&mut app);
+            }
+            assert!(!app.busy);
+            assert_eq!(app.input, "主窗口草稿");
+            let history = Workspaces::read(app.development.storage.as_ref().unwrap()).unwrap();
+            let turn = &history.task().unwrap().turns[0];
+            assert_eq!(turn.status, "completed");
+            assert_eq!(turn.messages.len(), 1);
+            assert_eq!(turn.messages[0].1, "首段后续最终");
+            app.send_message(&ctx, "fail".into(), MessageSource::Development);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while app.busy && Instant::now() < deadline {
+                app.poll_codex();
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(!app.busy && app.error.contains("模拟请求失败"));
+            main_frame(&mut app);
+            assert_eq!(app.input, "主窗口草稿");
+            app.submit(&ctx);
+            assert!(!app.development_turn);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while app.busy && Instant::now() < deadline {
+                app.poll_codex();
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(!app.busy && app.error.is_empty());
+            assert!(app.text.contains("主窗口草稿"));
+            assert!(app.input.is_empty());
+        }
     }
 
     #[test]
@@ -798,7 +1400,7 @@ mod tests {
         app.config.codex.executable = fixture(root.path(), "development-on");
         app.switch_development_workspace(Some(root.path().into()), &ctx)
             .unwrap();
-        app.send_message(&ctx, "interrupt".into(), None);
+        app.send_message(&ctx, "interrupt".into(), MessageSource::Main);
         let deadline = Instant::now() + Duration::from_secs(5);
         while app.text.is_empty() && Instant::now() < deadline {
             app.poll_codex();
@@ -849,7 +1451,7 @@ mod tests {
         app.development_window(&ctx);
         assert_eq!(app.development.book.projects.len(), 1);
         assert_eq!(app.development.input, "项目 A 的草稿");
-        app.send_message(&ctx, "interrupt".into(), None);
+        app.send_message(&ctx, "interrupt".into(), MessageSource::Main);
         let deadline = Instant::now() + Duration::from_secs(5);
         while app.text.is_empty() && Instant::now() < deadline {
             app.poll_codex();
@@ -1011,7 +1613,7 @@ mod tests {
             app.development.tests_ui.action = Some(TestAction::Run(definition));
             app.apply_development_test(&ctx);
             app.poll_development_test_queue(&ctx);
-            assert!(app.busy);
+            assert!(app.busy, "{} / {}", app.development.error, app.error);
             if arg == "wait" {
                 std::thread::sleep(Duration::from_millis(40));
                 app.codex.as_ref().unwrap().interrupt();

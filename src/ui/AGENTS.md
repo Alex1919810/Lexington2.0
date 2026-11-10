@@ -43,7 +43,8 @@
 - development 窗口位于 ui/development.rs，工作区/任务/提示领域位于平级 development；原生 viewport 不套用主窗穿透或透明 pass。切换项目和继续旧任务只在空闲执行；草稿按项目保留，查看历史不改变实际发送目标，发送目标须显示。运行中先保存记录，完成/失败/中断后立即保存；跨项目与跨模式不得复用线程。
 
 - development 的左右任务区须使用有界高度的容器；horizontal 内的竖向 separator 会占满父区剩余高度，不能让它把底部输入框挤出 viewport。原生验收需实际点击编辑框并发送，不能仅检查窗口已映射。
-- development 的 Ctrl+Enter 必须在 TextEdit 消费事件前处理，并使用固定编辑器 ID 校验焦点；绘制编辑器后再查询 key_pressed 可能已被 TextEdit 吞掉。
+- development 执行记录的 CollapsingHeader 会强制 Extend，长命令须先按可用宽度减去缩进/按钮边距生成 Truncate galley，再作为标题；完整命令通过悬停展示。仅设置外层纵向 ScrollArea 不能防止横向撑宽。
+- development 输入采用 Enter 发送、Ctrl+Enter 换行；发送键必须在 TextEdit 消费事件前处理，并使用固定编辑器 ID 校验焦点，换行交给 TextEdit::return_key 保留光标/选区语义；绘制编辑器后再查询 key_pressed 可能已被 TextEdit 吞掉。
 
 - development 项目选择器在工作线程调用，UI 回调后启动并通过通道接收；取消不切换，运行中收到的目录须保留至空闲再切换。任务窗口使用 Normal 层级，防止 AlwaysOnTop 遮挡原生文件选择器；选择结果即使窗口已关闭也继续消费。
 
@@ -57,3 +58,7 @@
 - Codex 生成期间输出气泡不因超时或外部点击关闭；无正文时只绘制等待提示，不把提示写入聊天内容。两次立绘短按收起输出及输入/思考区，再单击恢复累计输出，Live2D 部位动作保持。turn_ui_hidden 只控制显示，不能中断任务或丢弃 codex_messages/项目记录；流式片段不得重置点击计数或重开面板，完成保留显式收起，新发送/新会话重置。
 
 - 设置和人物记忆共用 style::panel_style/card；样式只写当前 Ui，避免覆盖主桌宠和其他 viewport 的主题。人物记忆的标题/筛选固定，只有列表滚动；低于 400px 的可用高度使用紧凑工具栏并隐藏副标题，最小 400×300 下仍须露出首条卡片。调整设置几何时同步 settings-smoke 的命中坐标。
+
+- 回复显示归属必须按发送来源判断，不能用 developmentMode 或开发窗口是否打开代替。开发窗口输入、诊断分析、测试失败分析显式使用 MessageSource::Development；只更新项目回复，不更新主窗 text/codex_messages 或思考提示，不清主窗草稿。development_turn 在完成/失败/关闭开发窗口后仍保留，下一次发送或会话重建才更新，避免尾部事件重新弹到主窗。
+
+- Codex UI 消费须保留单帧事件数/时间预算并请求下一帧，合并流式片段后按批遮蔽；终态/审批等非流事件前须先处理组装后的凭据，不能只依赖逐片段遮蔽。development 运行中快照后台串行写入，后续更改保留 dirty，强制保存先等待旧快照，避免其覆盖最终状态。长代码、命令输出和 diff 使用限高 `show_rows`，仅裁剪绘制不能避免全文布局开销。

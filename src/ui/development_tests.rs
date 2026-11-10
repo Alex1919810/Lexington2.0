@@ -260,7 +260,7 @@ impl Wife {
                         output[0],
                         output[1]
                     );
-                    self.send_message(ctx, text, None);
+                    self.send_message(ctx, text, super::input::MessageSource::Development);
                     self.development.page = 0;
                 }
             }

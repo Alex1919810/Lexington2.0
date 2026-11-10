@@ -2,7 +2,7 @@ use super::app::Wife;
 use crate::backend::codex::{Client, Event, Prompt};
 use eframe::egui;
 use serde_json::json;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub(super) struct PendingPrompt {
     request: Prompt,
@@ -60,6 +60,7 @@ impl Wife {
         self.turn_ui_hidden = false;
         self.dialog_clicks = 0;
         self.busy = false;
+        self.development_turn = false;
         self.external_turn = false;
         self.codex_prompts.clear();
         self.error.clear();
@@ -88,9 +89,30 @@ impl Wife {
             }
         }
     }
-    pub(super) fn poll_codex(&mut self) {
+    // Return whether another frame is needed to continue draining queued events.
+    pub(super) fn poll_codex(&mut self) -> bool {
+        let started = Instant::now();
+        let mut processed = 0;
         let mut changed = false;
-        while let Some(event) = self.codex.as_ref().and_then(Client::poll) {
+        let mut development_changed = false;
+        let mut main_dirty = false;
+        while processed < 64 && started.elapsed() < Duration::from_millis(4) {
+            let Some(event) = self.codex.as_ref().and_then(Client::poll) else {
+                break;
+            };
+            processed += 1;
+            // Preserve stream order, and flush assembled secrets before any event
+            // that can persist records or queue character memory (including finish).
+            if !matches!(&event, Event::Activity(_) | Event::Text { .. }) {
+                if development_changed {
+                    self.sanitize_development_stream();
+                    development_changed = false;
+                }
+                if main_dirty {
+                    self.sanitize_main_stream();
+                    main_dirty = false;
+                }
+            }
             match event {
                 Event::TestResult(result) => self.receive_test_result(*result),
                 Event::Context(plan) => {
@@ -112,10 +134,7 @@ impl Wife {
                         && let Some(turn) = self.development.book.turn_mut()
                     {
                         turn.activity(activity);
-                        if let Some(client) = &self.codex {
-                            turn.sanitize(|text| client.sanitize(text));
-                        }
-                        self.save_development(false);
+                        development_changed = true;
                     }
                 }
                 Event::Ready => {
@@ -128,10 +147,10 @@ impl Wife {
                         && let Some(turn) = self.development.book.turn_mut()
                     {
                         turn.text(id.clone(), text.clone(), replace);
-                        if let Some(client) = &self.codex {
-                            turn.sanitize(|text| client.sanitize(text));
-                        }
-                        self.save_development(false);
+                        development_changed = true;
+                    }
+                    if self.development_turn {
+                        continue;
                     }
                     let index = self
                         .codex_messages
@@ -146,10 +165,7 @@ impl Wife {
                     } else {
                         self.codex_messages[index].1.push_str(&text);
                     }
-                    if let Some(client) = &self.codex {
-                        self.codex_messages[index].1 =
-                            client.sanitize(&self.codex_messages[index].1);
-                    }
+                    main_dirty = true;
                     changed = true;
                 }
                 Event::Finished { interrupted } => {
@@ -161,7 +177,7 @@ impl Wife {
                         },
                         "",
                     );
-                    if !interrupted && !self.development.session_mode {
+                    if !interrupted && !self.development.session_mode && !self.development_turn {
                         self.queue_character_memory();
                     }
                     self.busy = false;
@@ -172,7 +188,7 @@ impl Wife {
                         "已连接"
                     }
                     .into();
-                    if !interrupted && !self.external_turn {
+                    if !interrupted && !self.external_turn && !self.development_turn {
                         self.input.clear();
                     }
                     self.external_turn = false;
@@ -202,6 +218,12 @@ impl Wife {
                 }
             }
         }
+        if development_changed {
+            self.sanitize_development_stream();
+        }
+        if main_dirty {
+            self.sanitize_main_stream();
+        }
         if changed {
             if !self.turn_ui_hidden {
                 self.text = self
@@ -213,6 +235,22 @@ impl Wife {
             }
             self.full_text = true; // Codex already streams text; do not apply a second typewriter delay.
             self.last_activity = Instant::now();
+        }
+        processed == 64 || started.elapsed() >= Duration::from_millis(4)
+    }
+    fn sanitize_development_stream(&mut self) {
+        if let Some(turn) = self.development.book.turn_mut()
+            && let Some(client) = &self.codex
+        {
+            turn.sanitize(|text| client.sanitize(text));
+        }
+        self.save_development(false);
+    }
+    fn sanitize_main_stream(&mut self) {
+        if let Some(client) = &self.codex {
+            for (_, text) in &mut self.codex_messages {
+                *text = client.sanitize(text);
+            }
         }
     }
     pub(super) fn codex_prompt_ui(&mut self, ctx: &egui::Context) {
