@@ -310,10 +310,20 @@ impl Wife {
                         if self.busy && ui.button("停止任务").clicked() && let Some(client) = &self.codex {
                             client.interrupt();
                         }
-                        if self.busy {
-                            ui.add(egui::Spinner::new().size(16.).color(accent)).on_hover_text("任务执行中");
+                        let pending = self.codex_prompts.len();
+                        if let Some(prompt) = self.codex_prompts.front_mut() {
+                            let question = !prompt.request.questions.is_empty();
+                            let label = if question {"回答问题"} else {"处理审批"};
+                            if ui.button(egui::RichText::new(format!("{label}（{pending}）")).strong().color(egui::Color32::from_rgb(139, 80, 14))).on_hover_text(&prompt.request.title).clicked() {
+                                prompt.reopen();
+                            }
+                            ui.label(egui::RichText::new(if question {"等待你回答"} else {"等待你确认"}).strong().color(egui::Color32::from_rgb(176, 102, 16)));
+                        } else {
+                            if self.busy {
+                                ui.add(egui::Spinner::new().size(16.).color(accent)).on_hover_text("任务执行中");
+                            }
+                            ui.add(egui::Label::new(egui::RichText::new(&self.codex_status).size(12.).color(egui::Color32::from_gray(100))).truncate());
                         }
-                        ui.add(egui::Label::new(egui::RichText::new(&self.codex_status).size(12.).color(egui::Color32::from_gray(100))).truncate());
                     });
                 });
                 egui::Frame::NONE.fill(egui::Color32::WHITE).stroke(egui::Stroke::new(1_f32, border)).corner_radius(9).inner_margin(12).show(ui, |ui| {
@@ -475,8 +485,8 @@ impl Wife {
                             ui.horizontal(|ui| {
                                 ui.weak("Enter 发送 · Ctrl+Enter 换行");
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    let enabled = (!self.busy || (self.development_turn && self.development.tests_ui.running.is_none())) && self.development.supplement.is_none() && self.development.picker.is_none() && self.development.pending_project.is_none() && !self.development.input.trim().is_empty();
-                                    let label = if self.development.supplement.is_some() {"确认中…"} else if self.busy && self.development_turn {"补充任务"} else {"发送"};
+                                    let enabled = self.codex_prompts.is_empty() && (!self.busy || (self.development_turn && self.development.tests_ui.running.is_none())) && self.development.supplement.is_none() && self.development.picker.is_none() && self.development.pending_project.is_none() && !self.development.input.trim().is_empty();
+                                    let label = if !self.codex_prompts.is_empty() {"等待处理"} else if self.development.supplement.is_some() {"确认中…"} else if self.busy && self.development_turn {"补充任务"} else {"发送"};
                                     let button = egui::Button::new(egui::RichText::new(label).color(egui::Color32::WHITE)).fill(accent).min_size(egui::vec2(76.,30.));
                                     if ui.add_enabled(enabled,button).clicked() || (enabled && editor_focused && send_shortcut) {submit = true;}
                                 });
@@ -1290,6 +1300,186 @@ mod tests {
         }
         assert!(!app.busy, "task timed out");
         assert!(app.error.is_empty(), "{}", app.error);
+    }
+
+    #[test]
+    fn development_questions_show_waiting_and_resume_after_reply_or_stop() {
+        use std::sync::{Arc, Mutex};
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let development_id = egui::ViewportId::from_hash_of("lexington-development");
+        let prompt_id = egui::ViewportId::from_hash_of("lexington-codex-prompt");
+        let events = Arc::new(Mutex::new((prompt_id, Vec::<egui::Event>::new())));
+        let shapes = Arc::new(Mutex::new(HashMap::new()));
+        let renderer_events = events.clone();
+        let renderer_shapes = shapes.clone();
+        egui::Context::set_immediate_viewport_renderer(move |ctx, mut viewport| {
+            let bounds = egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                if viewport.ids.this == development_id {
+                    egui::vec2(740., 500.)
+                } else {
+                    egui::vec2(400., 300.)
+                },
+            );
+            let mut events = renderer_events.lock().unwrap();
+            let mut input = egui::RawInput {
+                viewport_id: viewport.ids.this,
+                screen_rect: Some(bounds),
+                events: if events.0 == viewport.ids.this {
+                    std::mem::take(&mut events.1)
+                } else {
+                    Vec::new()
+                },
+                ..Default::default()
+            };
+            drop(events);
+            input
+                .viewports
+                .insert(viewport.ids.this, Default::default());
+            let output = ctx.run(input, &mut viewport.viewport_ui_cb);
+            renderer_shapes
+                .lock()
+                .unwrap()
+                .insert(viewport.ids.this, output.shapes);
+        });
+        let mut app = Wife::from_root(&ctx, false, root.path().into());
+        app.config.codex.executable = fixture(root.path(), "development-off");
+        app.development.storage = Some(root.path().join("history.json"));
+        app.development.storage_ok = true;
+        app.switch_development_workspace(Some(root.path().into()), &ctx)
+            .unwrap();
+        app.development.open = true;
+        let frame = |app: &mut Wife| {
+            shapes.lock().unwrap().clear();
+            let _ = ctx.run(Default::default(), |ctx| {
+                app.development_window(ctx);
+                app.codex_prompt_ui(ctx);
+            });
+        };
+        let point = |viewport, label: &str| {
+            shapes
+                .lock()
+                .unwrap()
+                .get(&viewport)
+                .unwrap()
+                .iter()
+                .find_map(|shape| {
+                    if let egui::Shape::Text(text) = &shape.shape
+                        && text.galley.job.text == label
+                    {
+                        let rect = text.galley.rect.translate(text.pos.to_vec2());
+                        assert!(
+                            shape.clip_rect.contains_rect(rect),
+                            "{label} is clipped: {rect:?}"
+                        );
+                        return Some(rect.center());
+                    }
+                    None
+                })
+                .unwrap_or_else(|| panic!("missing {label} in {viewport:?}"))
+        };
+        let click = |app: &mut Wife, viewport, label| {
+            for _ in 0..3 {
+                frame(app);
+            }
+            let pos = point(viewport, label);
+            for pressed in [true, false] {
+                *events.lock().unwrap() = (
+                    viewport,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+                frame(app);
+            }
+        };
+        for (request, waiting, button, response) in [
+            ("question", "等待你回答", "回答问题（1）", "提交回答"),
+            ("approve", "等待你确认", "处理审批（1）", "拒绝"),
+            ("question", "等待你回答", "回答问题（1）", "停止任务"),
+        ] {
+            app.send_message(&ctx, request.into(), MessageSource::Development);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while app.codex_prompts.is_empty() && app.busy && Instant::now() < deadline {
+                app.poll_codex();
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(app.codex_prompts.len(), 1, "{}", app.error);
+            app.development.input = "继续保留的草稿".into();
+            for _ in 0..3 {
+                frame(&mut app);
+            }
+            point(development_id, waiting);
+            point(development_id, "等待处理");
+            if request == "question" {
+                click(&mut app, prompt_id, "提交回答");
+                assert_eq!(app.codex_prompts.len(), 1, "empty answer was submitted");
+                click(&mut app, prompt_id, "A");
+            }
+            click(&mut app, prompt_id, "稍后处理");
+            assert!(!app.codex_prompts.front().unwrap().open);
+            frame(&mut app);
+            assert!(!shapes.lock().unwrap().contains_key(&prompt_id));
+            point(development_id, waiting);
+            // Enter in the task editor must not steer the answer into the model turn.
+            click(&mut app, development_id, "继续保留的草稿");
+            *events.lock().unwrap() = (
+                development_id,
+                vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            frame(&mut app);
+            assert!(app.development.supplement.is_none());
+            assert_eq!(app.development.input, "继续保留的草稿");
+            click(&mut app, development_id, button);
+            assert!(app.codex_prompts.front().unwrap().open);
+            // Closing the development window must not hide the independent prompt.
+            app.development.open = false;
+            frame(&mut app);
+            point(prompt_id, response);
+            click(&mut app, prompt_id, response);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while app.busy && Instant::now() < deadline {
+                app.poll_codex();
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(
+                !app.busy,
+                "reply or interrupt did not finish: {}",
+                app.error
+            );
+            assert!(app.error.is_empty(), "{}", app.error);
+            assert!(app.codex_prompts.is_empty());
+            assert_eq!(app.development.input, "继续保留的草稿");
+            assert!(app.text.is_empty() && app.codex_messages.is_empty());
+            let saved = Workspaces::read(app.development.storage.as_ref().unwrap()).unwrap();
+            let turn = saved.task().unwrap().turns.last().unwrap();
+            assert_eq!(
+                turn.status,
+                if response == "停止任务" {
+                    "interrupted"
+                } else {
+                    "completed"
+                }
+            );
+            if response == "提交回答" {
+                assert_eq!(turn.messages[0].1, "收到选择 A");
+            }
+            app.development.open = true;
+        }
     }
 
     #[test]

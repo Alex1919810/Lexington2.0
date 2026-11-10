@@ -5,8 +5,18 @@ use serde_json::json;
 use std::time::{Duration, Instant};
 
 pub(super) struct PendingPrompt {
-    request: Prompt,
+    pub request: Prompt,
+    pub open: bool,
     answers: Vec<String>,
+    started: Option<Instant>,
+    raised: bool,
+}
+impl PendingPrompt {
+    pub(super) fn reopen(&mut self) {
+        self.open = true;
+        self.started = None;
+        self.raised = false;
+    }
 }
 impl Wife {
     pub(super) fn start_codex(&mut self, ctx: &egui::Context) {
@@ -229,8 +239,13 @@ impl Wife {
                 Event::Notice(message) => self.codex_status = message,
                 Event::Prompt(request) => {
                     let answers = vec![String::new(); request.questions.len()];
-                    self.codex_prompts
-                        .push_back(PendingPrompt { request, answers });
+                    self.codex_prompts.push_back(PendingPrompt {
+                        request,
+                        answers,
+                        open: true,
+                        started: None,
+                        raised: false,
+                    });
                 }
             }
         }
@@ -274,34 +289,132 @@ impl Wife {
         let Some(prompt) = self.codex_prompts.front_mut() else {
             return;
         };
+        if !prompt.open {
+            if !self.development_turn
+                && let Some(window) = egui::Window::new("Lexington 正在等待你")
+                    .id("codex-prompt-reopen".into())
+                    .collapsible(false)
+                    .resizable(false)
+                    .show(ctx, |ui| {
+                        if ui.button("查看待处理请求").clicked() {
+                            prompt.reopen();
+                        }
+                    })
+            {
+                self.input_regions.push(window.response.rect);
+            }
+            if !prompt.open {
+                return;
+            }
+        }
+        let first_open = prompt.started.is_none();
+        prompt.started.get_or_insert_with(Instant::now);
+        let id = egui::ViewportId::from_hash_of("lexington-codex-prompt");
+        let size = egui::vec2(520., 460.);
+        let mut builder = egui::ViewportBuilder::default()
+            .with_title(&prompt.request.title)
+            .with_inner_size(size)
+            .with_min_inner_size([400., 300.])
+            .with_transparent(false)
+            .with_resizable(true)
+            .with_always_on_top()
+            .with_window_type(egui::X11WindowType::Dock);
+        if first_open {
+            let mut monitor = egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                ctx.input(|input| input.viewport().monitor_size)
+                    .unwrap_or(egui::vec2(1920., 1080.)),
+            );
+            #[cfg(any(target_os = "linux", windows))]
+            if let Some(window) = &self.drag_window {
+                let monitors = window.monitors(ctx.pixels_per_point());
+                if let Some(found) = monitors
+                    .iter()
+                    .find(|rect| {
+                        rect.contains(
+                            self.window_position.unwrap_or_default()
+                                + ctx.screen_rect().size() / 2.,
+                        )
+                    })
+                    .or_else(|| monitors.first())
+                {
+                    monitor = *found;
+                }
+            }
+            builder = builder.with_position(monitor.center() - size / 2.);
+        }
         let mut answer = None;
-        if let Some(window) = egui::Window::new(&prompt.request.title)
-            .id("codex-prompt".into())
-            .collapsible(false)
-            .resizable(true)
-            .default_width(340.)
-            .show(ctx, |ui| {
+        let mut stop = false;
+        let mut open = true;
+        let mut defer = false;
+        let development_turn = self.development_turn;
+        ctx.show_viewport_immediate(id, builder, |popup, class| {
+            if class != egui::ViewportClass::Embedded {
+                if popup.input(|input| input.viewport().close_requested()) {
+                    open = false;
+                }
+                if !prompt.raised
+                    && prompt
+                        .started
+                        .is_some_and(|started| started.elapsed() >= Duration::from_millis(800))
+                {
+                    popup.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+                        egui::WindowLevel::AlwaysOnTop,
+                    ));
+                    popup.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    prompt.raised = true;
+                }
+            }
+            let mut contents = |ui: &mut egui::Ui| {
+                super::style::panel_style(ui);
+                ui.heading(&prompt.request.title);
+                ui.label(if development_turn {
+                    "开发任务正在等待你处理，回答后继续执行。"
+                } else {
+                    "当前任务正在等待你处理，回答后继续执行。"
+                });
+                ui.separator();
                 egui::ScrollArea::vertical()
-                    .max_height(300.)
+                    .id_salt(("codex-prompt-body", prompt.request.id.to_string()))
+                    .max_height((ui.available_height() - 52.).max(0.))
+                    .min_scrolled_height(0.)
+                    .auto_shrink([false, false])
                     .show(ui, |ui| {
                         if !prompt.request.details.is_empty() {
-                            ui.label(&prompt.request.details);
+                            ui.add(egui::Label::new(&prompt.request.details).wrap());
                         }
-                        for (question, answer) in
-                            prompt.request.questions.iter().zip(&mut prompt.answers)
+                        for (index, (question, answer)) in prompt
+                            .request
+                            .questions
+                            .iter()
+                            .zip(&mut prompt.answers)
+                            .enumerate()
                         {
-                            ui.separator();
-                            ui.label(&question.text);
-                            for option in &question.options {
-                                ui.selectable_value(answer, option.clone(), option);
-                            }
-                            ui.add(
-                                egui::TextEdit::singleline(answer)
-                                    .password(question.secret)
-                                    .hint_text("输入回答…"),
-                            );
+                            ui.push_id(index, |ui| {
+                                ui.separator();
+                                ui.add(egui::Label::new(&question.text).wrap());
+                                for option in &question.options {
+                                    if ui
+                                        .add(
+                                            egui::Button::new(option)
+                                                .selected(*answer == *option)
+                                                .wrap(),
+                                        )
+                                        .clicked()
+                                    {
+                                        *answer = option.clone();
+                                    }
+                                }
+                                ui.add(
+                                    egui::TextEdit::singleline(answer)
+                                        .password(question.secret)
+                                        .desired_width(f32::INFINITY)
+                                        .hint_text("输入回答…"),
+                                );
+                            });
                         }
                     });
+                ui.separator();
                 ui.horizontal(|ui| {
                     if prompt.request.questions.is_empty() {
                         if ui.button("允许本次").clicked() {
@@ -327,16 +440,45 @@ impl Wife {
                                 .collect();
                             answer = Some(json!({"answers":answers}));
                         }
-                        if ui.button("停止任务").clicked()
-                            && let Some(codex) = &self.codex
-                        {
-                            codex.interrupt();
+                        if ui.button("停止任务").clicked() {
+                            stop = true;
                         }
                     }
+                    if ui.button("稍后处理").clicked() {
+                        defer = true;
+                    }
                 });
-            })
-        {
-            self.input_regions.push(window.response.rect);
+            };
+            if class == egui::ViewportClass::Embedded {
+                if let Some(window) = egui::Window::new(&prompt.request.title)
+                    .id("codex-prompt".into())
+                    .open(&mut open)
+                    .order(egui::Order::Foreground)
+                    .collapsible(false)
+                    .default_size([488., 420.])
+                    .min_size([368., 260.])
+                    .show(popup, &mut contents)
+                {
+                    self.input_regions.push(window.response.rect);
+                }
+            } else {
+                egui::CentralPanel::default()
+                    .frame(
+                        egui::Frame::new()
+                            .fill(super::style::PANEL_BG)
+                            .inner_margin(16),
+                    )
+                    .show(popup, &mut contents);
+            }
+        });
+        prompt.open = open && !defer;
+        if !prompt.open || answer.is_some() {
+            prompt.started = None;
+            prompt.raised = false;
+            ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Close);
+        }
+        if stop && let Some(codex) = &self.codex {
+            codex.interrupt();
         }
         if let Some(answer) = answer
             && let Some(prompt) = self.codex_prompts.pop_front()
