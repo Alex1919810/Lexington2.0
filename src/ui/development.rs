@@ -651,10 +651,6 @@ fn task_details(ui: &mut egui::Ui, task: &Task, project: &std::path::Path) {
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     rich_text(ui, &turn.user);
-                    for text in &turn.supplements {
-                        ui.strong("运行中补充");
-                        rich_text(ui, text);
-                    }
                 });
             if let Some(manifest) = &turn.manifest {
                 ui.collapsing("本轮发送清单", |ui| {
@@ -806,6 +802,25 @@ fn task_details(ui: &mut egui::Ui, task: &Task, project: &std::path::Path) {
                 ui.scope(|ui| {
                     ui.visuals_mut().override_text_color = Some(egui::Color32::DARK_RED);
                     output_text(ui, &turn.error, false, false);
+                });
+            }
+            // Confirmed inputs belong at the live end of the task, where the
+            // bottom-following scroll area can reveal them after a long reply.
+            for (supplement_index, text) in turn.supplements.iter().enumerate() {
+                ui.push_id(("supplement", supplement_index), |ui| {
+                    ui.label(
+                        egui::RichText::new("你 · 运行中补充")
+                            .strong()
+                            .color(egui::Color32::from_rgb(57, 97, 185)),
+                    );
+                    egui::Frame::NONE
+                        .fill(egui::Color32::from_rgb(242, 246, 253))
+                        .corner_radius(7)
+                        .inner_margin(10)
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            rich_text(ui, text);
+                        });
                 });
             }
             ui.separator();
@@ -1795,6 +1810,91 @@ mod tests {
         for _ in 0..3 {
             let _ = ctx.run(Default::default(), |ctx| app.development_window(ctx));
         }
+    }
+
+    #[test]
+    fn confirmed_supplements_are_visible_at_the_live_output_end_and_after_reload() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        ctx.style_mut(|style| style.animation_time = 0.);
+        let mut app = Wife::from_root(&ctx, false, root.path().into());
+        let path = app.development.book.add(root.path()).unwrap();
+        app.development.book.active = Some(path.clone());
+        app.development
+            .book
+            .begin("Original input".into(), "Lexington", false);
+        app.development.book.turn_mut().unwrap().text(
+            "reply".into(),
+            "Long streamed reply\n".repeat(80),
+            true,
+        );
+        app.development.book.turn_mut().unwrap().flush_events();
+        app.development.storage = Some(root.path().join("history.json"));
+        app.development.storage_ok = true;
+        app.development.open = true;
+        app.development_turn = true;
+        app.busy = true;
+        let frame = |app: &mut Wife| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200., 900.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| app.development_window(ctx),
+            )
+        };
+        for _ in 0..3 {
+            let _ = frame(&mut app);
+        }
+        for draft in ["First supplement", "Second supplement\n中文补充🙂"] {
+            app.development.input = draft.into();
+            app.development.supplement = Some(PendingSupplement {
+                draft: draft.into(),
+                project: path.clone(),
+                task: app.development.book.task().unwrap().id,
+                turn: 0,
+            });
+            app.codex = Some(crate::backend::codex::Client::mock_events(
+                vec![crate::backend::codex::Event::Steered(Ok(()))],
+                vec![],
+            ));
+            app.poll_codex();
+            assert!(app.development.input.is_empty());
+            for _ in 0..3 {
+                let _ = frame(&mut app);
+            }
+            let output = frame(&mut app);
+            assert!(output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text)
+                    if text.galley.job.text == draft
+                        && shape.clip_rect.contains_rect(text.galley.rect.translate(text.pos.to_vec2())))
+            }), "confirmed supplement is outside the live output viewport: {draft}");
+        }
+        app.finish_development("completed", "");
+        app.busy = false;
+        app.development.book = Workspaces::read(app.development.storage.as_ref().unwrap()).unwrap();
+        let turn = &app.development.book.task().unwrap().turns[0];
+        assert_eq!(turn.user, "Original input");
+        assert_eq!(turn.messages[0].1, "Long streamed reply\n".repeat(80));
+        assert_eq!(
+            turn.supplements,
+            ["First supplement", "Second supplement\n中文补充🙂"]
+        );
+        turn.verify_replay().unwrap();
+        app.development.detail_task = None;
+        for _ in 0..3 {
+            let _ = frame(&mut app);
+        }
+        let output = frame(&mut app);
+        assert!(output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text)
+                if text.galley.job.text == "Second supplement\n中文补充🙂"
+                    && shape.clip_rect.contains_rect(text.galley.rect.translate(text.pos.to_vec2())))
+        }), "reloaded supplement is outside the task output viewport");
+        assert!(app.text.is_empty() && app.codex_messages.is_empty());
     }
 
     #[test]

@@ -58,6 +58,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })?;
         return Ok(());
     }
+    // Capture the path before an installer may atomically replace this binary.
+    let executable = std::env::current_exe()?;
+    let restart_requested = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let restart_signal = restart_requested.clone();
     let dev = std::env::args().any(|arg| arg == "--dev");
     #[cfg(any(target_os = "linux", windows))]
     let Some(endpoint) = handoff::Endpoint::bind(dev)? else {
@@ -116,10 +120,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Box::new(move |cc| {
             Ok(Box::new(ui::Wife::new(
                 cc,
+                restart_signal,
                 #[cfg(any(target_os = "linux", windows))]
                 endpoint,
             )))
         }),
     )?;
+    // run_native has saved/dropped Wife, including its Inbox instance lock and
+    // Codex processes. Starting sooner would race the previous instance.
+    if restart_requested.load(std::sync::atomic::Ordering::Relaxed) {
+        std::process::Command::new(executable)
+            .args(args.iter().skip(1))
+            .spawn()
+            .map_err(|error| format!("重启 Lexington 失败：{error}"))?;
+    }
     Ok(())
 }

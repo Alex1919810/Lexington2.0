@@ -348,6 +348,7 @@ Windows x64 增量验收：27 项相关 Rust 测试、fmt 和 Clippy 通过；Wi
 - 默认不注入任何 Lexington 开发指令。设置 → 连接中的 development 模式仅保存 codex.developmentMode；开启才附加 `[Lexington development]` 指令，不替换角色人格、不扩大权限。开启时不使用按角色的向量历史，也不自动提炼开发对话为人物事件；普通聊天路径保持。
 - development 窗口为独立可缩放不透明原生 viewport（1040×740，最小 740×500），不受宠物窗口尺寸、透明 pass 或 XShape 限制；嵌入后端回退 Window。顶部为项目工具栏，左侧任务列表，右侧详情与固定输入卡片；统一 14px 正文、留白、浅色分组、中文执行状态与独立代码块。右键入口显示“开发”，内部模块及窗口名保留 development。包含项目名称/路径/分支、文件浏览器选择项目、折叠的手动路径输入、搜索/点击切换/新建/删除任务、多行编辑及 Enter 发送 / Ctrl+Enter 换行、可选中文本/代码复制、命令输出/退出码/耗时、计划与红绿 diff、文件的 VS Code 跳转。项目草稿在进程内隔离，用户关闭窗口不终止任务；任务区显式限制高度并取消默认最小滚动高度（min_scrolled_height(0)），输入框限高滚动，Enter 只在编辑框聚焦时发送，并在 TextEdit 消费按键前处理；编辑器通过 return_key 将 Ctrl+Enter 作为换行快捷键，保留光标和选区语义。输入卡片同步展示两种快捷键；运行中仍可编辑，开发窗口来源的模型任务可通过 Enter 或“补充任务”立即追加至当前轮次，独立测试或主窗任务运行时只保留开发草稿。补充确认期间禁用重复发送但允许继续编辑，成功 ACK 后仅清除未再修改的原草稿，失败/断连/重启保留草稿。外部请求在历史中展示选区/来源/路径，不展示协议 JSON；分支检查最多每 5 秒一次。
 - 运行中补充复用 backend `Client::steer` / `turn/steer`，携带当前 threadId 与 expectedTurnId，不中断、不创建新轮次或修改审批/沙箱。后端同一时刻只确认一条补充，尚未就绪/已结束/编号不匹配/服务器拒绝均返回独立 Steered 结果；30 秒确认超时不结束原任务，也不自动重试。成功 ACK 允许晚于完成通知到达，UI 按发送时项目、任务 ID 和轮次索引回填，已切换的项目草稿分别处理，避免写入后来任务；仅确认成功的文本经凭据遮蔽后写入 Turn.supplements 并立即保存。该默认空数组兼容旧 V1/V2 历史，保持原始 Turn.user 与轮次数不变。
+- 已确认的补充按发送顺序在该轮输出末尾以独立“你 · 运行中补充”卡片显示，使用按补充索引隔离的控件 ID；不能放回本轮开头的原始输入卡片，否则长输出下底部跟随无法显示新输入。沿用底部跟随与手动上翻暂停规则，历史重载采用相同布局。
 - 打开任务、点击当前任务、切换项目/历史任务，以及重开开发窗口或从其他页返回任务页时，详情区一次性自动定位到输出末尾。UI 用项目路径和任务 ID 跟踪当前已显示目标，关闭/离开任务页时清除；实际内容布局后调用 scroll_to_cursor(BOTTOM)，该次禁用滚动动画，避免用无限偏移破坏布局。滚动区域 ID 同时包含项目路径和任务 ID；普通重绘不强制定位；详情 ScrollArea 使用 stick_to_bottom(true)，停在底部时随新增/增长输出跟随末尾，手动滚到中间后保持阅读位置，回到底部恢复跟随。运行中或不兼容的历史浏览仍不改变发送目标。
 - 用户输入、补充、回复正文、错误及代码/命令输出/diff 使用 `output_text` 只读 TextEdit（`&str` TextBuffer）支持拖选、Ctrl+C 与右键“复制”；仅复制选区，按 Unicode 字符索引切片，空选区禁用复制，不回退整段。右键按下/释放时恢复原控件选区，避免 egui 0.31 将任意按钮按下当作新光标；菜单点击后仍使用保存的选区。正文按连续文本段展示以支持跨行选择；代码/diff 保留限高 `show_rows`，只为当前可见行段建立一个只读编辑器，按起始行隔离 ID，避免滚动后沿用其他行的字符范围；diff 颜色及行距由 layouter 保持。移除额外的“复制回复”“复制全部输出”按钮，原代码/diff 整段复制按钮保持。
 - 回复显示按发送来源区分，独立于 developmentMode：开发窗口输入、诊断分析和测试失败分析均使用 MessageSource::Development；回复只写项目任务，不写主窗 text/codex_messages，也不排队人物记忆提炼。development_turn 从发送尝试保留至下一次发送或会话重建，关闭开发窗口、完成、失败或中断不改变归属；开发任务运行时主窗不显示输出等待气泡或输入思考区，点击立绘不会恢复开发输出。成功完成不清空主窗草稿，开发任务错误只在开发窗口显示；普通主窗输入及外部请求保持主窗回复行为。
@@ -363,6 +364,7 @@ Windows x64 增量验收：27 项相关 Rust 测试、fmt 和 Clippy 通过；Wi
 - Linux 隔离 Xephyr + GNOME WM 验收使用临时目录、确定的动画 GIF 和模拟协议，在 740×500 开发窗口通过真实点击、键盘输入及 Ctrl+Enter 发送任务；持续 3000 批命令输出/回复片段及 6000 行 diff 时采样动画画面仍持续变化，最终回复与最后 256 KiB 命令输出正确落盘。测试只操作测试 display，不访问真实模型、凭据或用户历史；采样画面变化间隔不等同 GPU 帧率，也不代表其他硬件或平台的性能保证。
 - 选区右键复制在隔离 Xephyr + GNOME WM 的真实 development viewport 中验收：鼠标拖选回复中间的 `SELECTED`，右键点击“复制”，通过原生 X11 CLIPBOARD/UTF8_STRING 请求读回恰为 `SELECTED`，未包含前后文本；使用临时历史、独立运行目录及不可用的 Codex 路径，不访问真实模型/用户记录或主桌面的剪贴板。
 - 运行中补充增量验证：后端 `steer_targets_active_turn_and_failures_preserve_the_session` 检查轮次前置条件、原文多行协议、错误后继续、完成先于 ACK 与后续正常轮次；UI `running_task_accepts_supplements_and_preserves_new_drafts_and_failures` 通过编辑器事件覆盖生成中编辑/换行/发送、确认中继续编辑、拒绝/断连保留、完成后的确认落盘与主窗隔离；`supplement_ack_uses_origin_task_and_redacts_saved_text` 检查跨项目确认归属及凭据遮蔽。`output_context_menu_copies_only_the_dragged_unicode_selection` 通过实际 egui 拖选、右键及菜单点击验证正文/代码/diff 的中文、emoji、多行与反向选区，检查仅复制子串、菜单打开不改剪贴板、空选区禁用和只读行为；大输出布局与最小窗口回归继续检查虚拟化和边界。开发历史夹具验证补充默认值、恢复、保存及遮蔽。
+- `confirmed_supplements_are_visible_at_the_live_output_end_and_after_reload` 使用临时项目和模拟 ACK，验证长回复底部连续两次补充（含中文、emoji、多行）的实际绘制范围、输入清空、历史重载和事件回放，保留原输入/回复且不写主窗。
 - 原生末尾定位在隔离 Xephyr + GNOME WM 中验收：临时任务含 120 条回复及末尾标记，实际打开 development 并点击历史任务，首屏直接显示第 112～119 条及 `LATEST-OUTPUT-END`；截图核对固定编辑卡片仍可见。使用临时项目/记录和不可用的 Codex 路径，不访问真实模型或用户数据。
 - `opening_tasks_scrolls_to_latest_output_and_preserves_manual_reading` 用长任务和真实 egui 滚轮/点击事件检查首次打开、切换再返回、点击当前任务、关闭重开、切页返回及跨项目相同任务 ID 的末尾定位；同时验证底部随新增输出跟随、手动上翻后新输出不抢位置、回到底部恢复跟随，以及运行中查看历史不改变发送目标。
 - `clicking_tasks_switches_send_target_and_resumes_only_compatible_idle_sessions` 用真实 egui 点击和模拟协议检查任务单击切换、恢复线程与后续发送归属、发送目标落盘、重复点击保持会话及草稿、运行中只浏览及结束后重选切换，并覆盖角色、开发模式、项目记忆 revision/stamp 不兼容保护。
@@ -398,6 +400,7 @@ Linux 原生验收：隔离 Xephyr + GNOME WM、临时版本 3 历史与不可�
 ## 启动与依赖方向
 
 - `main.rs`：先处理 `--check-transparency` 隐藏 GL 上下文的透明输出验收，再处理 `--check-embedding` 固定文本离线验收和 `--ask-files` / `--ask-json` / `--native-messaging` 无 GUI 入口，再取得 Linux/Windows 普通/开发模式独立实例锁并创建 eframe 原生窗口、选择 X11/Wayland/Win32 后端、加载窗口图标并构造 `ui::Wife`。普通尺寸 500×500，`--dev` 为 800×600。Glow 关闭各 surface 的垂直同步：immediate 子 viewport 在主 UI 线程同步交换缓冲，逐窗等待 vblank 会串行阻塞桌宠，失焦时还可能受后台 surface 节流影响；主窗由 UI 定时请求刷新。Linux X11/XWayland 使用 Dock 桌面浮层类型，不设置 strut、不占用工作区；避免 GNOME 将透明窗体整块限制在屏幕内，使立绘中心可到屏幕边缘。
+- GUI 的右键“重启”通过共享原子标记请求正常关闭；`main.rs` 在 `run_native` 返回、窗口状态和任务中断记录保存完成、Codex/Inbox 及实例锁释放后，以启动时捕获的可执行文件路径和原参数创建新进程，继承工作目录与环境。提前捕获路径避免 Linux 安装原子替换后的 `(deleted)` 路径；普通“关闭”不重启，启动失败向 stderr 报错。
 - `ui` 可调用 `backend`、`roleplay`、`development` 和 `tools`；`backend` 可消费 `roleplay` 的提示和世界书结果，不依赖 `ui`、egui 或 GPU 纹理；`roleplay` 可调用 `tools` 的通用存储，不依赖 `backend`、UI 或 egui；`tools` 不依赖应用 UI 或业务模块。
 - `development` 不依赖 backend/UI/roleplay/egui；backend 仅消费开发指令和执行事件类型，不负责工作区界面。
 - `tools/platform.rs` 是平台与窗口框架的适配边界，可依赖 eframe/egui/winit；路径和解码工具不依赖这些框架。
@@ -410,7 +413,7 @@ Windows 同样启用 UI 的 Inbox、原生位置保存/恢复、显示器检测�
 | 文件 | 职责与主要接口 | 依赖及约束 |
 |---|---|---|
 | `ui/mod.rs` | 声明 UI 子模块（含天气和备忘录），对入口导出 `Wife` | 具体组件保持在 UI 模块内部 |
-| `ui/app.rs` | 定义 Wife 与 eframe::App，编排资源、主窗、Codex、提醒及独立设置/人物记忆/备忘录/development viewport；加载 development 工作区，退出时保存任务中断状态 | 测试 from_root 不启动 CLI/监测或访问用户记录；普通/--dev 的位置和任务文件分别隔离；development_turn 标识本轮显示归属，与开发指令模式分开。主窗无论焦点在哪都以 60Hz 定时请求重绘；egui 0.31 会从 request_repaint_after 扣除 predicted_dt，须补回预测时长，避免关闭 vsync 后 16ms 请求退化为零等待忙循环。Codex 批次用完预算时请求下一帧，保留动画刷新机会。热加载失败保留有效配置；developmentMode 改变等待当前任务结束再新建会话。主窗 input_regions 只包含实际可见控件，独立 viewport 不加入 XShape；主窗最终执行透明颜色转换。生成期间既不按超时清除输出，也不响应气泡外点击关闭；turn_ui_hidden 记录用户对本轮的显式收起，见下方交互说明。窗口位置、角色创建和资源加载约束沿用相关小节 |
+| `ui/app.rs` | 定义 Wife 与 eframe::App，编排资源、主窗、Codex、提醒及独立设置/人物记忆/备忘录/development viewport；加载 development 工作区，退出时保存任务中断状态；右键菜单提供“重启/关闭”，重启只设置标记并正常关闭，不在 UI 中拉起进程 | 测试 from_root 不启动 CLI/监测或访问用户记录；普通/--dev 的位置和任务文件分别隔离；development_turn 标识本轮显示归属，与开发指令模式分开。主窗无论焦点在哪都以 60Hz 定时请求重绘；egui 0.31 会从 request_repaint_after 扣除 predicted_dt，须补回预测时长，避免关闭 vsync 后 16ms 请求退化为零等待忙循环。Codex 批次用完预算时请求下一帧，保留动画刷新机会。热加载失败保留有效配置；developmentMode 改变等待当前任务结束再新建会话。主窗 input_regions 只包含实际可见控件，独立 viewport 不加入 XShape；主窗最终执行透明颜色转换。生成期间既不按超时清除输出，也不响应气泡外点击关闭；turn_ui_hidden 记录用户对本轮的显式收起，见下方交互说明。窗口位置、角色创建和资源加载约束沿用相关小节 |
 | `ui/pet.rs` | `pet_ui` 绘制立绘/默认宠物和阴影，设置宠物、对话、输入层的共同变换，处理圆形命中、点击与拖动；默认宠物几何和变换测试也在此 | 使用 `Picture` 和平台拖动；将当前帧的归一化 alpha 覆盖区域映射到立绘实际位置并应用共同变换，默认宠物按身体轮廓生成输入区域，阴影不拦截点击；返回尺寸、变换和点击结果供 app 编排。容器 450×450，侧栏不参与共同缩放；拖动阈值 5 个逻辑像素；按下时由平台层读取原生屏幕指针/窗口坐标捕获锚点，不使用 egui 可能过时的窗口局部指针 |
 | `ui/settings.rs` | 独立 720×560 设置 viewport，126px 侧栏提供常规/连接/打卡/闹钟/天气/角色卡导航，右侧为标题说明与卡片式滚动内容，各导航页独立保留滚动位置；连接页仅展示继承环境状态、development 模式、任务窗口入口及会话重启；保存开关、刷新资源 | 无边框不透明 Dock/置顶，按原生指针锚点拖动，控制区不拖窗，嵌入后端回退 Foreground Window。操作在 viewport 回调后执行；无模型/API/Key 表单或凭据草稿。developmentMode 保存成功后 reload_config，忙碌结束再建立新会话；手动重启为当前项目新建任务，不恢复旧线程。保留未知配置与旧密钥；设置关闭只销毁子窗口 |
 | `ui/sidebar.rs` | `sidebar` 绘制七个按钮、悬停提示与动画，报告本帧是否处理点击；↻ 调用 `toggle_damage` 切换同服装正常/战损，▶ 调用 `next_illustration` 在当前状态队列循环；`clock` 将持久化后的手动打卡结果转为对话，仅成功开始计时后排队查询天气，取消不查询，失败可从打卡设置查看 | 用 `damage_counterpart` 判断切换按钮是否可用，缺少同角色/格式/服装配对时禁用；战损时 ↻ 为橙色，悬停提示显示正常/战损切换目标；其他按钮统一使用“下一张立绘”“切换正常/Q版立绘”“切换live2d”“切换角色”，不附加实现说明。显示顺序按动作索引 [0,1,2,3,6,4,5] 排列，保留各动作动画 ID。选择变更后通过 app 重载纹理；按钮 40×40、间隔 10，仅按钮自身（随悬停缩放）加入输入区域、间隙穿透；侧栏点击须阻止同帧外部点击关闭 |
@@ -534,6 +537,9 @@ GUI smoke 使用 LEXINGTON_CODEX_EXECUTABLE 指向不可用程序，并隔离 CO
 `backend::codex::Client::mock_events` 仅在测试构建中使用上述隔离模拟进程，并将消费通道替换为预先排好的事件及夹具凭据，确定地验证 UI 事件洪峰与跨批遮蔽；不读取真实连接设置，不发送模型任务。
 
 ## 验证入口
+
+- `cargo test --locked context_menu_exit_actions` 验证重启/关闭位于立绘外时连续帧仍在输入范围内、两项均发出根窗口关闭命令且只有重启设置重启标记。
+- 重启原生验收（Linux/Xephyr，隔离配置与不可用 Codex 路径）：实际右键点击“重启”，验证旧进程正常退出、新 PID 映射、实例锁可重获、`--dev`/工作目录/环境继承及窗口位置保持；运行中原子替换二进制后同样重启成功，再点击“关闭”确认无新进程。Windows 和原生 Wayland 未实测。
 
 `cargo test --locked ui::dialog::tests::` 验证预设台词在无 AI 输出时的原有循环、等待 AI 时不抢占、正常回复关闭后反复点击不回退，以及后续无输出失败轮次可恢复回退；使用临时资源和模拟 app-server，不访问真实模型/登录。
 

@@ -17,6 +17,7 @@ use std::{
 };
 
 pub struct Wife {
+    pub(super) restart_requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
     #[cfg(any(target_os = "linux", windows))]
     pub(super) inbox: Option<crate::backend::handoff::Inbox>,
     pub(super) external_turn: bool,
@@ -98,10 +99,12 @@ pub struct Wife {
 impl Wife {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
+        restart_requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
         #[cfg(any(target_os = "linux", windows))] endpoint: crate::backend::handoff::Endpoint,
     ) -> Self {
         platform::configure(cc);
         let mut app = Self::from_context(&cc.egui_ctx, true);
+        app.restart_requested = restart_requested;
         app.transparency = cc.gl.clone().and_then(|gl| {
             super::transparency::Transparency::new(gl)
                 .map_err(|_| eprintln!("透明输出初始化失败。"))
@@ -155,6 +158,7 @@ impl Wife {
         style::install(ctx);
         let config = Config::load(&root);
         let mut app = Self {
+            restart_requested: Default::default(),
             #[cfg(any(target_os = "linux", windows))]
             inbox: None,
             external_turn: false,
@@ -317,6 +321,16 @@ impl Wife {
                 ui.close_menu();
             }
             ui.separator();
+            if ui
+                .button("重启")
+                .on_hover_text("保存状态并重新启动 Lexington；正在运行的任务会中断。")
+                .clicked()
+            {
+                self.restart_requested
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                ui.close_menu();
+            }
             if ui.button("关闭").clicked() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
