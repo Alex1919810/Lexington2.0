@@ -42,3 +42,5 @@
 
 - 发送清单在 turn/start 写入成功后才回传，不能把通道入队或预览当作已发送；Project/Roleplay 正文由同一清单选择生成，静态指令仅登记沿用。新清单和日志不得旁路凭据遮蔽。
 - 结构化后台工作使用 jobs::StructuredJobs，任务绑定 owner 与连接快照，轮询有帧预算；先释放 Client/临时 cwd 再交付终态。普通对话和测试执行不迁入后台队列，角色模块不持有进程。
+
+- app-server 不解析 CLI 斜杠文本；客户端指令用独立 run_command 入口，查询依据 thread/start/resume 的实际设置与本线程 tokenUsage 通知。结果沿已遮蔽 Text + CommandFinished 返回，不创建模型 turn、不推进角色历史或伪造发送清单；候选与识别共用 commands 模块，未接入指令明确提示。

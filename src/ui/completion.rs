@@ -1,24 +1,6 @@
-//! Text-only slash completion shared by both composers; sending stays with Codex.
+//! Slash completion shared by both composers; command dispatch belongs to the backend.
+use crate::backend::commands::COMMANDS;
 use eframe::egui::{self, Id, Rect};
-
-const COMMANDS: &[(&str, &str)] = &[
-    ("/plan", "计划模式"),
-    ("/compact", "压缩上下文"),
-    ("/review", "代码审查"),
-    ("/status", "会话状态"),
-    ("/model", "模型选择"),
-    ("/permissions", "权限设置"),
-    ("/new", "新会话"),
-    ("/resume", "恢复会话"),
-    ("/fork", "分支会话"),
-    ("/diff", "代码差异"),
-    ("/init", "项目指令"),
-    ("/skills", "技能"),
-    ("/mcp", "外部工具"),
-    ("/goal", "任务目标"),
-    ("/fast", "快速模式"),
-    ("/mention", "文件引用"),
-];
 
 #[derive(Default)]
 pub(super) struct Completion {
@@ -126,7 +108,10 @@ impl Completion {
         let accept = !self.dismissed
             && ctx.input_mut(|input| {
                 input.consume_key(egui::Modifiers::NONE, egui::Key::Tab)
-                    || input.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                    || (!candidates
+                        .iter()
+                        .any(|(command, _)| command.eq_ignore_ascii_case(text))
+                        && input.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
             });
         if accept {
             self.complete(ctx, editor, text, candidates[self.selected].0);
@@ -211,7 +196,7 @@ impl Completion {
                             }
                         });
                     ui.small("↑↓ 选择 · Tab / Enter 补全 · Esc 收起");
-                    ui.small("仅补全文本，发送后交给 Codex");
+                    ui.small("完整指令按 Enter 执行 · /help 查看用法");
                 });
             });
         self.bounds = Some(response.response.rect);
@@ -267,11 +252,11 @@ mod tests {
         };
         run(vec![]);
         ctx.memory_mut(|memory| memory.request_focus(id));
-        run(vec![egui::Event::Text("/r".into())]);
+        run(vec![egui::Event::Text("/".into())]);
         let (_, bounds, _, _) = run(vec![]);
         assert!(bounds.is_some());
         run(vec![key(egui::Key::ArrowDown)]);
-        assert_eq!(run(vec![key(egui::Key::Tab)]).0, "/resume ");
+        assert_eq!(run(vec![key(egui::Key::Tab)]).0, "/model ");
         // Replace the draft using the editor's actual select-all behavior.
         let select_all = egui::Event::Key {
             key: egui::Key::A,
@@ -280,23 +265,23 @@ mod tests {
             repeat: false,
             modifiers: egui::Modifiers::COMMAND,
         };
-        run(vec![select_all.clone(), egui::Event::Text("/co".into())]);
+        run(vec![select_all.clone(), egui::Event::Text("/mo".into())]);
         let (draft, bounds, _, _) = run(vec![key(egui::Key::Escape)]);
-        assert_eq!(draft, "/co");
+        assert_eq!(draft, "/mo");
         assert!(bounds.is_none());
-        let (draft, bounds, _, _) = run(vec![egui::Event::Text("m".into())]);
-        assert_eq!(draft, "/com");
+        let (draft, bounds, _, _) = run(vec![egui::Event::Text("d".into())]);
+        assert_eq!(draft, "/mod");
         assert!(bounds.is_some());
         let (draft, _, sent, _) = run(vec![key(egui::Key::Enter)]);
-        assert_eq!(draft, "/compact ");
+        assert_eq!(draft, "/model ");
         assert!(!sent, "accepting a completion must not send");
-        run(vec![select_all.clone(), egui::Event::Text("/pl".into())]);
+        run(vec![select_all.clone(), egui::Event::Text("/st".into())]);
         let (_, _, _, output) = run(vec![]);
         let point = output
             .shapes
             .iter()
             .find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.job.text.starts_with("/plan ") => {
+                egui::Shape::Text(text) if text.galley.job.text.starts_with("/status ") => {
                     Some(text.pos + egui::vec2(10., 6.))
                 }
                 _ => None,
@@ -313,8 +298,8 @@ mod tests {
                 },
             ]);
         }
-        assert_eq!(run(vec![]).0, "/plan ");
-        run(vec![select_all, egui::Event::Text("/pl".into())]);
+        assert_eq!(run(vec![]).0, "/status ");
+        run(vec![select_all, egui::Event::Text("/st".into())]);
         let (_, bounds, _, _) = run(vec![egui::Event::Ime(egui::ImeEvent::Preedit(
             "中文".into(),
         ))]);

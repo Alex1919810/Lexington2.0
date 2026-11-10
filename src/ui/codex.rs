@@ -193,6 +193,16 @@ impl Wife {
                     main_dirty = true;
                     changed = true;
                 }
+                Event::CommandFinished => {
+                    self.finish_development("completed", "");
+                    self.busy = false;
+                    self.dialog_clicks = 0;
+                    self.codex_status = "已连接".into();
+                    if !self.development_turn {
+                        self.input.clear();
+                    }
+                    self.last_activity = Instant::now();
+                }
                 Event::Finished { interrupted } => {
                     self.finish_development(
                         if interrupted {

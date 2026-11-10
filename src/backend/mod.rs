@@ -3,6 +3,7 @@ pub mod character;
 pub mod clock;
 pub mod codex;
 pub mod codex_config;
+pub mod commands;
 pub mod config;
 mod context;
 pub mod handoff;

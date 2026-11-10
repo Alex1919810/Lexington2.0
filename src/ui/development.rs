@@ -571,6 +571,10 @@ impl Wife {
         if submit {
             let text = self.development.input.trim().to_owned();
             if self.busy {
+                if crate::backend::commands::is_command(&text) {
+                    self.development.error = "请在当前任务结束后执行斜杠指令；草稿已保留。".into();
+                    return;
+                }
                 if let (Some(project), Some(task)) = (
                     self.development.book.active.clone(),
                     self.development
@@ -2399,10 +2403,13 @@ mod tests {
     }
 
     #[test]
-    fn slash_completion_in_both_composers_sends_only_the_completed_raw_text() {
+    fn slash_commands_in_both_composers_return_results_and_preserve_plain_text() {
         for development in [false, true] {
             for (draft, complete) in [
-                ("/pl", true),
+                ("/st", true),
+                ("/STATUS", false),
+                ("/compact", false),
+                ("/model other", false),
                 ("/unknown 中文", false),
                 ("/tmp/文件.txt", false),
             ] {
@@ -2412,7 +2419,7 @@ mod tests {
                 let project = app.development.book.add(root.path()).unwrap();
                 app.development.book.active = Some(project);
                 app.development.open = development;
-                app.codex = Some(crate::backend::codex::Client::mock("normal"));
+                app.codex = Some(crate::backend::codex::Client::mock("commands"));
                 let editor = egui::Id::new(if development {
                     "development-input"
                 } else {
@@ -2467,15 +2474,10 @@ mod tests {
                         } else {
                             &app.input
                         },
-                        "/plan "
+                        "/status "
                     );
-                    render(&mut app, vec![egui::Event::Text("检查中文需求".into())]);
                 }
-                let expected = if complete {
-                    "/plan 检查中文需求"
-                } else {
-                    draft
-                };
+                let expected = if complete { "/status " } else { draft };
                 assert_eq!(
                     if development {
                         &app.development.input
@@ -2503,21 +2505,35 @@ mod tests {
                     "development={development}, draft={draft}, error={}",
                     app.error
                 );
-                assert_eq!(app.context_ui.last_input, expected);
-                assert_eq!(app.development.book.turn_mut().unwrap().user, expected);
+                assert_eq!(app.context_ui.last_input, expected.trim());
+                assert_eq!(
+                    app.development.book.turn_mut().unwrap().user,
+                    expected.trim()
+                );
                 let deadline = Instant::now() + Duration::from_secs(5);
                 while app.busy && Instant::now() < deadline {
                     app.poll_codex();
                     std::thread::sleep(Duration::from_millis(5));
                 }
                 assert!(!app.busy && app.error.is_empty(), "{}", app.error);
-                let reply = format!("第1轮：{expected}");
-                assert_eq!(
-                    app.development.book.turn_mut().unwrap().messages[0].1,
-                    reply
-                );
+                let reply = app.development.book.turn_mut().unwrap().messages[0]
+                    .1
+                    .clone();
+                match expected.trim() {
+                    "/status" | "/STATUS" => assert!(
+                        reply.contains("会话：fixture-thread")
+                            && reply.contains("模型：fixture-model"),
+                        "{reply}"
+                    ),
+                    "/compact" => assert!(reply.contains("暂不支持 /compact")),
+                    "/model other" => assert!(reply.contains("暂不接受参数")),
+                    _ => assert_eq!(reply, format!("第1轮：{expected}")),
+                }
+                assert_eq!(app.development.book.turn_mut().unwrap().status, "completed");
                 if !development {
                     assert_eq!(app.text, reply);
+                } else {
+                    assert!(app.text.is_empty() && app.codex_messages.is_empty());
                 }
             }
         }

@@ -83,7 +83,10 @@ for line in sys.stdin:
             assert params.get("developerInstructions")
         else:
             assert "developerInstructions" not in params
-        send({"id": message["id"], "result": {"thread": {"id": thread}, "approvalPolicy": {"granular": {"sandbox_approval": True, "rules": False, "skill_approval": True, "request_permissions": True, "mcp_elicitations": True}} if mode == "granular" else "on-request"}})
+        result = {"thread": {"id": thread}, "approvalPolicy": {"granular": {"sandbox_approval": True, "rules": False, "skill_approval": True, "request_permissions": True, "mcp_elicitations": True}} if mode == "granular" else "on-request"}
+        if mode == "commands":
+            result.update(model="fixture-model", modelProvider="fixture-provider", reasoningEffort="high", cwd=os.getcwd(), sandbox={"type": "workspaceWrite", "networkAccess": False})
+        send({"id": message["id"], "result": result})
     elif method == "command/exec":
         assert os.path.samefile(params['cwd'], os.getcwd())
         assert 'sandboxPolicy' not in params and 'env' not in params, 'inherit local execution policy'
@@ -109,6 +112,9 @@ for line in sys.stdin:
         count += 1
         turn = f"turn-{count}"
         text = params["input"][0]["text"]
+        if mode == "commands":
+            assert text.split()[0].lower() not in ("/status", "/model", "/permissions", "/help", "/compact"), "client commands must not start a model turn"
+            notify("thread/tokenUsage/updated", {"tokenUsage": {"total": {"totalTokens": 1234}, "last": {"totalTokens": 234}, "modelContextWindow": 128000}})
         expected = "never" if text.startswith("no-approval") or mode.startswith('memory-') else ({"granular": {"sandbox_approval": True, "rules": False, "skill_approval": True, "request_permissions": True, "mcp_elicitations": True}} if mode == "granular" else "on-request")
         assert params["approvalPolicy"] == expected, (params["approvalPolicy"], expected)
         if mode.startswith('memory-'):

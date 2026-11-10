@@ -27,6 +27,7 @@ pub enum Event {
     Finished {
         interrupted: bool,
     },
+    CommandFinished,
     Failed(String),
     Notice(String),
     Prompt(Prompt),
@@ -50,6 +51,7 @@ pub struct Question {
 
 enum Input {
     Submit(String, bool, crate::development::context::Manifest),
+    Command(String, bool),
     Steer(String),
     Execute(crate::development::testing::TestRequest),
     Preview(String, crate::development::context::Manifest),
@@ -468,6 +470,14 @@ impl Client {
             .send(Input::Execute(request))
             .map_err(|_| "Codex 已停止。".into())
     }
+    pub fn run_command(&self, text: String, no_approval: bool) -> Result<(), String> {
+        if !super::commands::is_command(&text) || self.temporary_directory.is_some() {
+            return Err("不支持的客户端指令。".into());
+        }
+        self.input
+            .send(Input::Command(text, no_approval))
+            .map_err(|_| "Codex 已停止，请在设置中重启会话。".into())
+    }
     pub fn steer(&self, text: String) -> Result<(), String> {
         self.input
             .send(Input::Steer(text))
@@ -564,6 +574,9 @@ fn communicate(
     )?;
     let mut thread_id: Option<String> = None;
     let mut original_approval_policy = Value::Null;
+    let mut thread_settings = Value::Null;
+    let mut token_usage = Value::Null;
+    let mut queued_command: Option<(String, bool)> = None;
     let mut turn_id: Option<String> = None;
     let mut active_request = None;
     let mut steering: Option<(u64, String)> = None;
@@ -600,6 +613,20 @@ fn communicate(
             return Err("测试执行通道未在超时后返回，已停止连接。".into());
         }
         if let Some(thread) = &thread_id {
+            if let Some((text, no_approval)) = queued_command.take() {
+                emit(Event::Text {
+                    id: "lexington-command".into(),
+                    text: super::commands::response(
+                        &text,
+                        &thread_settings,
+                        &token_usage,
+                        directory,
+                        no_approval,
+                    ),
+                    replace: true,
+                });
+                emit(Event::CommandFinished);
+            }
             if !active
                 && running_test.is_none()
                 && let Some(test) = queued_test.take()
@@ -685,6 +712,21 @@ fn communicate(
             Err(_) => return Ok(()),
         };
         match input {
+            Input::Command(text, no_approval) => {
+                if structured
+                    || active
+                    || queued.is_some()
+                    || queued_test.is_some()
+                    || running_test.is_some()
+                    || queued_command.is_some()
+                {
+                    emit(Event::Notice(
+                        "当前任务仍在运行，请结束后再执行指令。".into(),
+                    ));
+                } else {
+                    queued_command = Some((text, no_approval));
+                }
+            }
             Input::Preview(text, mut context) => {
                 let plan = session
                     .as_ref()
@@ -713,7 +755,12 @@ fn communicate(
             Input::Shutdown => return Ok(()),
             Input::End(error) => return Err(error),
             Input::Submit(text, no_approval, context) => {
-                if active || queued.is_some() || queued_test.is_some() || running_test.is_some() {
+                if active
+                    || queued.is_some()
+                    || queued_test.is_some()
+                    || running_test.is_some()
+                    || queued_command.is_some()
+                {
                     emit(Event::Notice("Lexington正在思考，请稍候。".into()));
                 } else {
                     queued = Some((text, no_approval, context));
@@ -745,6 +792,7 @@ fn communicate(
                     || queued.is_some()
                     || queued_test.is_some()
                     || running_test.is_some()
+                    || queued_command.is_some()
                 {
                     emit(Event::TestResult(Box::new(
                         crate::development::testing::TestRun {
@@ -759,6 +807,9 @@ fn communicate(
                 }
             }
             Input::Interrupt => {
+                if queued_command.take().is_some() {
+                    emit(Event::Finished { interrupted: true });
+                }
                 if let Some(test) = queued_test.take() {
                     emit(Event::TestResult(Box::new(
                         crate::development::testing::TestRun {
@@ -878,6 +929,10 @@ fn communicate(
                         continue;
                     }
                     if params["threadId"].as_str() != thread_id.as_deref() {
+                        continue;
+                    }
+                    if method == "thread/tokenUsage/updated" {
+                        token_usage = params["tokenUsage"].clone();
                         continue;
                     }
                     if !active {
@@ -1196,6 +1251,18 @@ fn communicate(
                             )?;
                         }
                         "thread/start" | "thread/resume" => {
+                            let result = &message["result"];
+                            thread_settings = json!({"thread":{"id":result["thread"]["id"]}});
+                            for field in [
+                                "model",
+                                "modelProvider",
+                                "reasoningEffort",
+                                "cwd",
+                                "sandbox",
+                                "approvalPolicy",
+                            ] {
+                                thread_settings[field] = result[field].clone();
+                            }
                             // turn/start overrides persist, so retain the local baseline to restore it.
                             original_approval_policy = message["result"]
                                 .get("approvalPolicy")
@@ -1291,6 +1358,87 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn slash_command_cancelled_before_handshake_uses_interrupted_completion() {
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(Input::Command("/status".into(), false))
+            .unwrap();
+        sender.send(Input::Interrupt).unwrap();
+        sender.send(Input::Shutdown).unwrap();
+        let events = Mutex::new(Vec::new());
+        let mut wire = Vec::new();
+        communicate(
+            &mut wire,
+            &std::env::temp_dir(),
+            ProtocolSetup {
+                instructions: None,
+                session: None,
+                secrets: Vec::new(),
+                resume: None,
+                schema: None,
+            },
+            receiver,
+            &|event| events.lock().unwrap().push(event),
+        )
+        .unwrap();
+        assert!(matches!(
+            events.lock().unwrap().as_slice(),
+            [Event::Finished { interrupted: true }]
+        ));
+        assert_eq!(String::from_utf8(wire).unwrap().lines().count(), 1);
+    }
+    #[test]
+    fn slash_commands_wait_for_settings_without_model_turns() {
+        let client = Client::mock("commands");
+        for (command, no_approval, expected) in [
+            ("/STATUS", false, "会话：fixture-thread"),
+            ("/model", false, "模型：fixture-model"),
+            ("/permissions", true, "下轮审批策略：never"),
+            ("/permissions", false, "下轮审批策略：on-request"),
+            ("/help", false, "可用指令："),
+            ("/model other", false, "暂不接受参数"),
+            ("/compact", false, "暂不支持 /compact"),
+        ] {
+            client.run_command(command.into(), no_approval).unwrap();
+            let mut reply = String::new();
+            loop {
+                match client.events.recv_timeout(Duration::from_secs(5)).unwrap() {
+                    Event::Text { text, .. } => reply.push_str(&text),
+                    Event::CommandFinished => break,
+                    Event::Ready | Event::ThreadReady(_) => (),
+                    event => panic!("command unexpectedly produced {event:?}"),
+                }
+            }
+            assert!(reply.contains(expected), "{reply}");
+            if command == "/STATUS" {
+                assert!(reply.contains("提供方：fixture-provider"));
+                assert!(reply.contains("推理强度：high"));
+                assert!(reply.contains("沙箱：workspaceWrite"));
+                assert!(reply.contains("token 用量：尚未收到"));
+            }
+        }
+        assert!(client.run_command("/unknown".into(), false).is_err());
+        client.submit("/unknown 中文".into(), false).unwrap();
+        let Event::Text { text, .. } = wait_for(&client, |event| {
+            matches!(event, Event::Text { replace: true, .. })
+        }) else {
+            unreachable!()
+        };
+        assert_eq!(text, "第1轮：/unknown 中文");
+        wait_for(&client, |event| {
+            matches!(event, Event::Finished { interrupted: false })
+        });
+        client.run_command("/status".into(), false).unwrap();
+        let Event::Text { text, .. } =
+            wait_for(&client, |event| matches!(event, Event::Text { .. }))
+        else {
+            unreachable!()
+        };
+        assert!(text.contains("累计 token：1234"));
+        assert!(text.contains("最近一次 token：234"));
+        assert!(text.contains("上下文窗口：128000 token"));
+    }
     #[test]
     fn request_manifest_matches_written_blocks_and_preview_does_not_send_a_turn() {
         use crate::development::context::{Block, Channel, Delivery, Manifest};

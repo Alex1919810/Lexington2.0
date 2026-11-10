@@ -554,8 +554,13 @@ mod tests {
         app.codex_role_card =
             Some(serde_json::from_value(json!({"characterMemory":{"enabled":false}})).unwrap());
         app.codex = Some(Client::mock("normal"));
-        for (message, count) in [("我喜欢温热的茶", 1), ("fail", 1), ("明天一起喝茶", 2)]
-        {
+        for (message, count) in [
+            ("/status", 0),
+            ("我喜欢温热的茶", 1),
+            ("/help", 1),
+            ("fail", 1),
+            ("明天一起喝茶", 2),
+        ] {
             app.input = message.into();
             app.submit(&ctx);
             let deadline = Instant::now() + Duration::from_secs(5);

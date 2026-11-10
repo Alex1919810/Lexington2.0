@@ -88,18 +88,27 @@ impl Wife {
             self.error = "当前任务仍在运行。".into();
             return;
         }
-        let mut context = crate::development::context::project_manifest(
-            self.development.book.current(),
-            self.config.codex.development_mode,
-            &self.library.character,
-        );
+        let command = !matches!(source, MessageSource::External(_))
+            && crate::backend::commands::is_command(&text);
+        let mut context = if command {
+            Default::default()
+        } else {
+            crate::development::context::project_manifest(
+                self.development.book.current(),
+                self.config.codex.development_mode,
+                &self.library.character,
+            )
+        };
         let memory_context = context
             .blocks
             .iter()
             .find(|block| block.id == "project:memories")
             .map(|block| block.content.clone())
             .unwrap_or_default();
-        if self.config.codex.development_mode && memory_context != self.development.memory_context {
+        if !command
+            && self.config.codex.development_mode
+            && memory_context != self.development.memory_context
+        {
             self.new_development_task(ctx);
         }
         self.development.memory_ui.refresh = true;
@@ -108,7 +117,9 @@ impl Wife {
             self.start_codex(ctx);
         }
         // Bind the task stamp to the same immutable selection sent below.
-        self.development.memory_context = memory_context;
+        if !command {
+            self.development.memory_context = memory_context;
+        }
         context.turn = self
             .development
             .book
@@ -161,7 +172,11 @@ impl Wife {
             .as_ref()
             .ok_or_else(|| "Codex 未启动，请在设置中重启会话。".to_owned())
             .and_then(|codex| {
-                codex.submit_with_context(text, self.config.codex.no_approval, context)
+                if command {
+                    codex.run_command(text, self.config.codex.no_approval)
+                } else {
+                    codex.submit_with_context(text, self.config.codex.no_approval, context)
+                }
             });
         match result {
             Ok(()) => {
