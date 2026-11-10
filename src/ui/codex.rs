@@ -48,6 +48,7 @@ impl Wife {
         self.development.session_mode = self.config.codex.development_mode;
         self.context_ui = Default::default();
         self.codex_restart_pending = false;
+        self.complete_development_supplement(Err("会话已重启，未确认的补充保留在草稿中。".into()));
         // Drop the previous process before replacing it, so restarts cannot leave orphan servers.
         self.codex = None;
         self.codex_character = Some(self.library.character.clone());
@@ -114,6 +115,7 @@ impl Wife {
                 }
             }
             match event {
+                Event::Steered(result) => self.complete_development_supplement(result),
                 Event::TestResult(result) => self.receive_test_result(*result),
                 Event::Context(plan) => {
                     if plan.preview {
@@ -196,6 +198,7 @@ impl Wife {
                     self.last_activity = Instant::now();
                 }
                 Event::Failed(error) | Event::Stopped(error) => {
+                    self.complete_development_supplement(Err(error.clone()));
                     self.interrupt_development_test(&error);
                     self.finish_development("failed", &error);
                     self.busy = false;

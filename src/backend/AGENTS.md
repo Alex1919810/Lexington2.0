@@ -35,3 +35,5 @@
 - Live2D 使用角色 live2d/<换装>_Normal（或 _Damage）/actor.json，换装配对沿用最终后缀规则；只发现模型路径，不渲染。切换格式优先同换装且保持角色会话，三格式回退必须覆盖由 Live2D 切到仅有 PNG 的角色。
 
 - Client::run_test 使用 command/exec 直接执行显式选择的 argv，省略 sandboxPolicy/env 以继承本机配置，不发送模型 turn。processId 用于 terminate；长命令不受 30 秒 ACK 限制，独立执行按配置超时及有界输出处理。TestResult 与普通 turn 事件分开，错误/取消/缺退出码不得视为通过。
+
+- 运行中输入通过 turn/steer + expectedTurnId 追加到当前轮次，独立 Steered 结果确认成功或失败；不能借此创建新轮次、恢复已结束轮次或改变权限。补充 ACK 可以晚于完成通知；补充拒绝/编号不匹配/确认超时不终止原任务，迟到 ACK 不应影响后续请求。

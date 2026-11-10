@@ -17,6 +17,7 @@ pub enum Event {
     ThreadReady(String),
     Activity(crate::development::Activity),
     TestResult(Box<crate::development::testing::TestRun>),
+    Steered(Result<(), String>),
     Text {
         id: String,
         text: String,
@@ -48,6 +49,7 @@ pub struct Question {
 
 enum Input {
     Submit(String, bool, Option<String>),
+    Steer(String),
     Execute(crate::development::testing::TestRequest),
     Preview(String),
     Scene(crate::roleplay::SceneState),
@@ -394,6 +396,7 @@ impl Client {
                         | Event::Stopped(text)
                         | Event::Notice(text)
                         | Event::Text { text, .. } => *text = text.replace(secret, "[hidden]"),
+                        Event::Steered(Err(text)) => *text = text.replace(secret, "[hidden]"),
                         Event::Prompt(prompt) => {
                             prompt.title = prompt.title.replace(secret, "[hidden]");
                             prompt.details = prompt.details.replace(secret, "[hidden]");
@@ -460,6 +463,11 @@ impl Client {
         self.input
             .send(Input::Execute(request))
             .map_err(|_| "Codex 已停止。".into())
+    }
+    pub fn steer(&self, text: String) -> Result<(), String> {
+        self.input
+            .send(Input::Steer(text))
+            .map_err(|_| "Codex 已停止，请在设置中重启会话。".into())
     }
     pub fn interrupt(&self) {
         let _ = self.input.send(Input::Interrupt);
@@ -550,6 +558,7 @@ fn communicate(
     let mut original_approval_policy = Value::Null;
     let mut turn_id: Option<String> = None;
     let mut active_request = None;
+    let mut steering: Option<(u64, String)> = None;
     let mut approval_items = HashMap::<String, Value>::new();
     let mut queued: Option<(String, bool, Option<String>)> = None;
     let mut queued_test: Option<crate::development::testing::TestRequest> = None;
@@ -560,9 +569,21 @@ fn communicate(
     let mut final_messages = std::collections::BTreeMap::<String, String>::new();
     loop {
         if pending.values().any(|(method, started)| {
-            *method != "command/exec" && started.elapsed() > Duration::from_secs(30)
+            !matches!(*method, "command/exec" | "turn/steer")
+                && started.elapsed() > Duration::from_secs(30)
         }) {
             return Err("Codex 连接超时，请检查登录状态并在设置中重启会话。".into());
+        }
+        if let Some((id, _)) = &steering
+            && pending
+                .get(id)
+                .is_some_and(|(_, started)| started.elapsed() > Duration::from_secs(30))
+        {
+            pending.remove(id);
+            steering = None;
+            emit(Event::Steered(Err(
+                "补充发送确认超时；草稿已保留，请确认任务输出后再重试。".into(),
+            )));
         }
         if running_test.as_ref().is_some_and(|(request, started, _)| {
             started.elapsed()
@@ -663,6 +684,26 @@ fn communicate(
                     emit(Event::Notice("Lexington正在思考，请稍候。".into()));
                 } else {
                     queued = Some((text, no_approval, context));
+                }
+            }
+            Input::Steer(text) => {
+                if structured || !active || text.trim().is_empty() || steering.is_some() {
+                    emit(Event::Steered(Err(
+                        "当前没有可补充的运行中任务，或上一条补充尚未确认。".into(),
+                    )));
+                } else if let (Some(thread), Some(turn)) = (&thread_id, &turn_id) {
+                    steering = Some((next, turn.clone()));
+                    request(
+                        writer,
+                        &mut pending,
+                        &mut next,
+                        "turn/steer",
+                        json!({"threadId":thread,"expectedTurnId":turn,"input":[{"type":"text","text":text}]}),
+                    )?;
+                } else {
+                    emit(Event::Steered(Err(
+                        "当前任务尚未就绪，请稍后重试补充。".into()
+                    )));
                 }
             }
             Input::Execute(test) => {
@@ -989,6 +1030,26 @@ fn communicate(
                     if method == "turn/start" && active_request != Some(id) {
                         continue;
                     }
+                    if method == "turn/steer" {
+                        if let Some((request_id, expected_turn)) = steering.take()
+                            && request_id == id
+                        {
+                            let result = if let Some(error) = message.get("error") {
+                                Err(error["message"]
+                                    .as_str()
+                                    .unwrap_or("补充发送失败，草稿已保留。")
+                                    .to_owned())
+                            } else if message["result"]["turnId"].as_str()
+                                == Some(expected_turn.as_str())
+                            {
+                                Ok(())
+                            } else {
+                                Err("补充返回的任务编号不匹配，草稿已保留。".into())
+                            };
+                            emit(Event::Steered(result));
+                        }
+                        continue;
+                    }
                     if method == "command/exec" {
                         if let Some((test, started, cancelled)) = running_test.take() {
                             let exit_code = message["result"]["exitCode"].as_i64();
@@ -1225,6 +1286,51 @@ mod tests {
             }
         };
         assert!(matches!(event,Event::Stopped(text) if text.contains("已停止")));
+    }
+
+    #[test]
+    fn steer_targets_active_turn_and_failures_preserve_the_session() {
+        let client = Client::mock("normal");
+        client.steer("idle".into()).unwrap();
+        assert!(matches!(
+            wait_for(&client, |event| matches!(event, Event::Steered(_))),
+            Event::Steered(Err(_))
+        ));
+        client.submit("interrupt".into(), false).unwrap();
+        wait_for(&client, |event| matches!(event, Event::Text { .. }));
+        client.steer("补充中文\n第二行".into()).unwrap();
+        assert!(matches!(
+            wait_for(&client, |event| matches!(event, Event::Steered(_))),
+            Event::Steered(Ok(()))
+        ));
+        assert!(
+            matches!(wait_for(&client, |event| matches!(event, Event::Text { .. })), Event::Text { text, .. } if text == "收到补充：补充中文\n第二行")
+        );
+        for text in ["reject", "wrong-turn"] {
+            client.steer(text.into()).unwrap();
+            assert!(matches!(
+                wait_for(&client, |event| matches!(event, Event::Steered(_))),
+                Event::Steered(Err(_))
+            ));
+        }
+        client.steer("finish-before-ack".into()).unwrap();
+        wait_for(&client, |event| {
+            matches!(event, Event::Finished { interrupted: false })
+        });
+        assert!(matches!(
+            wait_for(&client, |event| matches!(event, Event::Steered(_))),
+            Event::Steered(Ok(()))
+        ));
+        client.steer("after finish".into()).unwrap();
+        assert!(matches!(
+            wait_for(&client, |event| matches!(event, Event::Steered(_))),
+            Event::Steered(Err(_))
+        ));
+        client.submit("next".into(), false).unwrap();
+        assert!(
+            matches!(wait_for(&client, |event| matches!(event, Event::Text { replace: true, .. })), Event::Text {text, ..} if text == "第2轮：next")
+        );
+        wait_for(&client, |event| matches!(event, Event::Finished { .. }));
     }
 
     #[test]

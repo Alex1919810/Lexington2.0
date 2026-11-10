@@ -30,6 +30,7 @@ count = 0
 pending = None
 turn = None
 deferred_ack = None
+steers = []
 
 
 def send(value):
@@ -192,6 +193,25 @@ for line in sys.stdin:
                     send({"id": message["id"], "result": {"turn": {"id": turn}}})
                 elif text == "late-ack":
                     deferred_ack = {"id": message["id"], "result": {"turn": {"id": turn}}}
+    elif method == "turn/steer":
+        assert params['threadId'] == thread and params['expectedTurnId'] == turn
+        assert set(params) == {'threadId', 'expectedTurnId', 'input'}
+        text = params['input'][0]['text']
+        if text == 'reject':
+            send({'id': message['id'], 'error': {'code': -32000, 'message': '补充被拒绝'}})
+        elif text == 'wrong-turn':
+            send({'id': message['id'], 'result': {'turnId': 'unrelated'}})
+        elif text == 'disconnect':
+            sys.exit(0)
+        else:
+            steers.append(text)
+            if text == 'finish-before-ack':
+                complete('完成：' + '|'.join(steers))
+            send({'id': message['id'], 'result': {'turnId': turn}})
+            if text == 'finish':
+                complete('完成：' + '|'.join(steers))
+            elif text != 'finish-before-ack':
+                notify('item/agentMessage/delta', {'itemId': 'supplement-' + str(len(steers)), 'delta': '收到补充：' + text})
     elif method == "turn/interrupt":
         assert params["turnId"] == turn
         send({"id": message["id"], "result": {}})

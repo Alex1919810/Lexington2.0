@@ -25,6 +25,7 @@ pub(super) struct DevelopmentUi {
     pub error: String,
     path_input: String,
     input: String,
+    supplement: Option<PendingSupplement>,
     drafts: HashMap<PathBuf, String>,
     viewed_task: Option<u64>,
     search: String,
@@ -35,7 +36,55 @@ pub(super) struct DevelopmentUi {
     pending_project: Option<PathBuf>,
 }
 
+struct PendingSupplement {
+    draft: String,
+    project: PathBuf,
+    task: u64,
+    turn: usize,
+}
+
 impl Wife {
+    pub(super) fn complete_development_supplement(&mut self, result: Result<(), String>) {
+        let Some(pending) = self.development.supplement.take() else {
+            return;
+        };
+        if let Err(error) = result {
+            self.development.error = error;
+            return;
+        }
+        let text = self.codex.as_ref().map_or_else(
+            || pending.draft.trim().to_owned(),
+            |client| client.sanitize(pending.draft.trim()),
+        );
+        if let Some(turn) = self
+            .development
+            .book
+            .projects
+            .iter_mut()
+            .find(|project| project.path == pending.project)
+            .and_then(|project| {
+                project
+                    .tasks
+                    .iter_mut()
+                    .find(|task| task.id == pending.task)
+            })
+            .and_then(|task| task.turns.get_mut(pending.turn))
+        {
+            turn.supplements.push(text);
+        }
+        let draft = if self.development.book.active.as_ref() == Some(&pending.project) {
+            Some(&mut self.development.input)
+        } else {
+            self.development.drafts.get_mut(&pending.project)
+        };
+        if let Some(draft) = draft
+            && *draft == pending.draft
+        {
+            draft.clear();
+        }
+        self.development.error.clear();
+        self.save_development(true);
+    }
     pub(super) fn load_development_workspaces(&mut self) {
         let path = crate::tools::paths::data_root().join(if self.dev {
             "development-dev.json"
@@ -408,8 +457,9 @@ impl Wife {
                             ui.horizontal(|ui| {
                                 ui.weak("Enter 发送 · Ctrl+Enter 换行");
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    let enabled = !self.busy && self.development.picker.is_none() && self.development.pending_project.is_none() && !self.development.input.trim().is_empty();
-                                    let button = egui::Button::new(egui::RichText::new("发送").color(egui::Color32::WHITE)).fill(accent).min_size(egui::vec2(76.,30.));
+                                    let enabled = (!self.busy || (self.development_turn && self.development.tests_ui.running.is_none())) && self.development.supplement.is_none() && self.development.picker.is_none() && self.development.pending_project.is_none() && !self.development.input.trim().is_empty();
+                                    let label = if self.development.supplement.is_some() {"确认中…"} else if self.busy && self.development_turn {"补充任务"} else {"发送"};
+                                    let button = egui::Button::new(egui::RichText::new(label).color(egui::Color32::WHITE)).fill(accent).min_size(egui::vec2(76.,30.));
                                     if ui.add_enabled(enabled,button).clicked() || (enabled && editor_focused && send_shortcut) {submit = true;}
                                 });
                             });
@@ -490,9 +540,37 @@ impl Wife {
         }
         if submit {
             let text = self.development.input.trim().to_owned();
-            self.send_message(ctx, text, MessageSource::Development);
             if self.busy {
-                self.development.input.clear();
+                if let (Some(project), Some(task)) = (
+                    self.development.book.active.clone(),
+                    self.development
+                        .book
+                        .task()
+                        .filter(|task| !task.turns.is_empty()),
+                ) {
+                    let pending = PendingSupplement {
+                        draft: self.development.input.clone(),
+                        project,
+                        task: task.id,
+                        turn: task.turns.len() - 1,
+                    };
+                    let result = self
+                        .codex
+                        .as_ref()
+                        .ok_or_else(|| "Codex 未启动。".to_owned())
+                        .and_then(|client| client.steer(text));
+                    match result {
+                        Ok(()) => self.development.supplement = Some(pending),
+                        Err(error) => self.development.error = error,
+                    }
+                } else {
+                    self.development.error = "当前没有可补充的开发任务。".into();
+                }
+            } else {
+                self.send_message(ctx, text, MessageSource::Development);
+                if self.busy {
+                    self.development.input.clear();
+                }
             }
         }
     }
@@ -533,6 +611,55 @@ pub(super) fn status_text(status: &str) -> &str {
 }
 
 fn task_details(ui: &mut egui::Ui, task: &Task, project: &std::path::Path) {
+    if ui.button("复制全部输出").clicked() {
+        let mut output = String::new();
+        for (index, turn) in task.turns.iter().enumerate() {
+            output.push_str(&format!("第 {} 轮\n你：\n{}\n", index + 1, turn.user));
+            for text in &turn.supplements {
+                output.push_str(&format!("\n运行中补充：\n{text}\n"));
+            }
+            if let Some(plan) = turn.plan["plan"].as_array() {
+                output.push_str("\n计划：\n");
+                for step in plan {
+                    output.push_str(&format!(
+                        "{} {}\n",
+                        status_text(step["status"].as_str().unwrap_or_default()),
+                        step["step"].as_str().unwrap_or_default()
+                    ));
+                }
+            }
+            for item in &turn.items {
+                if matches!(item.kind.as_str(), "agentMessage" | "reasoning") {
+                    continue;
+                }
+                output.push_str(&format!(
+                    "\n{} · {}\n{}\n",
+                    status_text(&item.status),
+                    item.command,
+                    item.output
+                ));
+                for change in &item.changes {
+                    output.push_str(&format!(
+                        "{} · {}\n{}\n",
+                        change.kind, change.path, change.diff
+                    ));
+                }
+            }
+            if !turn.diff.is_empty() {
+                output.push_str(&format!("\n累计 diff：\n{}\n", turn.diff));
+            }
+            output.push_str("\nLexington：\n");
+            for (_, text) in &turn.messages {
+                output.push_str(text);
+                output.push('\n');
+            }
+            if !turn.error.is_empty() {
+                output.push_str(&format!("\n错误：{}\n", turn.error));
+            }
+            output.push('\n');
+        }
+        ui.ctx().copy_text(output);
+    }
     for (index, turn) in task.turns.iter().enumerate() {
         ui.push_id(index, |ui| {
             ui.label(format!(
@@ -553,6 +680,10 @@ fn task_details(ui: &mut egui::Ui, task: &Task, project: &std::path::Path) {
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     rich_text(ui, &turn.user);
+                    for text in &turn.supplements {
+                        ui.strong("运行中补充");
+                        rich_text(ui, text);
+                    }
                 });
             if let Some(plan) = turn.plan["plan"].as_array() {
                 ui.collapsing("计划", |ui| {
@@ -630,11 +761,22 @@ fn task_details(ui: &mut egui::Ui, task: &Task, project: &std::path::Path) {
                 ui.collapsing("本轮累计变更", |ui| diff_text(ui, &turn.diff));
             }
             ui.add_space(6.);
-            ui.label(
-                egui::RichText::new("Lexington")
-                    .strong()
-                    .color(egui::Color32::from_rgb(57, 97, 185)),
-            );
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("Lexington")
+                        .strong()
+                        .color(egui::Color32::from_rgb(57, 97, 185)),
+                );
+                if !turn.messages.is_empty() && ui.small_button("复制回复").clicked() {
+                    ui.ctx().copy_text(
+                        turn.messages
+                            .iter()
+                            .map(|(_, text)| text.as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n\n"),
+                    );
+                }
+            });
             for (_, text) in &turn.messages {
                 rich_text(ui, text);
             }
@@ -1077,6 +1219,283 @@ mod tests {
         });
         for _ in 0..3 {
             let _ = ctx.run(Default::default(), |ctx| app.development_window(ctx));
+        }
+    }
+
+    #[test]
+    fn running_task_accepts_supplements_and_preserves_new_drafts_and_failures() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = Wife::from_root(&ctx, false, root.path().into());
+        let path = app.development.book.add(root.path()).unwrap();
+        app.development.book.active = Some(path);
+        app.development.storage = Some(root.path().join("history.json"));
+        app.development.storage_ok = true;
+        app.codex = Some(crate::backend::codex::Client::mock("normal"));
+        app.development.open = true;
+        app.send_message(&ctx, "interrupt".into(), MessageSource::Development);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.development.book.turn_mut().unwrap().messages.is_empty()
+            && Instant::now() < deadline
+        {
+            app.poll_codex();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(app.busy && !app.development.book.turn_mut().unwrap().messages.is_empty());
+        let frame = |app: &mut Wife, events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200., 900.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.development_window(ctx),
+            )
+        };
+        for _ in 0..3 {
+            let _ = frame(&mut app, vec![]);
+        }
+        ctx.memory_mut(|memory| memory.request_focus("development-input".into()));
+        let enter = |modifiers| egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        let _ = frame(&mut app, vec![egui::Event::Text("补充中文".into())]);
+        let _ = frame(&mut app, vec![enter(egui::Modifiers::CTRL)]);
+        let _ = frame(&mut app, vec![egui::Event::Text("第二行".into())]);
+        assert_eq!(app.development.input, "补充中文\n第二行");
+        assert!(app.development.supplement.is_none());
+        let _ = frame(&mut app, vec![enter(egui::Modifiers::NONE)]);
+        assert!(app.development.supplement.is_some());
+        assert_eq!(app.development.input, "补充中文\n第二行");
+        // Editing while the ACK is pending must survive its later arrival.
+        let _ = frame(&mut app, vec![egui::Event::Text("后续草稿".into())]);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while (app.development.supplement.is_some()
+            || app.development.book.turn_mut().unwrap().messages.len() < 2)
+            && Instant::now() < deadline
+        {
+            app.poll_codex();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(app.busy && app.development.supplement.is_none());
+        assert_eq!(app.development.input, "补充中文\n第二行后续草稿");
+        assert!(app.text.is_empty() && app.codex_messages.is_empty());
+        assert_eq!(app.development.book.task().unwrap().turns.len(), 1);
+        assert_eq!(
+            app.development.book.turn_mut().unwrap().supplements,
+            ["补充中文\n第二行"]
+        );
+        for (text, expected_count) in [("reject", 1), ("finish-before-ack", 2)] {
+            app.development.input = text.into();
+            let _ = frame(&mut app, vec![enter(egui::Modifiers::NONE)]);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while app.development.supplement.is_some() && Instant::now() < deadline {
+                app.poll_codex();
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(app.development.supplement.is_none());
+            assert_eq!(
+                app.development.book.turn_mut().unwrap().supplements.len(),
+                expected_count
+            );
+            if text == "reject" {
+                assert!(app.busy);
+                assert_eq!(app.development.input, text);
+                assert!(app.development.error.contains("补充被拒绝"));
+            } else {
+                assert!(!app.busy && app.development.input.is_empty());
+            }
+        }
+        let saved = Workspaces::read(app.development.storage.as_ref().unwrap()).unwrap();
+        assert_eq!(saved.task().unwrap().turns.len(), 1);
+        assert_eq!(saved.task().unwrap().turns[0].status, "completed");
+        assert_eq!(
+            saved.task().unwrap().turns[0].supplements,
+            ["补充中文\n第二行", "finish-before-ack"]
+        );
+        // A disconnected server also leaves an unconfirmed supplement editable.
+        app.send_message(&ctx, "interrupt".into(), MessageSource::Development);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.development.book.turn_mut().unwrap().messages.is_empty()
+            && Instant::now() < deadline
+        {
+            app.poll_codex();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!app.development.book.turn_mut().unwrap().messages.is_empty());
+        app.development.input = "disconnect".into();
+        let _ = frame(&mut app, vec![enter(egui::Modifiers::NONE)]);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.busy && Instant::now() < deadline {
+            app.poll_codex();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!app.busy && app.development.supplement.is_none());
+        assert_eq!(app.development.input, "disconnect");
+        assert!(
+            app.development
+                .book
+                .turn_mut()
+                .unwrap()
+                .supplements
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn supplement_ack_uses_origin_task_and_redacts_saved_text() {
+        let root = tempfile::tempdir().unwrap();
+        let a = root.path().join("a");
+        let b = root.path().join("b");
+        fs::create_dir(&a).unwrap();
+        fs::create_dir(&b).unwrap();
+        let ctx = egui::Context::default();
+        let mut app = Wife::from_root(&ctx, false, root.path().into());
+        let a = app.development.book.add(&a).unwrap();
+        let b = app.development.book.add(&b).unwrap();
+        app.development.book.active = Some(a.clone());
+        app.development.book.begin("A".into(), "Lexington", false);
+        app.development.supplement = Some(PendingSupplement {
+            draft: "fixture-secret".into(),
+            project: a.clone(),
+            task: app.development.book.task().unwrap().id,
+            turn: 0,
+        });
+        app.development
+            .drafts
+            .insert(a.clone(), "fixture-secret".into());
+        app.development.book.active = Some(b);
+        app.development.book.begin("B".into(), "Lexington", false);
+        app.development.input = "B 的新草稿".into();
+        app.codex = Some(crate::backend::codex::Client::mock_events(
+            vec![crate::backend::codex::Event::Steered(Ok(()))],
+            vec!["fixture-secret".into()],
+        ));
+        app.poll_codex();
+        assert_eq!(app.development.input, "B 的新草稿");
+        assert!(
+            app.development
+                .book
+                .turn_mut()
+                .unwrap()
+                .supplements
+                .is_empty()
+        );
+        assert!(app.development.drafts[&a].is_empty());
+        let original = app
+            .development
+            .book
+            .projects
+            .iter()
+            .find(|project| project.path == a)
+            .unwrap();
+        assert_eq!(original.tasks[0].turns[0].supplements, ["[hidden]"]);
+        assert!(app.development.supplement.is_none());
+    }
+
+    #[test]
+    fn task_copy_buttons_include_full_hidden_output_and_reply_markdown() {
+        use crate::development::{ExecutionItem, Turn};
+        let ctx = egui::Context::default();
+        let reply = "第一段\n\n```rust\nfn copied() {}\n```\n末尾";
+        let log = "offscreen log\n".repeat(6000);
+        let task = Task {
+            turns: vec![Turn {
+                user: "original".into(),
+                supplements: vec!["supplement".into()],
+                messages: vec![("reply".into(), reply.into())],
+                items: vec![ExecutionItem {
+                    id: "hidden".into(),
+                    command: "command".into(),
+                    output: log.clone(),
+                    status: "completed".into(),
+                    ..Default::default()
+                }],
+                diff: "+changed".into(),
+                error: "example error".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        for label in ["复制全部输出", "复制回复"] {
+            let mut point = None;
+            for _ in 0..3 {
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(900., 900.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            task_details(ui, &task, std::path::Path::new("/fixture"))
+                        });
+                    },
+                );
+                for shape in output.shapes {
+                    if let egui::Shape::Text(text) = shape.shape
+                        && text.galley.job.text == label
+                    {
+                        point = Some(text.galley.rect.translate(text.pos.to_vec2()).center());
+                    }
+                }
+            }
+            let point = point.expect("copy button visible");
+            let mut copied = None;
+            for pressed in [true, false] {
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(900., 900.),
+                        )),
+                        events: vec![
+                            egui::Event::PointerMoved(point),
+                            egui::Event::PointerButton {
+                                pos: point,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            task_details(ui, &task, std::path::Path::new("/fixture"))
+                        });
+                    },
+                );
+                for command in output.platform_output.commands {
+                    if let egui::OutputCommand::CopyText(text) = command {
+                        copied = Some(text);
+                    }
+                }
+            }
+            let copied = copied.expect("copy command emitted");
+            if label == "复制回复" {
+                assert_eq!(copied, reply);
+            } else {
+                for text in [
+                    "original",
+                    "supplement",
+                    &log,
+                    "+changed",
+                    reply,
+                    "example error",
+                ] {
+                    assert!(copied.contains(text));
+                }
+            }
         }
     }
 

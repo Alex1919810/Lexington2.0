@@ -69,6 +69,7 @@ impl Activity {
 #[serde(default, rename_all = "camelCase")]
 pub struct Turn {
     pub user: String,
+    pub supplements: Vec<String>,
     pub messages: Vec<(String, String)>,
     pub items: Vec<ExecutionItem>,
     pub diff: String,
@@ -80,6 +81,9 @@ pub struct Turn {
 impl Turn {
     pub fn sanitize(&mut self, filter: impl Fn(&str) -> String) {
         self.user = filter(&self.user);
+        for text in &mut self.supplements {
+            *text = filter(text);
+        }
         self.error = filter(&self.error);
         self.diff = filter(&self.diff);
         for (_, text) in &mut self.messages {
@@ -443,6 +447,7 @@ mod tests {
         fs::write(&path, document.to_string()).unwrap();
         let book = Workspaces::read(&path).unwrap();
         assert_eq!(book.version, 2);
+        assert!(book.task().unwrap().turns[0].supplements.is_empty());
         assert_eq!(
             book.task().unwrap().thread_id.as_deref(),
             Some("old-thread")
@@ -502,6 +507,10 @@ mod tests {
         let mut book = Workspaces::read(&path).unwrap();
         book.active = Some(book.add(root.path()).unwrap());
         book.begin("修复问题".into(), "a", true);
+        book.turn_mut()
+            .unwrap()
+            .supplements
+            .push("运行中补充".into());
         book.task_mut().unwrap().thread_id = Some("thread-1".into());
         book.turn_mut()
             .unwrap()
@@ -514,6 +523,7 @@ mod tests {
         );
         assert_eq!(loaded.task().unwrap().turns[0].status, "interrupted");
         assert_eq!(loaded.task().unwrap().turns[0].messages[0].1, "回复");
+        assert_eq!(loaded.task().unwrap().turns[0].supplements, ["运行中补充"]);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -560,8 +570,10 @@ mod tests {
         assert_eq!(turn.messages[0].1, "complete");
         turn.text("secret".into(), "fixture-".into(), false);
         turn.text("secret".into(), "secret".into(), false);
+        turn.supplements.push("fixture-secret".into());
         turn.sanitize(|text| text.replace("fixture-secret", "[hidden]"));
         assert_eq!(turn.messages[1].1, "[hidden]");
+        assert_eq!(turn.supplements, ["[hidden]"]);
         let mut activity = Activity::Item(
             json!({"command":"fixture-secret","changes":[{"diff":"fixture-secret"}]}),
         );
