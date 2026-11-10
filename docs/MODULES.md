@@ -42,6 +42,7 @@ src/
 │   ├── dialog.rs
 │   ├── clock.rs
 │   ├── codex.rs
+│   ├── completion.rs
 │   ├── development.rs
 │   ├── development_diagnostics.rs
 │   ├── development_tests.rs
@@ -423,6 +424,7 @@ Windows 同样启用 UI 的 Inbox、原生位置保存/恢复、显示器检测�
 | `ui/alarm.rs` | `AlarmUi` 管理表单和错误状态；`load_alarms` 加载持久化记录；`alarm_settings_ui` 提供 HH:MM、提示语、每天重复、新增/编辑/删除及启停；`alarm_popup_ui` 每秒检查到期并显示独立原生窗口 | 依赖 AlarmState、clock 本地时间和 paths；弹窗 420×260、无边框不透明置顶，按桌宠所在显示器中央定位（X11 用 RandR，支持负坐标和 DPI），不移动桌宠。X11 使用 Dock 层，普通 AlwaysOnTop 可能被桌宠 Dock 遮挡；映射后 800ms 一次性 Focus/AlwaysOnTop（晚于主窗启动置顶），不复用桌宠 XShape 遮罩。多个到期提醒合并，长文本滚动，固定确认按钮；确认或系统关闭先持久化清除 pending，保存失败保留弹窗。非原生 egui 集成降级为居中 Window 并加入输入区域；Wayland 位置由合成器决定 |
 | `ui/clock.rs` | `poll_clock` 消费系统采样、驱动自动确认及提醒；`clock_settings_ui` 展示自动开关、检测状态、起点和编辑；`clock_action` 保存/撤销/手动操作；`clock_notice_ui` 提供修改和撤销入口 | 调用后端 ClockState 和工具 Monitor；自动打卡成功后排队天气查询（忙碌时也排队但不覆盖聊天）；自动提示加入原生输入区域，关闭立即移除；过期采样不确认，自动开关/确认时长热加载会重置候选；加载失败禁用更改并显示错误，避免覆盖损坏记录 |
 | `ui/input.rs` | 普通输入和 development 输入通过 MessageSource 共用 send_message；poll_handoff 顺序消费外部请求，校验并切换项目后发送，保留宠物输入草稿；输入框、焦点、加载及错误显示 | 主窗输入、开发窗口、外部请求显式标记发送来源；开发来源运行时不绘制主窗输入思考区，结束后主窗不显示该轮错误。原始用户输入只裁首尾空白，不附加路径；持久化副本由 Client::sanitize 遮蔽。发送成功才建立任务记录；模式重连待处理且空闲时先重连再提交。VS Code workspace 优先，其他文件按登记目录/Git 根路由，跨项目或来源不明不发送到活动项目；尚无工作区的旧入口保留普通聊天行为。忙碌继续排队，无焦点抢占或重复提交；原生悬停、失焦及错误输入约束沿用 UI AGENTS |
+| `ui/completion.rs` | 两个输入框共用的斜杠文本补全；静态常用 Codex 指令候选、大小写无关的前缀筛选、↑↓ 选择、Tab/Enter 或鼠标填入、Escape 收起 | 每个编辑器独立状态；仅在原生聚焦且光标位于单个斜杠词末尾时展示，选区/参数/中文预编辑不抢快捷键。补全追加空格并将光标移到末尾，下一次 Enter 才发送；未知指令、绝对路径、参数与普通文本沿原发送链路裁首尾空白后透传。菜单不实现指令、修改连接/权限或启动模型；CLI 专有指令不因补全文本而自动变成 app-server 原生操作。浮层在编辑器所属 viewport 中按全局坐标定位，脱离编辑器滚动和主窗悬停变换，限高滚动；主窗及 Embedded 回退仅为可见菜单提交输入区域。方向键选择时滚动到候选，普通重绘保留鼠标滚动位置 |
 | `ui/assets.rs` | `Picture::load/size/texture` 将解码像素上传到 GPU，复用纹理并更新动画帧；`opaque_regions` 保存当前合成帧的归一化 alpha 覆盖条带（最多 256×256 网格，按格内最大 alpha ≥ 8 判断，逐格扫描命中即停止，使用 ceil 反推像素边界以等价保留非整除尺寸细节，不额外常驻 RGBA 帧）；`icons` 加载内置侧栏图标；保留 GIF 抽帧后的像素、循环、跳过帧的局部处置、输入遮罩随显示帧透明度更新、非整除尺寸 alpha 覆盖等价性及纹理复用回归测试 | 调用 `tools::gif::Decoder`，读取当前 RgbaImage 并保持只读；颜色转换和 alpha 区域计算仍在 UI 层，不实现循环策略；立绘/背景使用线性 mipmap。字体和图标的 `include_bytes!` 路径相对 `src/ui/` |
 | `ui/transparency.rs` | Transparency::new/paint/destroy 管理主透明窗口的最终 glow 输出转换；screenshot_rgba 还原桌面预乘读回，check 提供无用户数据的真实 GPU 验收 | UI 层独占 GPU 资源；最终屏幕拷贝纹理采用 RGBA8/nearest，避免额外 sRGB 解码和再次滤波。回调排在 Debug 顶层，不注册输入区域，不改 alpha 或原始素材；细节与验证见下节 |
 | `ui/style.rs` | `install` 注册字体、浅色主题及全 viewport 的 IME 提交兼容回调；`panel_style/card` 为设置和人物记忆提供局部浅灰背景、青绿色选中态、深色文本、圆角控件与白色卡片，不修改全局 Context 样式；`font`、`bubble_tail`、`draw_bubble`、`draw_shadow` 提供共同绘制规则 | 使用 egui 与 `Picture`；CJK TTC 使用简体中文 face index 2；对话尾尖距左边 28px，输入尾尖居中。气泡 Area 的溢出策略由对话/输入组件保持 `constrain(false)`。egui 0.31 对无预编辑的连续 Commit 沿用旧候选光标，首词后会丢字；未处于预编辑的 Commit 转为 Text，让 TextEdit 按当前光标/选区插入。正常 Enabled/Preedit/Commit 流程保留；组合状态按 viewport 与聚焦控件隔离，失焦或 Disabled 清除，同一 Context 重装样式不重复注册。单/多行回归覆盖连续四次中文候选、跨帧预编辑及 Unicode 选区替换，入口 `cargo test --locked ui::style::tests::` |
@@ -526,6 +528,8 @@ GUI smoke 使用 LEXINGTON_CODEX_EXECUTABLE 指向不可用程序，并隔离 CO
 ## 测试夹具
 
 `tests/fixtures/codex-server.py` 用 Python 3 模拟 stdio app-server，支持 turn/steer 的多行补充、拒绝、编号不匹配、完成先于确认与断连，供后端与 UI 测试共享；覆盖初始化、Unicode 输入、流式/最终消息去重、同一会话多轮与延迟 ACK、模型/提供方启动参数与 Key 环境/命令行隔离及完整 Key 遮蔽、无需审批/原策略逐轮恢复（含 granular）、沙箱保持、命令/文件审批、提问、未支持请求、中断、失败恢复、崩溃和持有 stdout 的启动器后代清理。`visibility:<临时目录>` 按 first/next/finish 文件分阶段发送文本，验证用户收起与恢复不改变实际流式/完成事件。还覆盖结构化后台线程、嵌套 MCP 禁用、JSON Schema、无效提炼/失败与交互拒绝；只在测试中通过 `include_str!` 使用，不作为发布版运行依赖；不访问用户 Codex 登录信息或真实模型。
+
+斜杠补全增量入口为 `cargo test --locked ui::completion::`，覆盖前缀筛选、方向键、Tab/Enter 不误发送、Esc 保留草稿、鼠标选择和 IME 预编辑。`cargo test --locked ui::development::tests::slash_completion -- --test-threads=1` 同时驱动两个真实 egui 编辑器，用协议夹具回显核对补全后的中文参数、未知斜杠词和绝对路径均按原文发送；原有输入与换行回归分别使用 `ui::tests::input_` 和 `ui::development::tests::development_enter_sends_and_ctrl_enter_inserts_newline` 过滤器。
 
 `backend::codex::Client::mock_events` 仅在测试构建中使用上述隔离模拟进程，并将消费通道替换为预先排好的事件及夹具凭据，确定地验证 UI 事件洪峰与跨批遮蔽；不读取真实连接设置，不发送模型任务。
 

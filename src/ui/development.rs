@@ -25,6 +25,7 @@ pub(super) struct DevelopmentUi {
     pub error: String,
     path_input: String,
     input: String,
+    completion: super::completion::Completion,
     supplement: Option<PendingSupplement>,
     drafts: HashMap<PathBuf, String>,
     viewed_task: Option<u64>,
@@ -460,11 +461,17 @@ impl Wife {
                             let current = self.development.book.task().map(|task|task.title.as_str()).unwrap_or("新任务");
                             ui.add(egui::Label::new(egui::RichText::new(format!("发送到：{current}")).size(12.).color(egui::Color32::from_gray(100))).truncate()).on_hover_text(current);
                             let editor_id = egui::Id::new("development-input");
+                            self.development.completion.keyboard(child, editor_id, &mut self.development.input);
                             let send_shortcut = ui.memory(|memory|memory.has_focus(editor_id)) && ui.input_mut(|input|input.consume_key(egui::Modifiers::NONE,egui::Key::Enter));
                             let mut editor_focused = false;
+                            let mut editor_rect = egui::Rect::NOTHING;
                             egui::ScrollArea::vertical().id_salt("development-editor-scroll").max_height(64.).show(ui, |ui| {
-                                editor_focused = ui.add(egui::TextEdit::multiline(&mut self.development.input).id(editor_id).return_key(egui::KeyboardShortcut::new(egui::Modifiers::CTRL,egui::Key::Enter)).frame(false).desired_rows(3).desired_width(f32::INFINITY).hint_text("描述需求，或补充任务信息…")).has_focus();
+                                let editor = ui.add(egui::TextEdit::multiline(&mut self.development.input).id(editor_id).return_key(egui::KeyboardShortcut::new(egui::Modifiers::CTRL,egui::Key::Enter)).frame(false).desired_rows(3).desired_width(f32::INFINITY).hint_text("描述需求，/ 补全指令…"));
+                                editor_focused = editor.has_focus();
+                                editor_rect = editor.rect;
                             });
+                            self.development.completion.show(ui, editor_id, editor_rect, &mut self.development.input);
+                            if class == egui::ViewportClass::Embedded && let Some(rect) = self.development.completion.bounds { self.input_regions.push(rect); }
                             ui.horizontal(|ui| {
                                 ui.weak("Enter 发送 · Ctrl+Enter 换行");
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2098,6 +2105,131 @@ mod tests {
             // The output is read-only even while its selection has focus.
             let output = frame(vec![egui::Event::Text("cannot edit".into())]);
             assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(shape) if shape.galley.job.text == text)));
+        }
+    }
+
+    #[test]
+    fn slash_completion_in_both_composers_sends_only_the_completed_raw_text() {
+        for development in [false, true] {
+            for (draft, complete) in [
+                ("/pl", true),
+                ("/unknown 中文", false),
+                ("/tmp/文件.txt", false),
+            ] {
+                let root = tempfile::tempdir().unwrap();
+                let ctx = egui::Context::default();
+                let mut app = Wife::from_root(&ctx, false, root.path().into());
+                let project = app.development.book.add(root.path()).unwrap();
+                app.development.book.active = Some(project);
+                app.development.open = development;
+                app.codex = Some(crate::backend::codex::Client::mock("normal"));
+                let editor = egui::Id::new(if development {
+                    "development-input"
+                } else {
+                    "message-input"
+                });
+                let render = |app: &mut Wife, events| {
+                    ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(800., 600.),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            if development {
+                                app.development_window(ctx);
+                            } else {
+                                app.input_regions.clear();
+                                app.input_ui(
+                                    ctx,
+                                    ctx.screen_rect(),
+                                    ctx.screen_rect().center(),
+                                    200.,
+                                );
+                            }
+                        },
+                    )
+                };
+                for _ in 0..3 {
+                    render(&mut app, vec![]);
+                }
+                ctx.memory_mut(|memory| memory.request_focus(editor));
+                render(&mut app, vec![egui::Event::Text(draft.into())]);
+                render(&mut app, vec![]);
+                if complete {
+                    render(
+                        &mut app,
+                        vec![egui::Event::Key {
+                            key: egui::Key::Tab,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: Default::default(),
+                        }],
+                    );
+                    assert!(!app.busy);
+                    assert_eq!(
+                        if development {
+                            &app.development.input
+                        } else {
+                            &app.input
+                        },
+                        "/plan "
+                    );
+                    render(&mut app, vec![egui::Event::Text("检查中文需求".into())]);
+                }
+                let expected = if complete {
+                    "/plan 检查中文需求"
+                } else {
+                    draft
+                };
+                assert_eq!(
+                    if development {
+                        &app.development.input
+                    } else {
+                        &app.input
+                    },
+                    expected
+                );
+                assert!(
+                    ctx.memory(|m| m.has_focus(editor)),
+                    "editor lost focus before send"
+                );
+                render(
+                    &mut app,
+                    vec![egui::Event::Key {
+                        key: egui::Key::Enter,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Default::default(),
+                    }],
+                );
+                assert!(
+                    app.busy,
+                    "development={development}, draft={draft}, error={}",
+                    app.error
+                );
+                assert_eq!(app.context_ui.last_input, expected);
+                assert_eq!(app.development.book.turn_mut().unwrap().user, expected);
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while app.busy && Instant::now() < deadline {
+                    app.poll_codex();
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                assert!(!app.busy && app.error.is_empty(), "{}", app.error);
+                let reply = format!("第1轮：{expected}");
+                assert_eq!(
+                    app.development.book.turn_mut().unwrap().messages[0].1,
+                    reply
+                );
+                if !development {
+                    assert_eq!(app.text, reply);
+                }
+            }
         }
     }
 

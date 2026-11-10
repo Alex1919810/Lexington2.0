@@ -264,6 +264,7 @@ impl Wife {
         });
         let hovered = pointer.is_some_and(|p| {
             (input_transform * rect).contains(p)
+                || self.completion.bounds.is_some_and(|rect| rect.contains(p))
                 || (input_transform * Rect::from_center_size(center, vec2(450., 450.))).contains(p)
         });
         self.input_bounds = Some(input_transform * rect);
@@ -332,6 +333,7 @@ impl Wife {
                                 );
                             });
                         } else {
+                            self.completion.keyboard(ctx, id, &mut self.input);
                             let edit = ui.add_sized(
                                 vec2(width - 28., 30.),
                                 egui::TextEdit::singleline(&mut self.input)
@@ -340,13 +342,17 @@ impl Wife {
                                     .font(style::font(14.))
                                     .text_color(Color32::from_gray(51))
                                     .hint_text(
-                                        egui::RichText::new("输入消息...")
+                                        egui::RichText::new("输入消息，/ 补全指令…")
                                             .color(Color32::from_gray(153)),
                                     )
                                     .margin(egui::Margin::ZERO)
                                     .vertical_align(egui::Align::Center)
                                     .frame(false),
                             );
+                            self.completion.show(ui, id, edit.rect, &mut self.input);
+                            if let Some(rect) = self.completion.bounds {
+                                self.input_regions.push(rect);
+                            }
                             if error_height > 0. {
                                 // Errors accompany the editor, so a failed connection cannot eat later keystrokes.
                                 egui::ScrollArea::vertical()
