@@ -1,5 +1,7 @@
 //! Project workspaces, task history and execution evidence. No GUI or process ownership.
+pub mod context;
 pub mod diagnostics;
+pub mod journal;
 pub mod memory;
 pub mod testing;
 use serde::{Deserialize, Serialize};
@@ -27,6 +29,22 @@ pub struct ExecutionItem {
     pub duration_ms: Option<i64>,
     pub changes: Vec<FileChange>,
     pub truncated: bool,
+}
+
+impl ExecutionItem {
+    pub(super) fn sanitize(&mut self, filter: &dyn Fn(&str) -> String) {
+        self.id = filter(&self.id);
+        self.kind = filter(&self.kind);
+        self.status = filter(&self.status);
+        self.command = filter(&self.command);
+        self.cwd = filter(&self.cwd);
+        self.output = filter(&self.output);
+        for change in &mut self.changes {
+            change.path = filter(&change.path);
+            change.kind = filter(&change.kind);
+            change.diff = filter(&change.diff);
+        }
+    }
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -68,6 +86,10 @@ impl Activity {
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Turn {
+    pub manifest: Option<context::Manifest>,
+    pub journal: Option<journal::Journal>,
+    #[serde(skip)]
+    pub(crate) pending: Vec<journal::Pending>,
     pub user: String,
     pub supplements: Vec<String>,
     pub messages: Vec<(String, String)>,
@@ -80,26 +102,51 @@ pub struct Turn {
 }
 impl Turn {
     pub fn sanitize(&mut self, filter: impl Fn(&str) -> String) {
+        self.sanitize_with(&filter);
+    }
+    pub(super) fn sanitize_with(&mut self, filter: &dyn Fn(&str) -> String) {
         self.user = filter(&self.user);
         for text in &mut self.supplements {
             *text = filter(text);
         }
+        self.status = filter(&self.status);
         self.error = filter(&self.error);
         self.diff = filter(&self.diff);
-        for (_, text) in &mut self.messages {
+        journal::sanitize_value(&mut self.plan, filter);
+        for (id, text) in &mut self.messages {
+            *id = filter(id);
             *text = filter(text);
         }
         for item in &mut self.items {
-            item.command = filter(&item.command);
-            item.cwd = filter(&item.cwd);
-            item.output = filter(&item.output);
-            for change in &mut item.changes {
-                change.path = filter(&change.path);
-                change.diff = filter(&change.diff);
+            item.sanitize(filter);
+        }
+        if let Some(manifest) = &mut self.manifest {
+            manifest.sanitize(filter);
+        }
+        if let Some(journal) = &mut self.journal {
+            for record in &mut journal.events {
+                record.data.sanitize(filter);
+            }
+        }
+        for pending in &mut self.pending {
+            if let journal::Pending::Message(id) | journal::Pending::Execution(id) = pending {
+                *id = filter(id);
             }
         }
     }
     pub fn activity(&mut self, event: Activity) {
+        match &event {
+            Activity::Diff(_) => self.changed(journal::Pending::Diff),
+            Activity::Plan(_) => self.changed(journal::Pending::Plan),
+            Activity::Output { id, .. } | Activity::Patch { id, .. } => {
+                self.changed(journal::Pending::Execution(id.clone()))
+            }
+            Activity::Item(value) => {
+                if let Some(id) = value["id"].as_str() {
+                    self.changed(journal::Pending::Execution(id.into()));
+                }
+            }
+        }
         match event {
             Activity::Diff(diff) => self.diff = diff,
             Activity::Plan(plan) => self.plan = plan,
@@ -161,6 +208,7 @@ impl Turn {
         &mut self.items[index]
     }
     pub fn text(&mut self, id: String, text: String, replace: bool) {
+        self.changed(journal::Pending::Message(id.clone()));
         if let Some((_, current)) = self.messages.iter_mut().find(|(item, _)| item == &id) {
             if replace {
                 *current = text;
@@ -218,7 +266,7 @@ pub struct Workspaces {
 impl Default for Workspaces {
     fn default() -> Self {
         Self {
-            version: 2,
+            version: 3,
             projects: Vec::new(),
             active: None,
         }
@@ -228,7 +276,7 @@ impl Workspaces {
     pub fn read(path: &Path) -> Result<Self, String> {
         if !path.exists() {
             return Ok(Self {
-                version: 2,
+                version: 3,
                 ..Default::default()
             });
         }
@@ -242,10 +290,10 @@ impl Workspaces {
         let mut book: Self =
             serde_json::from_slice(&fs::read(path).map_err(|_| "无法读取 development 记录。")?)
                 .map_err(|_| "development 记录损坏，未覆盖原文件。")?;
-        if !matches!(book.version, 1 | 2) {
+        if !matches!(book.version, 1..=3) {
             return Err("development 记录版本不支持。".into());
         }
-        book.version = 2;
+        book.version = 3;
         for project in &mut book.projects {
             for run in &mut project.test_runs {
                 if run.status == "running" {
@@ -254,8 +302,9 @@ impl Workspaces {
             }
             for task in &mut project.tasks {
                 for turn in &mut task.turns {
+                    turn.restore_journal()?;
                     if turn.status == "running" {
-                        turn.status = "interrupted".into();
+                        turn.finish("interrupted", "应用退出或中断后恢复，未确认任务完成。");
                     }
                 }
             }
@@ -402,16 +451,21 @@ impl Workspaces {
             });
             project.current_task = Some(id);
         }
-        self.task_mut().unwrap().turns.push(Turn {
+        let turn = Turn {
             user,
             status: "running".into(),
-            started_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
+            started_at: testing::now(),
+            journal: Some(Default::default()),
             ..Default::default()
+        };
+        self.task_mut().unwrap().turns.push(turn);
+        let turn = self.turn_mut().unwrap();
+        turn.record(journal::Data::Started {
+            user: turn.user.clone(),
+            started_at: turn.started_at,
         });
     }
+
     pub fn turn_mut(&mut self) -> Option<&mut Turn> {
         self.task_mut()?.turns.last_mut()
     }
@@ -446,13 +500,20 @@ mod tests {
         let document = json!({"version":1,"active":root.path(),"projects":[{"path":root.path(),"currentTask":1,"tasks":[{"id":1,"title":"existing","threadId":"old-thread","turns":[{"user":"keep","status":"completed"}]}],"testRuns":[{"id":2,"status":"running"}]}]});
         fs::write(&path, document.to_string()).unwrap();
         let book = Workspaces::read(&path).unwrap();
-        assert_eq!(book.version, 2);
+        assert_eq!(book.version, 3);
         assert!(book.task().unwrap().turns[0].supplements.is_empty());
         assert_eq!(
             book.task().unwrap().thread_id.as_deref(),
             Some("old-thread")
         );
         assert_eq!(book.current().unwrap().test_runs[0].status, "interrupted");
+        assert!(book.task().unwrap().turns[0].journal.is_none());
+        let mut version_two = document.clone();
+        version_two["version"] = json!(2);
+        fs::write(&path, version_two.to_string()).unwrap();
+        let migrated = Workspaces::read(&path).unwrap();
+        assert_eq!(migrated.version, 3);
+        assert!(migrated.task().unwrap().turns[0].journal.is_none());
         book.save(&path).unwrap();
         assert_eq!(
             Workspaces::read(&path).unwrap().task().unwrap().turns[0].user,
@@ -507,14 +568,12 @@ mod tests {
         let mut book = Workspaces::read(&path).unwrap();
         book.active = Some(book.add(root.path()).unwrap());
         book.begin("修复问题".into(), "a", true);
-        book.turn_mut()
-            .unwrap()
-            .supplements
-            .push("运行中补充".into());
+        book.turn_mut().unwrap().supplement("运行中补充".into());
         book.task_mut().unwrap().thread_id = Some("thread-1".into());
         book.turn_mut()
             .unwrap()
             .text("reply".into(), "回复".into(), true);
+        book.turn_mut().unwrap().flush_events();
         book.save(&path).unwrap();
         let loaded = Workspaces::read(&path).unwrap();
         assert_eq!(

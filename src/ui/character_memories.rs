@@ -1,16 +1,10 @@
 use super::app::Wife;
 use crate::{
-    backend::{
-        codex::{Client, Event},
-        config::CodexConfig,
-    },
+    backend::jobs::{Request, Status, StructuredJobs},
     roleplay::character_memory::{self, Episode, Extraction},
 };
 use eframe::egui;
-use std::{
-    collections::{BTreeMap, VecDeque},
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 #[derive(Default)]
 pub(super) struct CharacterMemoryUi {
@@ -19,21 +13,8 @@ pub(super) struct CharacterMemoryUi {
     window_started: Option<Instant>,
     window_raised: bool,
     browser: MemoryBrowser,
-    queue: VecDeque<Queued>,
-    active: Option<Active>,
+    jobs: StructuredJobs<Extraction>,
     pub status: String,
-}
-struct Queued {
-    source: Extraction,
-    connection: CodexConfig,
-}
-struct Active {
-    client: Client,
-    source: Extraction,
-    messages: BTreeMap<String, String>,
-    final_text: String,
-    started: Instant,
-    connection: CodexConfig,
 }
 #[derive(Default)]
 pub(super) struct MemoryBrowser {
@@ -141,117 +122,54 @@ impl Wife {
         if self.context_ui.last_input.trim().is_empty() || assistant.trim().is_empty() {
             return;
         }
-        if self.character_memory_ui.queue.len() >= 4 {
-            self.character_memory_ui.status =
-                "人物记忆提炼队列已满，本轮跳过；正常对话不受影响。".into();
-            return;
+        let source = Extraction::new(character, &self.context_ui.last_input, &assistant);
+        let request = Request {
+            owner: source.character.clone(),
+            prompt: source.prompt(),
+            payload: source,
+            instructions: character_memory::INSTRUCTIONS.into(),
+            schema: character_memory::output_schema(),
+        };
+        if let Err(error) = self
+            .character_memory_ui
+            .jobs
+            .enqueue(request, self.config.codex.clone())
+        {
+            self.character_memory_ui.status = error;
         }
-        self.character_memory_ui.queue.push_back(Queued {
-            source: Extraction::new(character, &self.context_ui.last_input, &assistant),
-            connection: self.config.codex.clone(),
-        });
     }
 
     pub(super) fn poll_character_memories(&mut self, ctx: &egui::Context) {
         if !self.character_memory_ui.running {
             return;
         }
-        if let Some(active) = &self.character_memory_ui.active
-            && (active.connection.connection_changed(&self.config.codex)
-                || active.started.elapsed() > Duration::from_secs(90))
+        let wake = ctx.clone();
+        if let Some(outcome) =
+            self.character_memory_ui
+                .jobs
+                .poll(&self.config.codex, &self.root, move || {
+                    wake.request_repaint()
+                })
         {
-            self.character_memory_ui.active = None;
-            self.character_memory_ui.status = "后台人物记忆提炼已停止；正常对话不受影响。".into();
-        }
-        let mut result = None;
-        if let Some(active) = &mut self.character_memory_ui.active {
-            while let Some(event) = active.client.poll() {
-                match event {
-                    Event::Text { id, text, replace } => {
-                        if replace {
-                            active.final_text = text.clone();
-                            active.messages.insert(id, text);
-                        } else {
-                            active.messages.entry(id).or_default().push_str(&text);
-                        }
-                        if active.messages.values().map(String::len).sum::<usize>() > 32768 {
-                            result = Some(Err("人物记忆提炼结果过大，未保存。".to_owned()));
-                            break;
-                        }
-                    }
-                    Event::Finished { interrupted: false } => {
-                        result = Some(character_memory::store_extracted(
-                            &self.root,
-                            &active.source,
-                            &active.final_text,
-                        ));
-                        break;
-                    }
-                    Event::Finished { interrupted: true }
-                    | Event::Failed(_)
-                    | Event::Stopped(_)
-                    | Event::Prompt(_) => {
-                        result = Some(Err(
-                            "人物记忆提炼失败，未保存；后续对话仍会继续提炼。".into()
-                        ));
-                        break;
-                    }
-                    _ => (),
-                }
-            }
-        }
-        if let Some(result) = result {
-            let active = self.character_memory_ui.active.take().unwrap();
+            let result = if outcome.status == Status::Completed {
+                outcome.result.and_then(|text| {
+                    character_memory::store_extracted(&self.root, &outcome.payload, &text)
+                })
+            } else {
+                Err(outcome
+                    .result
+                    .err()
+                    .unwrap_or_else(|| "后台人物记忆提炼已停止。".into()))
+            };
             self.character_memory_ui.status = result.map_or_else(
                 |error| error,
-                |count| format!("{}：本轮新增 {count} 条人物记忆。", active.source.character),
+                |count| format!("{}：本轮新增 {count} 条人物记忆。", outcome.owner),
             );
-            if self.character_memory_ui.browser.character == active.source.character {
+            if self.character_memory_ui.browser.character == outcome.owner {
                 self.character_memory_ui.browser.loaded_for = None;
             }
         }
-        if self.character_memory_ui.active.is_none()
-            && let Some(queued) = self.character_memory_ui.queue.pop_front()
-        {
-            if queued.connection.connection_changed(&self.config.codex) {
-                self.character_memory_ui.status =
-                    "连接设置已变更，已跳过旧连接下排队的记忆提炼。".into();
-                return;
-            }
-            let source = queued.source;
-            let wake = ctx.clone();
-            match Client::start_structured(
-                &self.config.codex,
-                &self.root,
-                character_memory::INSTRUCTIONS.into(),
-                character_memory::output_schema(),
-                move || wake.request_repaint(),
-            ) {
-                Ok(client) => match client.submit(source.prompt(), false) {
-                    Ok(()) => {
-                        self.character_memory_ui.status =
-                            format!("正在后台提炼 {} 的人物记忆…", source.character);
-                        self.character_memory_ui.active = Some(Active {
-                            client,
-                            source,
-                            messages: Default::default(),
-                            final_text: String::new(),
-                            started: Instant::now(),
-                            connection: self.config.codex.clone(),
-                        });
-                    }
-                    Err(_) => {
-                        self.character_memory_ui.status =
-                            "无法启动人物记忆提炼；正常对话不受影响。".into()
-                    }
-                },
-                Err(_) => {
-                    self.character_memory_ui.status =
-                        "无法连接人物记忆提炼服务；请检查连接设置。".into()
-                }
-            }
-        }
-        if self.character_memory_ui.active.is_some() {
+        if self.character_memory_ui.jobs.is_running() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
@@ -517,6 +435,7 @@ fn format_time(timestamp: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::codex::Client;
     use serde_json::json;
 
     fn frame(app: &mut Wife, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
@@ -619,7 +538,7 @@ mod tests {
         click(&mut app, &ctx, "删除此条记忆");
         assert!(character_memory::list(&root, "a").unwrap().is_empty());
         assert_eq!(app.text, "正常聊天保持原样");
-        assert!(app.codex.is_none() && app.character_memory_ui.active.is_none());
+        assert!(app.codex.is_none() && !app.character_memory_ui.jobs.is_running());
         drop(app);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -645,15 +564,15 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(5));
             }
             assert!(!app.busy);
-            assert_eq!(app.character_memory_ui.queue.len(), count);
+            assert_eq!(app.character_memory_ui.jobs.pending().len(), count);
         }
-        assert_eq!(app.character_memory_ui.queue[0].source.character, "a");
+        assert_eq!(app.character_memory_ui.jobs.pending()[0].character, "a");
         assert_eq!(
-            app.character_memory_ui.queue[0].source.user,
+            app.character_memory_ui.jobs.pending()[0].user,
             "我喜欢温热的茶"
         );
         assert!(!app.text.contains("\"events\""));
-        assert!(app.character_memory_ui.active.is_none());
+        assert!(!app.character_memory_ui.jobs.is_running());
         drop(app);
         if root.exists() {
             std::fs::remove_dir_all(root).unwrap();
@@ -668,15 +587,25 @@ mod tests {
         ));
         let ctx = egui::Context::default();
         let mut app = Wife::from_root(&ctx, true, root);
-        app.character_memory_ui.queue.push_back(Queued {
-            source: Extraction::new("a".into(), "private fixture text", "reply"),
-            connection: app.config.codex.clone(),
-        });
+        let source = Extraction::new("a".into(), "private fixture text", "reply");
+        app.character_memory_ui
+            .jobs
+            .enqueue(
+                Request {
+                    owner: "a".into(),
+                    prompt: source.prompt(),
+                    payload: source,
+                    instructions: character_memory::INSTRUCTIONS.into(),
+                    schema: character_memory::output_schema(),
+                },
+                app.config.codex.clone(),
+            )
+            .unwrap();
         app.config.codex.development_mode = true;
         app.character_memory_ui.running = true;
         app.poll_character_memories(&ctx);
-        assert!(app.character_memory_ui.active.is_none());
-        assert!(app.character_memory_ui.queue.is_empty());
+        assert!(!app.character_memory_ui.jobs.is_running());
+        assert!(app.character_memory_ui.jobs.pending().is_empty());
         assert!(app.character_memory_ui.status.contains("连接设置已变更"));
     }
 
@@ -697,20 +626,14 @@ mod tests {
             let client = Client::mock_structured(mode);
             client.submit(source.prompt(), false).unwrap();
             app.character_memory_ui.running = true;
-            app.character_memory_ui.active = Some(Active {
-                client,
-                source,
-                messages: Default::default(),
-                final_text: String::new(),
-                started: Instant::now(),
-                connection: app.config.codex.clone(),
-            });
+            app.character_memory_ui.jobs =
+                StructuredJobs::mock_active(client, "a".into(), source, app.config.codex.clone());
             let deadline = Instant::now() + Duration::from_secs(5);
-            while app.character_memory_ui.active.is_some() && Instant::now() < deadline {
+            while app.character_memory_ui.jobs.is_running() && Instant::now() < deadline {
                 app.poll_character_memories(&ctx);
                 std::thread::sleep(Duration::from_millis(5));
             }
-            assert!(app.character_memory_ui.active.is_none());
+            assert!(!app.character_memory_ui.jobs.is_running());
             assert_eq!(
                 character_memory::list(&root, "a").unwrap().len(),
                 usize::from(mode == "memory-success")

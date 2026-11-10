@@ -71,7 +71,7 @@ impl Wife {
             })
             .and_then(|task| task.turns.get_mut(pending.turn))
         {
-            turn.supplements.push(text);
+            turn.supplement(text);
         }
         let draft = if self.development.book.active.as_ref() == Some(&pending.project) {
             Some(&mut self.development.input)
@@ -209,13 +209,7 @@ impl Wife {
         if let Some(turn) = self.development.book.turn_mut()
             && turn.status == "running"
         {
-            turn.status = status.into();
-            turn.error = error.into();
-            for item in &mut turn.items {
-                if item.status == "inProgress" {
-                    item.status = "interrupted".into();
-                }
-            }
+            turn.finish(status, error);
             self.save_development(true);
         }
     }
@@ -655,6 +649,68 @@ fn task_details(ui: &mut egui::Ui, task: &Task, project: &std::path::Path) {
                         rich_text(ui, text);
                     }
                 });
+            if let Some(manifest) = &turn.manifest {
+                ui.collapsing("本轮发送清单", |ui| {
+                    super::roleplay_context::manifest_ui(ui, manifest);
+                });
+            }
+            ui.collapsing("事件记录与离线核对", |ui| {
+                if let Some(journal) = &turn.journal {
+                    ui.small(format!(
+                        "已保留 {} 条观察记录；流式内容按处理批次保存快照，不重新执行工具。",
+                        journal.events.len()
+                    ));
+                    if journal.compacted {
+                        ui.small("较早事件已合并为检查点，仍可核对当前任务快照。");
+                    }
+                    if journal.truncated {
+                        ui.colored_label(
+                            egui::Color32::DARK_RED,
+                            "任务快照超过日志容量，事件记录不完整。",
+                        );
+                    }
+                    let watermark = (task.id, journal.events.last().map(|event| event.seq));
+                    let result_id = ui.id().with((project, "replay"));
+                    if ui.button("离线核对本轮记录").clicked() {
+                        ui.data_mut(|data| {
+                            data.insert_temp(result_id, (watermark, turn.verify_replay()))
+                        });
+                    }
+                    if let Some((checked, result)) = ui.data(|data| {
+                        data.get_temp::<((u64, Option<u64>), Result<(), String>)>(result_id)
+                    }) && checked == watermark
+                    {
+                        ui.label(
+                            result.map_or_else(
+                                |error| error,
+                                |_| "事件回放与当前任务快照一致。".into(),
+                            ),
+                        );
+                    }
+                    let row_height = ui.text_style_height(&egui::TextStyle::Body);
+                    // This list lives inside the task's outer scrolling content.
+                    // Reserve its bounded height even when its current position
+                    // is below that viewport; available_height may be negative.
+                    let timeline_height = ((row_height + ui.spacing().item_spacing.y)
+                        * journal.events.len().min(8) as f32)
+                        .min(160.);
+                    egui::ScrollArea::vertical()
+                        .max_height(160.)
+                        .min_scrolled_height(timeline_height)
+                        .show_rows(ui, row_height, journal.events.len(), |ui, rows| {
+                            for record in &journal.events[rows] {
+                                ui.label(format!(
+                                    "#{} · {} · {}",
+                                    record.seq,
+                                    timestamp_text(record.time_ms / 1000),
+                                    record.data.label()
+                                ));
+                            }
+                        });
+                } else {
+                    ui.label("旧任务保留原有历史，没有可回放的事件记录。");
+                }
+            });
             if let Some(plan) = turn.plan["plan"].as_array() {
                 ui.collapsing("计划", |ui| {
                     for step in plan {
@@ -752,7 +808,7 @@ fn task_details(ui: &mut egui::Ui, task: &Task, project: &std::path::Path) {
 fn diff_text(ui: &mut egui::Ui, diff: &str) {
     code_text(ui, diff, true);
 }
-fn code_text(ui: &mut egui::Ui, text: &str, diff: bool) {
+pub(super) fn code_text(ui: &mut egui::Ui, text: &str, diff: bool) {
     egui::Frame::NONE
         .fill(egui::Color32::from_rgb(242, 244, 248))
         .corner_radius(6)
@@ -774,9 +830,11 @@ fn code_text(ui: &mut egui::Ui, text: &str, diff: bool) {
             // clipped. Layout only visible fixed-height rows, including blank ones.
             let lines: Vec<_> = text.lines().collect();
             let row_height = ui.text_style_height(&egui::TextStyle::Monospace);
+            let minimum_height =
+                ((row_height + ui.spacing().item_spacing.y) * lines.len().min(8) as f32).min(240.);
             egui::ScrollArea::both()
                 .max_height(240.)
-                .min_scrolled_height(0.)
+                .min_scrolled_height(minimum_height)
                 .auto_shrink([false, true])
                 .stick_to_bottom(true)
                 .show_rows(ui, row_height, lines.len(), |ui, rows| {
@@ -966,6 +1024,12 @@ mod tests {
             let saved = Workspaces::read(app.development.storage.as_ref().unwrap()).unwrap();
             let turn = &saved.task().unwrap().turns[0];
             assert_eq!(turn.status, "completed");
+            turn.verify_replay().unwrap();
+            assert!(
+                !fs::read_to_string(app.development.storage.as_ref().unwrap())
+                    .unwrap()
+                    .contains("fixture-secret")
+            );
             assert_eq!(turn.messages[0].1, expected);
             assert_eq!(turn.items[0].output, expected);
             if development_turn {
@@ -1021,6 +1085,55 @@ mod tests {
         app.complete_development_save(true);
         assert!(app.development.dirty && app.development.error.contains("损坏"));
         assert_eq!(fs::read_to_string(&path).unwrap(), "broken");
+    }
+
+    #[test]
+    fn event_timeline_keeps_rows_visible_inside_scrolled_task_details() {
+        let ctx = egui::Context::default();
+        ctx.style_mut(|style| style.animation_time = 0.);
+        ctx.memory_mut(|memory| memory.set_everything_is_visible(true));
+        let root = tempfile::tempdir().unwrap();
+        let mut book = Workspaces::default();
+        book.active = Some(book.add(root.path()).unwrap());
+        book.begin("long input line\n".repeat(40), "a", true);
+        let turn = book.turn_mut().unwrap();
+        for index in 0..4 {
+            turn.text("reply".into(), format!("Reply {index}"), true);
+            turn.flush_events();
+        }
+        turn.finish("completed", "");
+        let task = book.task().unwrap();
+        let mut visible = false;
+        for _ in 0..3 {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800., 600.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        egui::ScrollArea::vertical()
+                            .max_height(220.)
+                            .stick_to_bottom(true)
+                            .show(ui, |ui| {
+                                task_details(ui, task, root.path());
+                            });
+                    });
+                },
+            );
+            visible = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape,
+                egui::epaint::Shape::Text(text) if text.galley.job.text.starts_with("#5 ·")
+                    && shape.clip_rect.contains(text.pos + text.galley.size() / 2.))
+            });
+        }
+        assert!(
+            visible,
+            "timeline rows collapsed inside the outer task scroll area"
+        );
     }
 
     #[test]

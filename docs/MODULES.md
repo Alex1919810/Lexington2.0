@@ -62,6 +62,8 @@ src/
 │   ├── character.rs
 │   ├── codex.rs
 │   ├── codex_config.rs
+│   ├── context.rs
+│   ├── jobs.rs
 │   ├── handoff.rs
 │   ├── handoff_windows.rs
 │   ├── memo.rs
@@ -69,6 +71,8 @@ src/
 ├── development/
 │   ├── AGENTS.md
 │   ├── mod.rs
+│   ├── context.rs
+│   ├── journal.rs
 │   ├── diagnostics.rs
 │   ├── testing.rs
 │   └── memory.rs
@@ -264,7 +268,7 @@ resource/illustration/lexington/live2d/WeddingDress_Normal/
 | `roleplay/store.rs` | 从 config/roleplay.json 的 roleCards 分组读取按角色保存的覆盖值；角色卡和用户档案复用按分组保存接口，保留未知字段和其他角色，同目录临时文件同步后原子替换，Unix 权限 0600，损坏文件拒绝覆盖；不读写基本 Codex 配置或凭据 |
 | `roleplay/vector_memory.rs` | 持有按角色的向量记忆策略、本地/远程 Embedding 配置与调用、对话切分、召回及清空接口；本地调用 tools/embedding，SQLite 调用 tools/vector_store，不依赖 backend/UI 或 Codex 登录 |
 | `roleplay/character_memory.rs` | 定义 Extraction、Episode；提供提炼指令/JSON Schema、字段和原文依据校验，以及按角色的 list/store_extracted/delete；人物事件仅供查看，不自动注入角色提示或固定档案 |
-| `ui/character_memories.rs` | 管理独立后台提炼队列和 Client 事件缓冲，仅成功结果交给 roleplay 校验保存；提供与设置平级的独立人物记忆 viewport、角色选择、事件浏览、搜索、筛选和删除；浏览状态独立于 RoleEditor，后台结果和状态不进入正常聊天，具体边界见人物事件记忆小节 |
+| `ui/character_memories.rs` | 提交人物提炼请求并消费 backend/jobs 的完成结果，仅成功结果交给 roleplay 校验保存；提供与设置平级的独立人物记忆 viewport、角色选择、事件浏览、搜索、筛选和删除；浏览状态独立于 RoleEditor，后台结果和状态不进入正常聊天，具体边界见人物事件记忆小节 |
 | `ui/role_card.rs` | RoleEditor 保存编辑对象、新建草稿、分区、错误和提示；提供新建角色入口，已有角色编辑草稿独立保留；角色卡页面编辑基础设定、世界书、规则、上下文、用户与记忆和长期记忆，支持世界书新增/删除和规则新增/启停/排序/删除；保存后才提交角色领域模块，取消/关闭/切换编辑对象丢弃草稿 |
 
 优先级：config/roleplay.json 的用户覆盖 → config/characters/<角色>/card.json 的新建角色卡 → 映射 Markdown 同名的 .json 默认卡 → 原 Markdown。未映射且没有用户卡的角色使用新的普通会话。默认角色卡为 resource/agents/lexington.json，默认太太关系、原台词摘句、二创日常和多轮对话示例分字段保存；来源与许可等维护信息不注入模型。JSON 和 Markdown 随现有资源分发；用户角色配置不作为内置资源覆盖。
@@ -287,7 +291,7 @@ ui/app.rs 保存 codex_character、codex_role_card 和角色配置文件时间�
 - `roleplay/profile.rs` 的 UserProfile/Memory 将用户人设与记忆独立保存到 config/roleplay-memory.json 的 profiles 分组，按角色隔离；session_card 合并有效档案后启动会话。旧角色卡的 userPersona/memory 只在没有独立档案时兼容读取；旧式 Markdown 角色添加档案后仍保留原人格。候选默认未确认，不加载；仅 confirmed && enabled 的非空记忆进入提示。记忆的来源元数据仅供用户核对，不注入模型。文本编辑会撤销确认；保存失败保留原文件。
 - `ui/roleplay_context.rs` 在“角色卡 → 上下文”显示上次实际发送与预览报告，逐块显示选中状态、类别、字符数、作用域及原因，支持查看内容；只检查本软件附加内容。临时场景支持当前活动、风格、尚待完成，应用/清空不重启模型，下轮起使用，新会话清空。预览使用当前已知状态，不预测进行中任务的后续回复。
 - `ui/roleplay_memory.rs` 在“用户与记忆”管理独立草稿，支持手动新增或从最近输入创建候选、确认、撤销、启停和删除，通过独立保存按钮应用；保存操作在 viewport 回调之后执行。保存候选/来源等不影响有效提示时不重启，已确认内容变化待当前任务结束重建；关闭或取消丢弃未保存草稿。该固定记忆编辑器不会自动推断事实或生成摘要；自动事件提炼由独立人物记忆页提供。
-- 新 Event::Context 通过标准通道回传至 UI，实际与预览分开保存；ContextPlan 的 Debug 不含提示文本，已知当前环境/提供方 API Key 在事件出口统一遮蔽。向量记忆关闭时最近对话仅在内存；启用后成功结束的用户输入/最终回复另外写入历史数据库。临时场景和检查报告不持久化。
+- 新 Event::Context 通过标准通道回传至 UI，实际与预览分开保存；ContextPlan 的 Debug 不含提示文本，已知当前环境/提供方 API Key 在事件出口统一遮蔽。向量记忆关闭时最近对话仅在内存；启用后成功结束的用户输入/最终回复另外写入历史数据库。临时场景和 ContextPlan 检查报告不持久化；开发任务的实际发送清单独立保存在 Turn.manifest。
 - Linux `scripts/package.sh` 写入空配置，并清理旧输出遗留的 roleplay.json、roleplay-memory.json、roleplay-vectors.sqlite3 及 journal/wal/shm；`scripts/test-package.sh` 用临时工程和假构建器验证重复打包不会携带私人配置或向量数据，角色默认资源仍完整。此夹具可在 Git Bash 运行，不代替 Linux 桌面实测。
 
 ### 新建角色卡与立绘导入
@@ -326,7 +330,7 @@ Windows x64 增量验收：27 项相关 Rust 测试、fmt 和 Clippy 通过；Wi
 
 - 人物记忆入口在右键菜单，与“设置”平级，使用独立原生窗口；不提供开关或说明文案，成功对话后始终自动提炼。RoleCard 不再定义 characterMemory 配置，旧字段作为未知数据保留但不控制提炼。按用户授权，模型提炼结果直接保存，无逐条确认；不修改原有固定记忆的确认规则，不自动把事件作为事实注入正常模型上下文。
 - `ui/codex.rs::poll_codex` 只在正常对话成功完成后调用 queue_character_memory，从实际发送的 last_input 和本轮最终 codex_messages 生成提炼输入；失败、中断、空回复及待重启的旧会话不排队。取输入/回复各前 4000 Unicode 字符，保留角色归属及记录时间。每次最多一个独立提炼 Client、最多 4 项待处理；队列满时跳过该轮并仅保留内部状态，不阻塞正常对话。每项绑定连接快照，连接变化丢弃旧队列/中止旧任务，避免把旧文本发送给新提供方。
-- `ui/character_memories.rs::poll_character_memories` 使用通用 Client::start_structured，沿用当前模型和登录/API 配置，额外发起一次模型请求；处理流式/最终结果只写内部缓冲，完成后交给 roleplay 校验保存。提炼成功/失败/超时/交互请求都不写 Wife.text、codex_messages、input、busy 或普通 codex_status；后台状态不在浏览窗口展示，结果仅保存在人物记忆列表，正常聊天会话不包含提炼提示或结果。总计 90 秒后停止，结果缓冲最多 32 KiB；关闭设置或记忆窗口不取消已排队任务。Wife::from_root 不运行此服务，仅真实 Wife::new 打开后台处理，测试不会启动真实模型。
+- `ui/character_memories.rs::poll_character_memories` 轮询 backend/jobs 的 StructuredJobs<Extraction>；UI 只从成功对话创建请求、消费完成结果并交给 roleplay 校验保存。backend/jobs 持有有界队列、连接快照、独立 Client、流式缓冲、超时和取消逻辑，沿用当前模型和登录/API 配置，额外发起一次模型请求。提炼成功/失败/超时/交互请求都不写 Wife.text、codex_messages、input、busy 或普通 codex_status；后台状态不在浏览窗口展示，结果仅保存在人物记忆列表，正常聊天会话不包含提炼提示或结果。总计 90 秒后停止，结果缓冲最多 32 KiB；关闭设置或记忆窗口不取消已排队任务。Wife::from_root 不运行此服务，仅真实 Wife::new 打开后台处理，测试不会启动真实模型。
 - `backend/codex.rs::Client::start_structured(config, root, instructions, schema, wake)` 是通用结构化任务接口，不负责事件业务。通过 tempfile 在独立临时 cwd 启动现有 stdio app-server，复用原有 API/proxy/密钥遮蔽和进程树清理。initialize 后 config/read 获取有效 MCP 名称，thread/start.config.mcp_servers 使用嵌套对象逐个设置 enabled=false、required=false（键名带点也支持）；不能用带引号的扁平路径，也不能回传含 null 的整份 MCP 配置。关闭 shell、apps/plugins、multi-agent、browser/computer/image、skill_search、tool_suggest、web_search 和 update_plan，thread/start 设置 ephemeral、read-only、never，turn/start 携带 outputSchema 和禁止网络的 readOnly sandboxPolicy。工具或交互请求返回错误并终止提炼；出现非消息/推理的执行条目也停止。会话退出先回收进程，再清理临时目录，不修改正常会话权限或用户 Codex 配置。
 - roleplay 提炼指令要求仅提炼值得记住的事件，寒暄/测试/普通问答可返回空数组，每轮最多 3 条。事件包含标题、描述、类别（共同经历/计划与约定/偏好/关系/成就与转折/其他）、发生时间文字、参与者、重要程度 1～3 和视角（用户陈述/角色扮演）；模型不能把计划写成已发生。evidence 必须逐字来自对应原文，用户陈述只可引用用户文本；助手虚构只能标为角色扮演。标题最多 80 字符、描述 1000、依据 500、时间/参与者名称 80、参与者最多 8；非法字段、无依据或非 JSON 结果整批拒绝。仍可能存在模型归纳错误，事件详情提供提炼依据供核对和删除，不宣称事实认证。
 - 人物记忆保存在同一 config/roleplay-vectors.sqlite3 的通用 records 表，namespace 为角色，id 为 character-memories；JSON Journal 保存事件与删除标记，未知字段保留。每角色保留最近 256 件事件，最多 2048 个删除指纹；原文、类别、视角、发生时间和记录日组成指纹，用于去重及阻止相同结果删除后立即回写。删除只移除该人物事件及其对应对话副本，不删除原始 Codex 历史、向量 documents 或其他角色。无旧对话/向量片段自动导入，也不自动回溯提炼过去任务。
@@ -350,7 +354,7 @@ Windows x64 增量验收：27 项相关 Rust 测试、fmt 和 Clippy 通过；Wi
 - 上述边界修复已在隔离 Xephyr + GNOME WM 中以临时历史及模型桩验收：1040×740 长命令截断、展开记录及代码块保持在卡片内；缩至 740×500 后真实滚轮查看长回复，点击编辑框并 Ctrl+Enter 发送，核对落盘的输入全文与完成回复。该验收不访问真实模型或用户历史。
 - 项目选择器通过 tools::file_dialog::pick_project_directory 在工作线程运行，默认定位当前项目，UI 回调后启动，返回路径仍由 Workspaces::add 校验和去重。等待期间不重复打开选择器、不允许手动切换；取消不修改当前项目/草稿，断开显示可重试错误，后台任务中途开始则保留所选目录至空闲后切换。development viewport 使用普通窗口层级，避免遮挡无父句柄的原生目录选择器；关闭 development 窗口后仍消费结果。
 - Activity 按 item ID 合并；输出增量可能早于 started，completed 的 aggregatedOutput 替换增量而非再次追加；patch 更新文件变更，turn/diff/updated 保存累计 diff。最终 turn.items 再补齐遗漏通知，回复也按 item ID 替换去重。命令只保留最后 256 KiB 且显示截断；任务 completed 仅表示本轮结束，不推断检查成功，真实结果以退出码与输出为准。
-- 私人记录为用户数据目录中的 development.json（--dev 为 development-dev.json），不在项目或发布资源内；版本 2（读取版本 1 时保留旧任务并迁移），32 MiB 上限，损坏/新版本拒绝覆盖，同目录临时文件 sync 后原子替换、Unix 0600。发送/结束立即保存，流式变化至多每 2 秒提交一次后台快照：单个工作线程执行校验、序列化、sync 和替换，UI 不等待运行中的写入，后续更改保持 dirty；后台失败保留 dirty 并显示错误。强制保存先等待旧写入，再保存最新记录，防止迟到快照覆盖完成/中断状态；退出同样等待并保存中断。恢复时 running 转 interrupted。已知环境/提供方 Key 在用户输入副本和所有协议输出进入历史前遮蔽，原始请求仍按用户原文发送。
+- 私人记录为用户数据目录中的 development.json（--dev 为 development-dev.json），不在项目或发布资源内；版本 3（兼容迁移版本 1/2，旧任务不补造事件），32 MiB 上限，损坏/新版本拒绝覆盖，同目录临时文件 sync 后原子替换、Unix 0600。发送/结束立即保存，流式变化至多每 2 秒提交一次后台快照：单个工作线程执行校验、序列化、sync 和替换，UI 不等待运行中的写入，后续更改保持 dirty；后台失败保留 dirty 并显示错误。强制保存先等待旧写入，再保存最新记录，防止迟到快照覆盖完成/中断状态；退出同样等待并保存中断。恢复时 running 转 interrupted。已知环境/提供方 Key 在用户输入副本和所有协议输出进入历史前遮蔽，原始请求仍按用户原文发送。
 - `poll_codex() -> bool` 顺序处理每批最多 64 个事件，并在事件之间检查 4ms 工作预算；达到任一边界返回 true，由 app 请求下一帧继续，不在一帧无限排空队列。流式文本和执行输出先按 ID 合并，再按批扫描组装后的内容以遮蔽跨片段凭据；遇到完成、失败、审批等非流事件前先完成遮蔽，保证持久化、主窗显示和人物记忆始终消费处理后的内容。预算不承诺单个事件、批末扫描或完成时强制落盘在 4ms 内完成。
 - 命令输出、完整/未闭合代码块和累计/文件 diff 共用 `code_text`：240px 内部双向滚动，`show_rows` 只布局可见的固定高度行，保留空行和完整文本复制；diff 的增删行颜色保持。内部滚动区同样使用 stick_to_bottom(true)，在底部时随新行跟随，上翻阅读则暂停，回到底部恢复。避免随流式变化反复布局 256 KiB 全文或为数千屏外行建立控件。普通回复正文继续换行；输出/代码改用内部纵向滚动查看全文。
 - 性能增量回归：`large_execution_output_only_draws_visible_rows` 使用 6000 行命令输出和 diff 检查内容高度有界；`development_event_bursts_yield_frames_and_sanitize_before_final_save` 使用确定的 1024 个流式事件验证分帧处理、跨批遮蔽、最终落盘与主窗/开发来源隔离；`development_background_save_preserves_newer_edits_and_final_record` 使用通道暂停旧快照，验证 UI 不等待、最终记录覆盖顺序及损坏文件保护。夹具耗时仅作为本机对比，不能据此承诺实际帧率。
@@ -364,6 +368,19 @@ Windows x64 增量验收：27 项相关 Rust 测试、fmt 和 Clippy 通过；Wi
 - UI 增量用例 `ui::development::tests::development_input_keeps_streams_and_waiting_out_of_main_window` 使用临时项目、模拟服务和阶段握手，覆盖 developmentMode 开/关下实际 Enter 发送、关闭开发窗口后的等待/流式/最终输出隔离、立绘点击不恢复开发内容、项目最终回复去重落盘、主窗草稿保留、开发失败及随后主窗正常发送；不连接真实模型。
 - 增量测试：`cargo test --locked development` 覆盖 canonical 路由/嵌套项目/跨项目拒绝、分支读取、私密存储/损坏保护/恢复、乱序执行/最终去重/UTF-8 截断；Unix UI 模拟协议覆盖 A→B→A 的真实 thread/resume、任务记录/代码渲染、模式忙碌延期与关闭后的无开发指令新线程。fixture 不连接模型或读取真实凭据。Linux 本机已在隔离 Xephyr + GNOME WM 中验证独立窗口、显式 workspace 外部路由、执行/累计 diff 落盘、真实编辑器输入/Ctrl+Enter 与关闭子窗不退出宠物，并检查测试窗口截图；本次布局增量还实测 Zenity 目录浏览器的取消、当前项目定位、添加/切换新目录及窗口堆叠，并在 740×500 下通过真实键盘输入/Ctrl+Enter 完成发送；截图核对目录选择器未被遮挡、输入区与发送按钮可见。其他 Portal 后端及其他平台的实际窗口行为需对应原生环境验证。
 
+### 发送清单、开发事件与后台任务
+
+- `development/context.rs` 定义独立于 UI、后端和角色模块的 Manifest/Block/Channel/Delivery 数据契约及项目背景选择。条目记录来源、角色/项目/线程归属、作用域、内容版本、失效/排除原因和字符数；传输状态区分待发送、写入请求、沿用会话、未载入与预览，Debug 只显示元数据计数。项目记忆仍按原有确认/依据/预算规则选择，测试命令含说明共用 6000 字符预算，历史测试结果只登记未附加原因，不自动注入。关闭 development 模式不读取项目记忆依据或组装项目内容。
+- `ui/input.rs` 为每次发送冻结一次项目选择，任务 memoryContextStamp 绑定同一份记忆文本，输入块标明主窗口/开发窗口/外部来源；外部交付原协议文本完整保留为首块。`backend/context.rs` 在通信线程补齐角色动态块、原始输入和实际提供的会话指令；`backend/codex.rs::submit_with_context` 接收 Manifest，同一清单的 Project/Roleplay 选择用于生成实际协议文本。静态内容仅记录为沿用会话，不混进本轮背景；thread/resume 继续由 Codex 管理历史。turn/start 成功写入 stdio 后才发布 Event::Manifest，写入不代表 ACK、模型接收或任务成功；初始化前取消没有伪造的发送记录。
+- `Client::preview_context(text, manifest)` 只克隆角色会话规划并补齐当前项目清单，不发 turn、不访问向量记忆、不推进世界书时效。角色设置的上下文页分别显示上次发送清单与预览，原角色预算检查保留；实际报告在开发任务详情的“本轮发送清单”可追溯，预览不写开发历史。Manifest 出口与持久化前统一遮蔽已知凭据，不宣称包含 Codex 基础指令、完整模型历史或 token 用量。
+- `development/journal.rs` 为新轮次记录版本 1 的 Journal：Started、发送清单、回复/ExecutionItem 快照、计划、diff、已确认补充、Finished。每条带轮内单调序号及观察时间，项目/任务/角色由所属 Workspace/Task 绑定；不记录原始协议流。`Turn::activity/text` 标记变化，UI 按帧预算先合并并遮蔽跨片段凭据，再调用 flush_events 保存处理批次的完整观察快照。finish、补充与清单走相同领域入口，不能直接修改投影后绕过日志。finish 只表示本轮结束，命令失败仍保留真实退出码。
+- 日志与现有任务快照一同原子保存，无第二份执行器或独立写入时序。单轮上限 2 MiB/4096 条，达到上限时将较早事件合并为当前投影检查点并保留连续递增的后续序号；检查点本身过大时标明不完整，保留任务快照并拒绝成功回放。replay 为纯内存投影，不执行命令、不调用模型、不发送审批，也不能恢复模型内部状态；缺失序号、未知日志/清单版本及不一致投影拒绝加载/覆盖。恢复运行中轮次追加 interrupted 终态，旧历史无日志时沿用原展示，不补造事件。
+- `ui/development.rs` 在每轮提供“事件记录与离线核对”，按可见行虚拟化显示序号、时间和事件类型，显式说明处理批次快照与检查点；“离线核对本轮记录”重放日志并比较保存投影，结果绑定项目/任务与日志水位，后续事件使旧核对结果失效。发送清单正文复用限高、虚拟化的 code_text，长标题预布局截断，避免长输入撑宽或全文布局阻塞。事件列表及共用代码/输出正文处于外层任务滚动内容中，须按最多 8 行预留有界高度，不能依赖可能为负的 available_height，否则展开后会被压为零高度；外层任务区仍保留零最小高度和输入区约束。
+- `backend/jobs.rs::StructuredJobs<T>` 是应用内结构化后台任务服务：Request 带 owner/payload/指令/schema/输入；最多 4 个排队、1 个活动 Client，90 秒截止、32 KiB 结果上限，轮询最多 64 事件/4 ms。连接变化时丢弃旧请求/中止活动请求，保留 owner 归属；仅收到非空最终回复和成功 Finished 才产出 Completed，其余返回 Failed/Cancelled。Outcome 在 Client 进程树和临时目录释放后交付，执行复用 start_structured，关闭窗口不取消任务。人物提炼队列不再在 UI 实现；UI 只持有服务句柄和浏览状态，普通聊天及测试执行仍使用原 Client。
+- 定向验证：`cargo test --locked development::`（含 UI development 链路，协议脚本冲突时加 `-- --test-threads=1`）、`cargo test --locked backend::codex::tests::`、`cargo test --locked backend::jobs::tests::`、`cargo test --locked ui::character_memories::tests::`。新增夹具核对清单和实际协议文本一致、预览不发模型 turn、依据变更/模式关闭排除、跨批次密钥不落盘、失败命令仍可正确回放、补充晚 ACK、检查点和超大快照、日志版本/缺序拒绝覆盖，以及后台队列饱和/超时/连接切换/缺少最终结果/输出上限与帧预算。全部使用临时目录和模拟服务。
+
+Linux 原生验收：隔离 Xephyr + GNOME WM、临时版本 3 历史与不可用的 Codex 路径下，实际点击展开发送清单、长标题和正文、事件列表与离线核对；核对结果一致，正文/事件行可见，底部输入与发送按钮保留。素材仅为离线夹具，不调用真实模型或使用用户记录；此项不代表 Windows/Wayland 原生验证。
+
 ### 诊断、测试管理与项目记忆
 
 - 主应用类型统一为 `ui::Wife`，分文件 `impl Wife` 继续共享 UI 状态，启动为 `Wife::new`、隔离测试为 `Wife::from_root`；角色绘制文件 pet.rs 和原生窗口标题不随 Rust 类型改名。界面页面分别位于 ui/development_diagnostics.rs、development_tests.rs、development_memory.rs；领域模型位于平级 development 的 diagnostics.rs、testing.rs、memory.rs。
@@ -373,7 +390,7 @@ Windows x64 增量验收：27 项相关 Rust 测试、fmt 和 Clippy 通过；Wi
 - 测试队列绑定项目，串行复用执行通道，与普通模型任务互斥；停止清除后续队列，项目改变取消旧队列。配置保存保留 argv 边界、禁止 NUL/空程序；已知凭据不得直接保存到参数（使用外部环境）。命令结果先遮蔽已知环境/提供方 Key，再保存至私人历史。
 - 项目记忆支持手动编辑和从任务回复摘录候选，按项目保存标题/类别/正文/来源、可选依据文件、确认/启用状态。默认候选未经确认；编辑撤销确认，只有已确认且启用的条目可进入背景。依据只能是项目内相对文件，拒绝跨目录/软链接逃逸；最多读取 1 MiB 并记录 SHA256，文件变化或缺失使该条失效，需重新核对。单项目最多 128 条，正文最多 6000 字，本轮记忆预算 10000 字；检查页报告当前的可载入资格及排除原因，不把预览计划冒充已发送的模型上下文。保存先验证并原子持久化，失败保留原数据与编辑草稿；不写仓库 AGENTS.md 或改动角色记忆。
 - 上述项目背景仅 developmentMode 开启时以独立 turn/start 文本块附加，用户原始输入始终是第一块。测试命令只作可选入口，不自动运行；诊断注明时间/编辑器版本，历史结果不能当作当前事实。记忆编辑增 revision，载入文本另存哈希 stamp；停用/删除或文件依据变化后新建干净线程，旧 stamp/revision 的任务禁止继续恢复，避免旧 Codex 历史带回失效记忆。关闭模式不附加诊断、测试登记或记忆，普通角色/审批流程保持。
-- 私人状态版本 2 为 Workspace 增加 diagnostics/tests/testRuns/memories/memoryRevision，Task 增 memoryRevision/memoryContextStamp；读取版本 1 只补默认值并保留旧线程/对话，未知版本拒绝覆盖。恢复时 running 测试与对话均改为 interrupted。所有配置与记录保留在 development.json / development-dev.json，沿用同目录原子保存和 Unix 0600，不加入发布包。
+- 私人状态版本 2 引入 Workspace 的 diagnostics/tests/testRuns/memories/memoryRevision 与 Task 的 memoryRevision/memoryContextStamp；版本 3 在 Turn 增加发送清单与事件日志，读取版本 1/2 只补默认值并保留旧线程/对话，未知版本拒绝覆盖。恢复时 running 测试与对话均改为 interrupted。所有配置与记录保留在 development.json / development-dev.json，沿用同目录原子保存和 Unix 0600，不加入发布包。
 - 增量验证使用 development 模块过滤器、Codex 协议和 Inbox 过滤器、UI 直接链路与 JS 客户端夹具；覆盖范围包括模式开关/独立背景块、依据变更新线程、损坏存储保护、V1 迁移、快照范围/清空/截断、真实退出码/失败重跑/取消且无聊天 turn。另以原生 Codex + 临时 CODEX_HOME 的离线提供方配置验证 command/exec 继承工作区沙箱、argv/cwd、失败退出/输出及取消，不访问真实模型或凭据。本机隔离 Xephyr 原生验证了诊断纯同步不发模型 turn、测试配置编辑保存/运行/失败重跑、记忆停用/编辑/确认保存，以及 740×500 任务输入发送；检查真实协议输入包含三个项目来源而未自动执行登记测试。另验证退出 app-server 进程组不遗留独立测试子进程。接口参考 [OpenAI Docs: App Server](https://learn.chatgpt.com/docs/app-server)。
 
 ## 启动与依赖方向

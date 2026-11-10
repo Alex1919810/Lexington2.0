@@ -88,63 +88,70 @@ impl Wife {
             self.error = "当前任务仍在运行。".into();
             return;
         }
-        let memory_plan = if self.config.codex.development_mode {
-            self.development
-                .book
-                .current()
-                .map(|project| {
-                    crate::development::memory::context(&project.path, &project.memories)
-                })
-                .unwrap_or_default()
-        } else {
-            Default::default()
-        };
-        if self.config.codex.development_mode && memory_plan.0 != self.development.memory_context {
+        let mut context = crate::development::context::project_manifest(
+            self.development.book.current(),
+            self.config.codex.development_mode,
+            &self.library.character,
+        );
+        let memory_context = context
+            .blocks
+            .iter()
+            .find(|block| block.id == "project:memories")
+            .map(|block| block.content.clone())
+            .unwrap_or_default();
+        if self.config.codex.development_mode && memory_context != self.development.memory_context {
             self.new_development_task(ctx);
         }
-        self.development.memory_ui.report = memory_plan.1;
+        self.development.memory_ui.refresh = true;
         self.development.diagnostics_ui.refresh = true;
-        let context = if self.config.codex.development_mode {
-            self.development
-                .book
-                .current()
-                .map(|project| {
-                    let mut parts = vec![self.development.memory_context.clone()];
-                    if let Some(snapshot) = &project.diagnostics {
-                        parts.push(snapshot.context());
-                    }
-                    let mut tests = String::from(
-                        "[登记的测试命令，仅供选择，未自动运行；历史结果不代表当前代码]\n",
-                    );
-                    for definition in &project.tests {
-                        let line =
-                            format!("{}: {}\n", definition.name, definition.display_command());
-                        if tests.chars().count() + line.chars().count() > 6000 {
-                            break;
-                        }
-                        tests.push_str(&line);
-                    }
-                    if !project.tests.is_empty() {
-                        parts.push(tests);
-                    }
-                    parts
-                        .into_iter()
-                        .filter(|part| !part.is_empty())
-                        .collect::<Vec<_>>()
-                        .join("\n\n")
-                })
-                .filter(|context| !context.is_empty())
-        } else {
-            None
-        };
         if self.codex_restart_pending && !self.busy {
             self.start_codex(ctx);
         }
+        // Bind the task stamp to the same immutable selection sent below.
+        self.development.memory_context = memory_context;
+        context.turn = self
+            .development
+            .book
+            .task()
+            .map_or(1, |task| task.turns.len() + 1);
         self.development_turn = matches!(source, MessageSource::Development);
         let external = match source {
             MessageSource::External(request) => Some(request),
             _ => None,
         };
+        context.blocks.insert(
+            0,
+            crate::development::context::Block {
+                id: "input".into(),
+                title: if external.is_some() {
+                    "外部选区与来源"
+                } else {
+                    "用户输入"
+                }
+                .into(),
+                category: if external.is_some() {
+                    "外部交付"
+                } else {
+                    "输入"
+                }
+                .into(),
+                source: external.map_or_else(
+                    || {
+                        if self.development_turn {
+                            "开发窗口"
+                        } else {
+                            "主窗口"
+                        }
+                        .into()
+                    },
+                    |request| request.source.clone(),
+                ),
+                scope: "本轮首个文本块".into(),
+                validity: "按本轮原始输入发送；来源材料仅作任务资料。".into(),
+                included: true,
+                ..Default::default()
+            },
+        );
         let remembered_input = self
             .codex
             .as_ref()

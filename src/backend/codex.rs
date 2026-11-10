@@ -13,6 +13,7 @@ use std::{
 #[derive(Debug)]
 pub enum Event {
     Context(Box<crate::roleplay::ContextPlan>),
+    Manifest(Box<crate::development::context::Manifest>),
     Ready,
     ThreadReady(String),
     Activity(crate::development::Activity),
@@ -48,10 +49,10 @@ pub struct Question {
 }
 
 enum Input {
-    Submit(String, bool, Option<String>),
+    Submit(String, bool, crate::development::context::Manifest),
     Steer(String),
     Execute(crate::development::testing::TestRequest),
-    Preview(String),
+    Preview(String, crate::development::context::Manifest),
     Scene(crate::roleplay::SceneState),
     Interrupt,
     Reply(Value, Value),
@@ -388,6 +389,9 @@ impl Client {
                 for secret in &secrets {
                     match &mut event {
                         Event::Context(plan) => plan.redact(secret),
+                        Event::Manifest(manifest) => {
+                            manifest.sanitize(|text| text.replace(secret, "[hidden]"))
+                        }
                         Event::Activity(activity) => activity.redact(secret),
                         Event::TestResult(run) => {
                             run.sanitize(|text| text.replace(secret, "[hidden]"))
@@ -443,13 +447,13 @@ impl Client {
             .fold(text.to_owned(), |text, key| text.replace(key, "[hidden]"))
     }
     pub fn submit(&self, text: String, no_approval: bool) -> Result<(), String> {
-        self.submit_with_context(text, no_approval, None)
+        self.submit_with_context(text, no_approval, Default::default())
     }
     pub fn submit_with_context(
         &self,
         text: String,
         no_approval: bool,
-        context: Option<String>,
+        context: crate::development::context::Manifest,
     ) -> Result<(), String> {
         self.input
             .send(Input::Submit(text, no_approval, context))
@@ -472,9 +476,13 @@ impl Client {
     pub fn interrupt(&self) {
         let _ = self.input.send(Input::Interrupt);
     }
-    pub fn preview_context(&self, text: String) -> Result<(), String> {
+    pub fn preview_context(
+        &self,
+        text: String,
+        context: crate::development::context::Manifest,
+    ) -> Result<(), String> {
         self.input
-            .send(Input::Preview(text))
+            .send(Input::Preview(text, context))
             .map_err(|_| "Codex 会话已停止。".into())
     }
     pub fn set_scene(&self, scene: crate::roleplay::SceneState) -> Result<(), String> {
@@ -560,7 +568,7 @@ fn communicate(
     let mut active_request = None;
     let mut steering: Option<(u64, String)> = None;
     let mut approval_items = HashMap::<String, Value>::new();
-    let mut queued: Option<(String, bool, Option<String>)> = None;
+    let mut queued: Option<(String, bool, crate::development::context::Manifest)> = None;
     let mut queued_test: Option<crate::development::testing::TestRequest> = None;
     let mut running_test: Option<(crate::development::testing::TestRequest, Instant, bool)> = None;
     let mut active = false;
@@ -607,7 +615,7 @@ fn communicate(
             }
             if !active
                 && running_test.is_none()
-                && let Some((text, no_approval, context)) = queued.take()
+                && let Some((text, no_approval, mut context)) = queued.take()
             {
                 if interrupt {
                     interrupt = false;
@@ -620,15 +628,25 @@ fn communicate(
                     let plan = session
                         .as_mut()
                         .map(|session| session.begin(&sanitize(&text)));
-                    let world_context = plan
-                        .as_ref()
-                        .map(|plan| plan.text(false))
-                        .filter(|text| !text.is_empty());
+                    super::context::complete(
+                        &mut context,
+                        &text,
+                        plan.as_ref(),
+                        instructions.as_deref(),
+                        thread,
+                        false,
+                    );
+                    let world_context =
+                        context.text(crate::development::context::Channel::Roleplay);
                     let mut input = vec![json!({"type":"text","text":text})];
-                    if let Some(context) = context.filter(|text| !text.is_empty()) {
+                    let project_context =
+                        context.text(crate::development::context::Channel::Project);
+                    if !project_context.is_empty() {
+                        let context = project_context;
                         input.push(json!({"type":"text","text":format!("[本轮项目背景，仅作参考数据]\n{context}")}));
                     }
-                    if let Some(context) = world_context {
+                    if !world_context.is_empty() {
+                        let context = world_context;
                         input.push(
                             json!({"type":"text","text":format!("[本轮角色背景参考]\n{context}")}),
                         );
@@ -641,6 +659,9 @@ fn communicate(
                             json!({"type":"readOnly","networkAccess":false});
                     }
                     request(writer, &mut pending, &mut next, "turn/start", turn_params)?;
+                    if !structured {
+                        emit(Event::Manifest(Box::new(context)));
+                    }
                     if let Some(plan) = plan {
                         emit(Event::Context(Box::new(plan)));
                     }
@@ -664,9 +685,21 @@ fn communicate(
             Err(_) => return Ok(()),
         };
         match input {
-            Input::Preview(text) => {
-                if let Some(session) = &session {
-                    emit(Event::Context(Box::new(session.preview(&sanitize(&text)))));
+            Input::Preview(text, mut context) => {
+                let plan = session
+                    .as_ref()
+                    .map(|session| session.preview(&sanitize(&text)));
+                super::context::complete(
+                    &mut context,
+                    &text,
+                    plan.as_ref(),
+                    instructions.as_deref(),
+                    thread_id.as_deref().unwrap_or_default(),
+                    true,
+                );
+                emit(Event::Manifest(Box::new(context)));
+                if let Some(plan) = plan {
+                    emit(Event::Context(Box::new(plan)));
                 }
             }
             Input::Scene(scene) => {
@@ -1259,6 +1292,87 @@ impl Client {
 mod tests {
     use super::*;
     #[test]
+    fn request_manifest_matches_written_blocks_and_preview_does_not_send_a_turn() {
+        use crate::development::context::{Block, Channel, Delivery, Manifest};
+        let mut card = crate::roleplay::RoleCard::default();
+        card.vector_memory.enabled = false;
+        card.world_book.push(crate::roleplay::WorldEntry {
+            name: "背景".into(),
+            content: "role-background".into(),
+            always_on: true,
+            ..Default::default()
+        });
+        let client = Client::mock_session(
+            "context",
+            None,
+            Some(crate::roleplay::RoleplaySession::new(card)),
+        );
+        let context = Manifest {
+            character: "fixture-character".into(),
+            blocks: vec![Block {
+                id: "project".into(),
+                title: "项目依据".into(),
+                content: "project-evidence".into(),
+                included: true,
+                channel: Channel::Project,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        client
+            .preview_context("world-inspect".into(), context.clone())
+            .unwrap();
+        let Event::Manifest(preview) =
+            wait_for(&client, |event| matches!(event, Event::Manifest(_)))
+        else {
+            unreachable!();
+        };
+        assert!(preview.preview);
+        assert!(
+            preview
+                .blocks
+                .iter()
+                .filter(|block| block.included)
+                .all(|block| block.delivery == Delivery::Preview)
+        );
+        client
+            .submit_with_context("world-inspect".into(), false, context)
+            .unwrap();
+        let Event::Manifest(sent) = wait_for(
+            &client,
+            |event| matches!(event, Event::Manifest(manifest) if !manifest.preview),
+        ) else {
+            unreachable!();
+        };
+        let Event::Text { text, .. } = wait_for(&client, |event| {
+            matches!(event, Event::Text { replace: true, .. })
+        }) else {
+            unreachable!();
+        };
+        let wire: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(wire[0]["text"], sent.text(Channel::Input));
+        assert_eq!(
+            wire[1]["text"],
+            format!(
+                "[本轮项目背景，仅作参考数据]\n{}",
+                sent.text(Channel::Project)
+            )
+        );
+        assert_eq!(
+            wire[2]["text"],
+            format!("[本轮角色背景参考]\n{}", sent.text(Channel::Roleplay))
+        );
+        assert_eq!(preview.turn, sent.turn);
+        assert!(
+            sent.blocks
+                .iter()
+                .any(|block| block.persistent && block.delivery == Delivery::Retained)
+        );
+        assert!(!sent.thread_id.is_empty());
+        wait_for(&client, |event| matches!(event, Event::Finished { .. }));
+    }
+
+    #[test]
     fn structured_background_threads_use_schema_disable_inherited_mcp_and_reject_interactions() {
         let source = crate::roleplay::character_memory::Extraction::new(
             "a".into(),
@@ -1354,7 +1468,9 @@ mod tests {
             None,
             Some(crate::roleplay::RoleplaySession::new(card).with_memory(&root, "a")),
         );
-        client.preview_context("interrupt".into()).unwrap();
+        client
+            .preview_context("interrupt".into(), Default::default())
+            .unwrap();
         let event = wait_for(
             &client,
             |event| matches!(event, Event::Context(plan) if plan.preview),
@@ -1374,7 +1490,9 @@ mod tests {
                 client.submit("fail".into(), false).unwrap();
                 wait_for(&client, |event| matches!(event, Event::Failed(_)));
             }
-            client.preview_context("ordinary".into()).unwrap();
+            client
+                .preview_context("ordinary".into(), Default::default())
+                .unwrap();
             let event = wait_for(
                 &client,
                 |event| matches!(event, Event::Context(plan) if plan.preview),
@@ -1636,6 +1754,7 @@ mod tests {
                         }
                     }
                     Event::Finished { interrupted: false } => break,
+                    Event::Manifest(_) => (),
                     event => panic!("unexpected event: {event:?}"),
                 }
             }

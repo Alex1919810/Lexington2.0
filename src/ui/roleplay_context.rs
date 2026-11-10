@@ -10,13 +10,15 @@ pub(super) struct ContextUi {
     pub preview_input: String,
     pub scene: SceneState,
     pub notice: String,
+    pub sent_manifest: Option<crate::development::context::Manifest>,
+    pub preview_manifest: Option<crate::development::context::Manifest>,
 }
 
 impl Wife {
     pub(super) fn role_context_ui(&mut self, ui: &mut egui::Ui) {
         ui.label(format!("运行角色：{}", self.library.character));
         ui.small(
-            "仅显示本软件附加的角色内容；Codex 完整历史、基础指令和实际 token 用量由 Codex 管理。",
+            "发送清单覆盖 Lexington 提供的输入与背景；Codex 完整历史、基础指令和实际 token 用量由 Codex 管理。",
         );
         ui.collapsing("临时场景（新会话清空）", |ui| {
             for (title, value) in [
@@ -60,12 +62,14 @@ impl Wife {
             )
             .clicked()
         {
-            match self
-                .codex
-                .as_ref()
-                .unwrap()
-                .preview_context(self.context_ui.preview_input.clone())
-            {
+            match self.codex.as_ref().unwrap().preview_context(
+                self.context_ui.preview_input.clone(),
+                crate::development::context::project_manifest(
+                    self.development.book.current(),
+                    self.config.codex.development_mode,
+                    &self.library.character,
+                ),
+            ) {
                 Ok(()) => {
                     self.context_ui.notice =
                         "正在按已完成的历史预览；预览不会推进轮次或持续效果。".into()
@@ -75,6 +79,18 @@ impl Wife {
         }
         if !self.context_ui.notice.is_empty() {
             ui.label(&self.context_ui.notice);
+        }
+        for (title, manifest) in [
+            ("上次发送清单", &self.context_ui.sent_manifest),
+            ("预览发送清单", &self.context_ui.preview_manifest),
+        ] {
+            ui.collapsing(title, |ui| {
+                if let Some(manifest) = manifest {
+                    manifest_ui(ui, manifest);
+                } else {
+                    ui.label("尚无记录。");
+                }
+            });
         }
         for (title, report) in [
             ("上次实际发送", &self.context_ui.last),
@@ -126,5 +142,137 @@ impl Wife {
                 }
             });
         }
+    }
+}
+
+pub(super) fn manifest_ui(ui: &mut egui::Ui, manifest: &crate::development::context::Manifest) {
+    ui.add(
+        egui::Label::new(format!(
+            "角色：{} · 项目：{}",
+            manifest.character, manifest.workspace
+        ))
+        .wrap(),
+    );
+    ui.small(format!(
+        "{} · {}",
+        if manifest.preview {
+            "预览，未发送"
+        } else {
+            "已写入 app-server 请求，不代表模型已完成处理"
+        },
+        super::development::timestamp_text(manifest.captured_at),
+    ));
+    for block in &manifest.blocks {
+        ui.push_id(&block.id, |ui| {
+            let title = format!(
+                "{} · {} · {} 字符",
+                block.delivery.label(),
+                block.title,
+                block.content.chars().count()
+            );
+            let header = egui::WidgetText::from(title.as_str()).into_galley(
+                ui,
+                Some(egui::TextWrapMode::Truncate),
+                (ui.available_width() - ui.spacing().indent - ui.spacing().button_padding.x)
+                    .max(0.),
+                egui::TextStyle::Button,
+            );
+            egui::CollapsingHeader::new(header).show(ui, |ui| {
+                ui.add(
+                    egui::Label::new(format!(
+                        "{} · {}\n来源：{}\n版本：{}\n{}",
+                        block.category, block.scope, block.source, block.revision, block.validity
+                    ))
+                    .wrap(),
+                );
+                super::development::code_text(ui, &block.content, false);
+            });
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::development::context::{Block, Manifest};
+
+    #[test]
+    fn manifest_body_remains_readable_inside_outer_scrolling_content() {
+        let ctx = egui::Context::default();
+        ctx.memory_mut(|memory| memory.set_everything_is_visible(true));
+        let manifest = Manifest {
+            blocks: vec![Block {
+                id: "background".into(),
+                title: "Background".into(),
+                content: "context body\n".repeat(200),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut visible = false;
+        for _ in 0..3 {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800., 600.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        egui::ScrollArea::vertical()
+                            .max_height(220.)
+                            .stick_to_bottom(true)
+                            .show(ui, |ui| {
+                                ui.add_space(600.);
+                                manifest_ui(ui, &manifest);
+                            });
+                    });
+                },
+            );
+            visible = output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::epaint::Shape::Text(text) if text.galley.job.text.contains("context body")
+                    && shape.clip_rect.intersects(egui::Rect::from_min_size(text.pos, text.galley.size()))));
+        }
+        assert!(
+            visible,
+            "manifest body collapsed inside the task scroll area"
+        );
+    }
+
+    #[test]
+    fn long_manifest_titles_and_workspace_paths_stay_within_the_panel() {
+        let ctx = egui::Context::default();
+        let manifest = Manifest {
+            character: "a".into(),
+            workspace: "/long-project-path".repeat(40),
+            blocks: vec![Block {
+                id: "input".into(),
+                title: "long-title".repeat(100),
+                content: "content".repeat(100),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(320., 800.),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let width = ui.available_width();
+                    manifest_ui(ui, &manifest);
+                    assert!(
+                        ui.min_rect().width() <= width + 1.,
+                        "manifest widened the panel"
+                    );
+                });
+            },
+        );
     }
 }

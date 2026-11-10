@@ -124,6 +124,19 @@ impl Wife {
                         self.context_ui.last = Some(*plan);
                     }
                 }
+                Event::Manifest(manifest) => {
+                    if manifest.preview {
+                        self.context_ui.preview_manifest = Some(*manifest);
+                    } else {
+                        if self.busy
+                            && let Some(turn) = self.development.book.turn_mut()
+                        {
+                            turn.set_manifest((*manifest).clone());
+                            self.save_development(true);
+                        }
+                        self.context_ui.sent_manifest = Some(*manifest);
+                    }
+                }
                 Event::ThreadReady(id) => {
                     self.development.thread_id = Some(id.clone());
                     if let Some(task) = self.development.book.task_mut() {
@@ -246,6 +259,7 @@ impl Wife {
             && let Some(client) = &self.codex
         {
             turn.sanitize(|text| client.sanitize(text));
+            turn.flush_events();
         }
         self.save_development(false);
     }
