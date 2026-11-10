@@ -809,6 +809,9 @@ fn diff_text(ui: &mut egui::Ui, diff: &str) {
     code_text(ui, diff, true);
 }
 pub(super) fn code_text(ui: &mut egui::Ui, text: &str, diff: bool) {
+    // Frame children share a persistent Ui ID. Distinguish each block before
+    // entering the frame so sibling code/output scroll areas keep separate state.
+    let scroll_id = ui.next_auto_id().with("code-output-scroll");
     egui::Frame::NONE
         .fill(egui::Color32::from_rgb(242, 244, 248))
         .corner_radius(6)
@@ -833,6 +836,7 @@ pub(super) fn code_text(ui: &mut egui::Ui, text: &str, diff: bool) {
             let minimum_height =
                 ((row_height + ui.spacing().item_spacing.y) * lines.len().min(8) as f32).min(240.);
             egui::ScrollArea::both()
+                .id_salt(scroll_id)
                 .max_height(240.)
                 .min_scrolled_height(minimum_height)
                 .auto_shrink([false, true])
@@ -1134,6 +1138,55 @@ mod tests {
             visible,
             "timeline rows collapsed inside the outer task scroll area"
         );
+    }
+
+    #[test]
+    fn multiple_output_blocks_do_not_emit_unclipped_id_warnings() {
+        let ctx = egui::Context::default();
+        ctx.options_mut(|options| options.warn_on_id_clash = true);
+        ctx.style_mut(|style| style.animation_time = 0.);
+        let reply = format!(
+            "First block\n```rust\n{}\n```\nSecond block\n```text\n{}\n```",
+            "first output\n".repeat(30),
+            "second output\n".repeat(40),
+        );
+        let task = Task {
+            turns: vec![crate::development::Turn {
+                messages: vec![("reply".into(), reply.clone()), ("next".into(), reply)],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        for offset in [0., 160., 400., 800., 0.] {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800., 600.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        egui::ScrollArea::vertical()
+                            .max_height(220.)
+                            .vertical_scroll_offset(offset)
+                            .show(ui, |ui| {
+                                task_details(ui, &task, std::path::Path::new("/fixture"));
+                            });
+                    });
+                },
+            );
+            for shape in output.shapes {
+                if let egui::Shape::Text(text) = shape.shape {
+                    assert!(
+                        !text.galley.job.text.contains("use of ScrollArea ID"),
+                        "unclipped warning at scroll offset {offset}: {}",
+                        text.galley.job.text
+                    );
+                }
+            }
+        }
     }
 
     #[test]
