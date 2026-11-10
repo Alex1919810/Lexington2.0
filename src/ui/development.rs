@@ -28,6 +28,7 @@ pub(super) struct DevelopmentUi {
     supplement: Option<PendingSupplement>,
     drafts: HashMap<PathBuf, String>,
     viewed_task: Option<u64>,
+    detail_task: Option<(PathBuf, u64)>,
     search: String,
     dirty: bool,
     last_saved: Option<std::time::Instant>,
@@ -260,6 +261,7 @@ impl Wife {
         }
         if !self.development.open {
             self.development.viewport_open = false;
+            self.development.detail_task = None;
             return;
         }
         if self.development.branch_project != self.development.book.active
@@ -367,6 +369,7 @@ impl Wife {
                     });
                 }
                 if self.development.book.current().is_none() {
+                    self.development.detail_task = None;
                     ui.add_space(55.);
                     ui.vertical_centered(|ui| {
                         ui.heading("从一个项目开始");
@@ -385,6 +388,7 @@ impl Wife {
                     }
                 });
                 if self.development.page!=0 {
+                    self.development.detail_task = None;
                     let page=self.development.page;
                     egui::Frame::NONE.fill(egui::Color32::WHITE).corner_radius(9).inner_margin(14).show(ui,|ui| {
                         ui.set_width(ui.available_width());
@@ -415,6 +419,7 @@ impl Wife {
                                     let response = ui.add_sized([ui.available_width(),36.], egui::Button::new(&task.title).selected(selected).truncate());
                                     if response.on_hover_text(format!("{}\n{} · {} 轮",task.title, task.turns.last().map(|turn|status_text(&turn.status)).unwrap_or("未开始"),task.turns.len())).clicked() {
                                         self.development.viewed_task = Some(task.id);
+                                        self.development.detail_task = None;
                                     }
                                 }
                                 if count==0 {ui.weak(if project.tasks.is_empty() {"还没有任务"} else {"没有匹配的任务"});}
@@ -424,6 +429,9 @@ impl Wife {
                     ui.allocate_ui_with_layout(egui::vec2(ui.available_width(),height), egui::Layout::top_down(egui::Align::Min), |ui| {
                         let project = self.development.book.current().unwrap();
                         let task = project.tasks.iter().find(|task|Some(task.id)==self.development.viewed_task.or(project.current_task));
+                        let detail_task = task.map(|task| (project.path.clone(), task.id));
+                        let scroll_to_bottom = self.development.detail_task != detail_task;
+                        self.development.detail_task = detail_task;
                         egui::Frame::NONE.fill(egui::Color32::WHITE).stroke(egui::Stroke::new(1_f32,border)).corner_radius(9).inner_margin(14).show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             if let Some(task) = task {
@@ -439,9 +447,10 @@ impl Wife {
                             } else {ui.label(egui::RichText::new("新任务").size(17.).strong());ui.weak("在下方描述希望完成的工作。");}
                             ui.separator();
                             let detail_height = (height-260.).max(12.);
-                            egui::ScrollArea::vertical().id_salt(("development-detail",task.map(|task|task.id))).max_height(detail_height).min_scrolled_height(0.).auto_shrink([false,false]).show(ui, |ui| {
+                            egui::ScrollArea::vertical().id_salt(("development-detail",&project.path,task.map(|task|task.id))).max_height(detail_height).min_scrolled_height(0.).auto_shrink([false,false]).animated(!scroll_to_bottom).show(ui, |ui| {
                                 if let Some(task) = task {task_details(ui,task,&project.path);}
                                 else {ui.add_space(20.);ui.weak("任务的对话、执行记录和代码变更会显示在这里。");}
+                                if scroll_to_bottom {ui.scroll_to_cursor(Some(egui::Align::BOTTOM));}
                             });
                         });
                         egui::Frame::NONE.fill(egui::Color32::WHITE).stroke(egui::Stroke::new(1_f32,border)).corner_radius(9).inner_margin(12).show(ui, |ui| {
@@ -479,6 +488,7 @@ impl Wife {
         self.development.viewport_open = true;
         self.development.open = open;
         if !open {
+            self.development.detail_task = None;
             ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Close);
         }
         if pick_project && !self.busy && self.development.picker.is_none() {
@@ -611,55 +621,6 @@ pub(super) fn status_text(status: &str) -> &str {
 }
 
 fn task_details(ui: &mut egui::Ui, task: &Task, project: &std::path::Path) {
-    if ui.button("复制全部输出").clicked() {
-        let mut output = String::new();
-        for (index, turn) in task.turns.iter().enumerate() {
-            output.push_str(&format!("第 {} 轮\n你：\n{}\n", index + 1, turn.user));
-            for text in &turn.supplements {
-                output.push_str(&format!("\n运行中补充：\n{text}\n"));
-            }
-            if let Some(plan) = turn.plan["plan"].as_array() {
-                output.push_str("\n计划：\n");
-                for step in plan {
-                    output.push_str(&format!(
-                        "{} {}\n",
-                        status_text(step["status"].as_str().unwrap_or_default()),
-                        step["step"].as_str().unwrap_or_default()
-                    ));
-                }
-            }
-            for item in &turn.items {
-                if matches!(item.kind.as_str(), "agentMessage" | "reasoning") {
-                    continue;
-                }
-                output.push_str(&format!(
-                    "\n{} · {}\n{}\n",
-                    status_text(&item.status),
-                    item.command,
-                    item.output
-                ));
-                for change in &item.changes {
-                    output.push_str(&format!(
-                        "{} · {}\n{}\n",
-                        change.kind, change.path, change.diff
-                    ));
-                }
-            }
-            if !turn.diff.is_empty() {
-                output.push_str(&format!("\n累计 diff：\n{}\n", turn.diff));
-            }
-            output.push_str("\nLexington：\n");
-            for (_, text) in &turn.messages {
-                output.push_str(text);
-                output.push('\n');
-            }
-            if !turn.error.is_empty() {
-                output.push_str(&format!("\n错误：{}\n", turn.error));
-            }
-            output.push('\n');
-        }
-        ui.ctx().copy_text(output);
-    }
     for (index, turn) in task.turns.iter().enumerate() {
         ui.push_id(index, |ui| {
             ui.label(format!(
@@ -761,27 +722,19 @@ fn task_details(ui: &mut egui::Ui, task: &Task, project: &std::path::Path) {
                 ui.collapsing("本轮累计变更", |ui| diff_text(ui, &turn.diff));
             }
             ui.add_space(6.);
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new("Lexington")
-                        .strong()
-                        .color(egui::Color32::from_rgb(57, 97, 185)),
-                );
-                if !turn.messages.is_empty() && ui.small_button("复制回复").clicked() {
-                    ui.ctx().copy_text(
-                        turn.messages
-                            .iter()
-                            .map(|(_, text)| text.as_str())
-                            .collect::<Vec<_>>()
-                            .join("\n\n"),
-                    );
-                }
-            });
+            ui.label(
+                egui::RichText::new("Lexington")
+                    .strong()
+                    .color(egui::Color32::from_rgb(57, 97, 185)),
+            );
             for (_, text) in &turn.messages {
                 rich_text(ui, text);
             }
             if !turn.error.is_empty() {
-                ui.colored_label(egui::Color32::DARK_RED, &turn.error);
+                ui.scope(|ui| {
+                    ui.visuals_mut().override_text_color = Some(egui::Color32::DARK_RED);
+                    output_text(ui, &turn.error, false, false);
+                });
             }
             ui.separator();
         });
@@ -817,25 +770,105 @@ fn code_text(ui: &mut egui::Ui, text: &str, diff: bool) {
                 .min_scrolled_height(0.)
                 .auto_shrink([false, true])
                 .show_rows(ui, row_height, lines.len(), |ui, rows| {
-                    for row in rows {
-                        let line = lines[row];
-                        let color = if diff && line.starts_with('+') {
-                            egui::Color32::from_rgb(25, 125, 65)
-                        } else if diff && line.starts_with('-') {
-                            egui::Color32::from_rgb(190, 55, 55)
-                        } else {
-                            ui.visuals().text_color()
-                        };
-                        ui.add_sized(
-                            [0., row_height],
-                            egui::Label::new(egui::RichText::new(line).monospace().color(color))
-                                .selectable(true)
-                                .wrap_mode(egui::TextWrapMode::Extend),
-                        );
-                    }
+                    ui.push_id(rows.start, |ui| {
+                        output_text(ui, &lines[rows].join("\n"), true, diff);
+                    });
                 });
         });
 }
+fn output_text(ui: &mut egui::Ui, mut text: &str, code: bool, diff: bool) {
+    let id = ui.next_auto_id();
+    let focused = ui.memory(|memory| memory.has_focus(id));
+    let previous =
+        egui::TextEdit::load_state(ui.ctx(), id).and_then(|state| state.cursor.char_range());
+    let secondary =
+        ui.input(|input| input.pointer.secondary_pressed() || input.pointer.secondary_released());
+    let mut layouter = |ui: &egui::Ui, text: &str, width: f32| {
+        let font = if code {
+            egui::TextStyle::Monospace
+        } else {
+            egui::TextStyle::Body
+        }
+        .resolve(ui.style());
+        let mut job = egui::text::LayoutJob::default();
+        if code {
+            for line in text.split_inclusive('\n') {
+                let color = if diff && line.starts_with('+') {
+                    egui::Color32::from_rgb(25, 125, 65)
+                } else if diff && line.starts_with('-') {
+                    egui::Color32::from_rgb(190, 55, 55)
+                } else {
+                    ui.visuals().text_color()
+                };
+                job.append(
+                    line,
+                    0.,
+                    egui::TextFormat {
+                        font_id: font.clone(),
+                        color,
+                        line_height: Some(
+                            ui.text_style_height(&egui::TextStyle::Monospace)
+                                + ui.spacing().item_spacing.y,
+                        ),
+                        ..Default::default()
+                    },
+                );
+            }
+        } else {
+            job.append(
+                text,
+                0.,
+                egui::TextFormat {
+                    font_id: font,
+                    color: ui.visuals().text_color(),
+                    ..Default::default()
+                },
+            );
+            job.wrap.max_width = width;
+        }
+        ui.fonts(|fonts| fonts.layout_job(job))
+    };
+    // &str is a read-only TextBuffer: selection and keyboard copy remain available.
+    let mut output = egui::TextEdit::multiline(&mut text)
+        .id(id)
+        .frame(false)
+        .margin(0)
+        .desired_rows(1)
+        .desired_width(ui.available_width())
+        .min_size(egui::Vec2::ZERO)
+        .layouter(&mut layouter)
+        .show(ui);
+    if secondary {
+        // egui treats any pointer press as a new cursor; preserve the original
+        // selection while opening the context menu, including a right-click within it.
+        output
+            .state
+            .cursor
+            .set_char_range(if focused { previous } else { None });
+        output.state.clone().store(ui.ctx(), id);
+    }
+    let range = output.state.cursor.char_range();
+    output.response.context_menu(|ui| {
+        let selected = range
+            .filter(|range| range.primary.index != range.secondary.index)
+            .map(|range| {
+                let [start, end] = range.sorted();
+                text.chars()
+                    .skip(start.index)
+                    .take(end.index - start.index)
+                    .collect::<String>()
+            })
+            .unwrap_or_default();
+        if ui
+            .add_enabled(!selected.is_empty(), egui::Button::new("复制"))
+            .clicked()
+        {
+            ui.ctx().copy_text(selected);
+            ui.close_menu();
+        }
+    });
+}
+
 fn rich_text(ui: &mut egui::Ui, text: &str) {
     let mut code = false;
     let mut block = String::new();
@@ -843,18 +876,22 @@ fn rich_text(ui: &mut egui::Ui, text: &str) {
         if line.trim_start().starts_with("```") {
             if code {
                 code_text(ui, block.trim_end(), false);
-                block.clear();
+            } else if !block.is_empty() {
+                output_text(ui, block.trim_end_matches('\n'), false, false);
             }
+            block.clear();
             code = !code;
-        } else if code {
+        } else {
             block.push_str(line);
             block.push('\n');
-        } else {
-            ui.add(egui::Label::new(line).selectable(true).wrap());
         }
     }
     if !block.is_empty() {
-        code_text(ui, block.trim_end(), false);
+        if code {
+            code_text(ui, block.trim_end(), false);
+        } else {
+            output_text(ui, block.trim_end_matches('\n'), false, false);
+        }
     }
 }
 
@@ -1055,6 +1092,193 @@ mod tests {
         }
         assert!(!app.busy, "task timed out");
         assert!(app.error.is_empty(), "{}", app.error);
+    }
+
+    #[test]
+    fn opening_tasks_scrolls_to_latest_output_and_preserves_manual_reading() {
+        let root = tempfile::tempdir().unwrap();
+        let a = root.path().join("a");
+        let b = root.path().join("b");
+        fs::create_dir(&a).unwrap();
+        fs::create_dir(&b).unwrap();
+        let ctx = egui::Context::default();
+        let mut app = Wife::from_root(&ctx, false, root.path().into());
+        let a = app.development.book.add(&a).unwrap();
+        let b = app.development.book.add(&b).unwrap();
+        app.development.book.active = Some(a.clone());
+        let mut ids = Vec::new();
+        for name in ["A", "B"] {
+            app.development.book.current_mut().unwrap().current_task = None;
+            app.development
+                .book
+                .begin(format!("Task {name}"), "Lexington", false);
+            ids.push(app.development.book.task().unwrap().id);
+            let turn = app.development.book.turn_mut().unwrap();
+            turn.status = "completed".into();
+            turn.messages = (0..60)
+                .map(|index| (index.to_string(), format!("Output {name} line {index}")))
+                .collect();
+            turn.messages.push(("tail".into(), format!("TAIL-{name}")));
+        }
+        let mut other = app.development.book.current().unwrap().tasks[0].clone();
+        other.turns[0].messages.last_mut().unwrap().1 = "TAIL-C".into();
+        app.development
+            .book
+            .projects
+            .iter_mut()
+            .find(|project| project.path == b)
+            .unwrap()
+            .tasks
+            .push(other);
+        app.development.viewed_task = Some(ids[0]);
+        app.development.open = true;
+        let time = std::cell::Cell::new(0.);
+        let frame = |app: &mut Wife, events| {
+            time.set(time.get() + 1. / 60.);
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200., 900.),
+                    )),
+                    time: Some(time.get()),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.development_window(ctx),
+            )
+        };
+        let visible = |output: &egui::FullOutput, expected: &str| {
+            output.shapes.iter().find_map(|shape| {
+                if let egui::Shape::Text(text) = &shape.shape
+                    && text.galley.job.text == expected
+                {
+                    let rect = text.galley.rect.translate(text.pos.to_vec2());
+                    if shape.clip_rect.contains_rect(rect) {
+                        return Some(rect);
+                    }
+                }
+                None
+            })
+        };
+        let scroll_up = |app: &mut Wife, tail: egui::Rect| {
+            let _ = frame(
+                app,
+                vec![
+                    egui::Event::PointerMoved(tail.center()),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0., 400.),
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            let mut output = frame(app, vec![]);
+            for _ in 0..30 {
+                output = frame(app, vec![]);
+            }
+            output
+        };
+        let mut output = frame(&mut app, vec![]);
+        for _ in 0..3 {
+            output = frame(&mut app, vec![]);
+        }
+        let tail = visible(&output, "TAIL-A").expect("opening a long task shows its last output");
+        output = scroll_up(&mut app, tail);
+        assert!(
+            visible(&output, "TAIL-A").is_none(),
+            "manual scroll must not be pulled back to the bottom"
+        );
+        app.development
+            .book
+            .current_mut()
+            .unwrap()
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == ids[0])
+            .unwrap()
+            .turns[0]
+            .messages
+            .push(("new".into(), "TAIL-A-NEW".into()));
+        for _ in 0..3 {
+            output = frame(&mut app, vec![]);
+        }
+        assert!(visible(&output, "TAIL-A-NEW").is_none());
+        assert_eq!(
+            app.development.book.task().unwrap().id,
+            ids[1],
+            "browsing must not change the send target"
+        );
+        for (id, marker) in [(ids[1], "TAIL-B"), (ids[0], "TAIL-A-NEW")] {
+            app.development.viewed_task = Some(id);
+            for _ in 0..3 {
+                output = frame(&mut app, vec![]);
+            }
+            assert!(visible(&output, marker).is_some(), "switch to {marker}");
+        }
+        output = scroll_up(&mut app, visible(&output, "TAIL-A-NEW").unwrap());
+        assert!(visible(&output, "TAIL-A-NEW").is_none());
+        app.development.open = false;
+        let _ = frame(&mut app, vec![]);
+        app.development.open = true;
+        for _ in 0..3 {
+            output = frame(&mut app, vec![]);
+        }
+        assert!(visible(&output, "TAIL-A-NEW").is_some());
+        output = scroll_up(&mut app, visible(&output, "TAIL-A-NEW").unwrap());
+        assert!(visible(&output, "TAIL-A-NEW").is_none());
+        app.development.page = 1;
+        let _ = frame(&mut app, vec![]);
+        app.development.page = 0;
+        for _ in 0..3 {
+            output = frame(&mut app, vec![]);
+        }
+        assert!(visible(&output, "TAIL-A-NEW").is_some());
+        output = scroll_up(&mut app, visible(&output, "TAIL-A-NEW").unwrap());
+        let button = output
+            .shapes
+            .iter()
+            .filter_map(|shape| {
+                if let egui::Shape::Text(text) = &shape.shape
+                    && text.galley.job.text == "Task A"
+                {
+                    let rect = text.galley.rect.translate(text.pos.to_vec2());
+                    if shape.clip_rect.contains_rect(rect) {
+                        return Some(rect);
+                    }
+                }
+                None
+            })
+            .min_by(|a, b| a.left().total_cmp(&b.left()))
+            .unwrap()
+            .center();
+        for pressed in [true, false] {
+            let _ = frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(button),
+                    egui::Event::PointerButton {
+                        pos: button,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        for _ in 0..3 {
+            output = frame(&mut app, vec![]);
+        }
+        assert!(
+            visible(&output, "TAIL-A-NEW").is_some(),
+            "reselecting the same task scrolls to the end"
+        );
+        // Equal task IDs in different projects must still count as a new task view.
+        app.development.book.active = Some(b);
+        for _ in 0..3 {
+            output = frame(&mut app, vec![]);
+        }
+        assert!(visible(&output, "TAIL-C").is_some());
     }
 
     #[test]
@@ -1401,101 +1625,135 @@ mod tests {
     }
 
     #[test]
-    fn task_copy_buttons_include_full_hidden_output_and_reply_markdown() {
-        use crate::development::{ExecutionItem, Turn};
-        let ctx = egui::Context::default();
-        let reply = "第一段\n\n```rust\nfn copied() {}\n```\n末尾";
-        let log = "offscreen log\n".repeat(6000);
-        let task = Task {
-            turns: vec![Turn {
-                user: "original".into(),
-                supplements: vec!["supplement".into()],
-                messages: vec![("reply".into(), reply.into())],
-                items: vec![ExecutionItem {
-                    id: "hidden".into(),
-                    command: "command".into(),
-                    output: log.clone(),
-                    status: "completed".into(),
-                    ..Default::default()
-                }],
-                diff: "+changed".into(),
-                error: "example error".into(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        for label in ["复制全部输出", "复制回复"] {
-            let mut point = None;
-            for _ in 0..3 {
-                let output = ctx.run(
+    fn output_context_menu_copies_only_the_dragged_unicode_selection() {
+        for (kind, reverse, select) in [
+            (0, false, true),
+            (0, true, true),
+            (1, false, true),
+            (2, false, true),
+            (0, false, false),
+        ] {
+            let ctx = egui::Context::default();
+            super::super::style::install(&ctx);
+            let text = if kind == 2 {
+                "+before 选择🙂中文\n-下一行 after"
+            } else {
+                "before 选择🙂中文\n下一行 after"
+            };
+            let selected = if kind == 2 {
+                "选择🙂中文\n-下一行"
+            } else {
+                "选择🙂中文\n下一行"
+            };
+            let frame = |events| {
+                ctx.run(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
-                            egui::vec2(900., 900.),
+                            egui::vec2(800., 600.),
                         )),
+                        events,
                         ..Default::default()
                     },
                     |ctx| {
                         egui::CentralPanel::default().show(ctx, |ui| {
-                            task_details(ui, &task, std::path::Path::new("/fixture"))
+                            if kind == 0 {
+                                rich_text(ui, text);
+                            } else {
+                                code_text(ui, text, kind == 2);
+                            }
                         });
                     },
+                )
+            };
+            let mut geometry = None;
+            for _ in 0..3 {
+                let output = frame(vec![]);
+                for shape in output.shapes {
+                    if let egui::Shape::Text(shape) = shape.shape
+                        && shape.galley.job.text == text
+                    {
+                        geometry = Some((shape.pos, shape.galley));
+                    }
+                }
+            }
+            let (origin, galley) = geometry.unwrap();
+            let start = text[..text.find(selected).unwrap()].chars().count();
+            let end = start + selected.chars().count();
+            let point = |index| {
+                origin
+                    + galley
+                        .pos_from_ccursor(egui::text::CCursor::new(index))
+                        .center()
+                        .to_vec2()
+            };
+            let (anchor, caret) = if reverse {
+                (point(end), point(start))
+            } else {
+                (point(start), point(end))
+            };
+            let pointer = |pos, button, pressed| {
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]
+            };
+            if select {
+                let _ = frame(pointer(anchor, egui::PointerButton::Primary, true));
+                let _ = frame(vec![egui::Event::PointerMoved(caret)]);
+                let _ = frame(pointer(caret, egui::PointerButton::Primary, false));
+                let _ = frame(vec![]);
+            }
+            let menu_at = point(start + 1);
+            let _ = frame(pointer(menu_at, egui::PointerButton::Secondary, true));
+            let mut output = frame(pointer(menu_at, egui::PointerButton::Secondary, false));
+            let mut menu_point = None;
+            for _ in 0..3 {
+                assert!(
+                    output
+                        .platform_output
+                        .commands
+                        .iter()
+                        .all(|command| !matches!(command, egui::OutputCommand::CopyText(_))),
+                    "opening a menu must not copy"
                 );
                 for shape in output.shapes {
-                    if let egui::Shape::Text(text) = shape.shape
-                        && text.galley.job.text == label
+                    if let egui::Shape::Text(shape) = shape.shape
+                        && shape.galley.job.text == "复制"
                     {
-                        point = Some(text.galley.rect.translate(text.pos.to_vec2()).center());
+                        menu_point =
+                            Some(shape.galley.rect.translate(shape.pos.to_vec2()).center());
                     }
                 }
+                output = frame(vec![]);
             }
-            let point = point.expect("copy button visible");
-            let mut copied = None;
+            let menu_point = menu_point.expect("copy context menu");
+            let mut copied = Vec::new();
             for pressed in [true, false] {
-                let output = ctx.run(
-                    egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(
-                            egui::Pos2::ZERO,
-                            egui::vec2(900., 900.),
-                        )),
-                        events: vec![
-                            egui::Event::PointerMoved(point),
-                            egui::Event::PointerButton {
-                                pos: point,
-                                button: egui::PointerButton::Primary,
-                                pressed,
-                                modifiers: egui::Modifiers::NONE,
-                            },
-                        ],
-                        ..Default::default()
-                    },
-                    |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
-                            task_details(ui, &task, std::path::Path::new("/fixture"))
-                        });
-                    },
-                );
+                let output = frame(pointer(menu_point, egui::PointerButton::Primary, pressed));
                 for command in output.platform_output.commands {
                     if let egui::OutputCommand::CopyText(text) = command {
-                        copied = Some(text);
+                        copied.push(text);
                     }
                 }
             }
-            let copied = copied.expect("copy command emitted");
-            if label == "复制回复" {
-                assert_eq!(copied, reply);
-            } else {
-                for text in [
-                    "original",
-                    "supplement",
-                    &log,
-                    "+changed",
-                    reply,
-                    "example error",
-                ] {
-                    assert!(copied.contains(text));
-                }
-            }
+            assert_eq!(
+                copied,
+                if select {
+                    vec![selected.to_owned()]
+                } else {
+                    vec![]
+                },
+                "kind {kind}, reverse {reverse}, select {select}"
+            );
+            // The output is read-only even while its selection has focus.
+            let output = frame(vec![egui::Event::Text("cannot edit".into())]);
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(shape) if shape.galley.job.text == text)));
         }
     }
 
