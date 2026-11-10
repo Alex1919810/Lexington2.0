@@ -10,6 +10,7 @@ mod development_memory;
 mod development_tests;
 mod dialog;
 mod input;
+mod memo;
 mod new_character;
 mod pet;
 mod role_card;

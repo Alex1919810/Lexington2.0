@@ -68,3 +68,7 @@
 - development 的多进程协议夹具在并发测试下可能出现临时脚本 ETXTBSY；这组用例可用 `cargo test --locked ui::development::tests:: -- --test-threads=1` 串行验证，避免将夹具启动竞争误判为协议功能失败。
 
 - 任务详情的末尾定位只在打开/重新点击/切换目标或重返任务页时执行，使用项目路径 + 任务 ID 区分目标；按真实布局滚动到末尾，不能每帧强制滚动干扰上翻阅读和选区复制。
+
+- 多个 immediate viewport 在主线程同步渲染/交换缓冲；禁止用逐 surface 的 vsync 作为动画时钟。主窗使用不依赖焦点的定时重绘，egui 0.31 的 request_repaint_after 会扣除 predicted_dt，软件限帧须补回该值，避免关闭 vsync 后空闲忙循环。
+
+- 备忘录使用独立 MemoUi 和原生 viewport，数据仅在首次打开时加载；from_root 不访问用户备忘录。事项操作在 viewport 回调后执行，成功落盘才更新勾选/删除状态和清空新增草稿；关闭保留未添加草稿。多行编辑器须限高滚动，事项预留删除按钮宽度并显式 Wrap，避免长文挤出控件。

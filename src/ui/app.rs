@@ -91,6 +91,7 @@ pub struct Wife {
     pub(super) character_creation: super::new_character::CharacterCreation,
     pub(super) context_ui: super::roleplay_context::ContextUi,
     pub(super) character_memory_ui: super::character_memories::CharacterMemoryUi,
+    pub(super) memo: super::memo::MemoUi,
     transparency: Option<std::sync::Arc<super::transparency::Transparency>>,
 }
 impl Wife {
@@ -237,6 +238,7 @@ impl Wife {
             character_creation: Default::default(),
             context_ui: Default::default(),
             character_memory_ui: Default::default(),
+            memo: Default::default(),
             transparency: None,
         };
         app.refresh(ctx);
@@ -301,6 +303,10 @@ impl Wife {
             }
             if ui.button("人物记忆").clicked() {
                 self.open_character_memories();
+                ui.close_menu();
+            }
+            if ui.button("备忘录").clicked() {
+                self.open_memos();
                 ui.close_menu();
             }
             ui.separator();
@@ -372,7 +378,11 @@ impl Wife {
         {
             self.window_pixels_per_point = ctx.pixels_per_point();
         }
-        ctx.request_repaint_after(Duration::from_millis(16));
+        // egui subtracts predicted_dt from repaint delays. Compensate so our
+        // 60 Hz timer remains a real wait with vsync disabled, rather than a
+        // continuous repaint loop. This timer also runs when no window has focus.
+        let predicted = ctx.input(|i| Duration::from_secs_f32(i.predicted_dt));
+        ctx.request_repaint_after(Duration::from_secs_f64(1. / 60.) + predicted);
         #[cfg(any(target_os = "linux", windows))]
         if let Some(window) = &mut self.drag_window {
             if ctx.input(|i| i.pointer.any_pressed()) {
@@ -566,6 +576,7 @@ impl Wife {
         self.settings_ui(ctx);
         self.development_window(ctx);
         self.character_memories_window(ctx);
+        self.memo_window(ctx);
         self.codex_prompt_ui(ctx);
         self.clock_notice_ui(ctx);
         self.alarm_popup_ui(ctx);

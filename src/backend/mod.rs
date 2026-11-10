@@ -5,6 +5,7 @@ pub mod codex;
 pub mod codex_config;
 pub mod config;
 pub mod handoff;
+pub mod memo;
 pub mod resources;
 pub mod weather;
 

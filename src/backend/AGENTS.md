@@ -37,3 +37,5 @@
 - Client::run_test 使用 command/exec 直接执行显式选择的 argv，省略 sandboxPolicy/env 以继承本机配置，不发送模型 turn。processId 用于 terminate；长命令不受 30 秒 ACK 限制，独立执行按配置超时及有界输出处理。TestResult 与普通 turn 事件分开，错误/取消/缺退出码不得视为通过。
 
 - 运行中输入通过 turn/steer + expectedTurnId 追加到当前轮次，独立 Steered 结果确认成功或失败；不能借此创建新轮次、恢复已结束轮次或改变权限。补充 ACK 可以晚于完成通知；补充拒绝/编号不匹配/确认超时不终止原任务，迟到 ACK 不应影响后续请求。
+
+- 备忘录由 memo::MemoState 独立管理，UI 注入普通/--dev 数据路径，各角色共用；正文按 Unicode 字符校验。临时文件同步后原子替换，成功才更新内存；加载须校验版本、唯一 ID 和正文，错误不能以空记录覆盖。

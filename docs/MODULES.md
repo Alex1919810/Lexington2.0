@@ -38,6 +38,7 @@ src/
 │   ├── roleplay_memory.rs
 │   ├── roleplay_vector.rs
 │   ├── character_memories.rs
+│   ├── memo.rs
 │   ├── dialog.rs
 │   ├── clock.rs
 │   ├── codex.rs
@@ -63,6 +64,7 @@ src/
 │   ├── codex_config.rs
 │   ├── handoff.rs
 │   ├── handoff_windows.rs
+│   ├── memo.rs
 │   └── clock.rs
 ├── development/
 │   ├── AGENTS.md
@@ -375,7 +377,7 @@ Windows x64 增量验收：27 项相关 Rust 测试、fmt 和 Clippy 通过；Wi
 
 ## 启动与依赖方向
 
-- `main.rs`：先处理 `--check-transparency` 隐藏 GL 上下文的透明输出验收，再处理 `--check-embedding` 固定文本离线验收和 `--ask-files` / `--ask-json` / `--native-messaging` 无 GUI 入口，再取得 Linux/Windows 普通/开发模式独立实例锁并创建 eframe 原生窗口、选择 X11/Wayland/Win32 后端、加载窗口图标并构造 `ui::Wife`。普通尺寸 500×500，`--dev` 为 800×600。Linux X11/XWayland 使用 Dock 桌面浮层类型，不设置 strut、不占用工作区；避免 GNOME 将透明窗体整块限制在屏幕内，使立绘中心可到屏幕边缘。
+- `main.rs`：先处理 `--check-transparency` 隐藏 GL 上下文的透明输出验收，再处理 `--check-embedding` 固定文本离线验收和 `--ask-files` / `--ask-json` / `--native-messaging` 无 GUI 入口，再取得 Linux/Windows 普通/开发模式独立实例锁并创建 eframe 原生窗口、选择 X11/Wayland/Win32 后端、加载窗口图标并构造 `ui::Wife`。普通尺寸 500×500，`--dev` 为 800×600。Glow 关闭各 surface 的垂直同步：immediate 子 viewport 在主 UI 线程同步交换缓冲，逐窗等待 vblank 会串行阻塞桌宠，失焦时还可能受后台 surface 节流影响；主窗由 UI 定时请求刷新。Linux X11/XWayland 使用 Dock 桌面浮层类型，不设置 strut、不占用工作区；避免 GNOME 将透明窗体整块限制在屏幕内，使立绘中心可到屏幕边缘。
 - `ui` 可调用 `backend`、`roleplay`、`development` 和 `tools`；`backend` 可消费 `roleplay` 的提示和世界书结果，不依赖 `ui`、egui 或 GPU 纹理；`roleplay` 可调用 `tools` 的通用存储，不依赖 `backend`、UI 或 egui；`tools` 不依赖应用 UI 或业务模块。
 - `development` 不依赖 backend/UI/roleplay/egui；backend 仅消费开发指令和执行事件类型，不负责工作区界面。
 - `tools/platform.rs` 是平台与窗口框架的适配边界，可依赖 eframe/egui/winit；路径和解码工具不依赖这些框架。
@@ -387,8 +389,8 @@ Windows 同样启用 UI 的 Inbox、原生位置保存/恢复、显示器检测�
 
 | 文件 | 职责与主要接口 | 依赖及约束 |
 |---|---|---|
-| `ui/mod.rs` | 声明 UI 子模块（含天气），对入口导出 `Wife` | 具体组件保持在 UI 模块内部 |
-| `ui/app.rs` | 定义 Wife 与 eframe::App，编排资源、主窗、Codex、提醒及独立设置/人物记忆/development viewport；加载 development 工作区，退出时保存任务中断状态 | 测试 from_root 不启动 CLI/监测或访问用户记录；普通/--dev 的位置和任务文件分别隔离；development_turn 标识本轮显示归属，与开发指令模式分开。Codex 批次用完预算时请求下一帧，保留动画刷新机会。热加载失败保留有效配置；developmentMode 改变等待当前任务结束再新建会话。主窗 input_regions 只包含实际可见控件，独立 viewport 不加入 XShape；主窗最终执行透明颜色转换。生成期间既不按超时清除输出，也不响应气泡外点击关闭；turn_ui_hidden 记录用户对本轮的显式收起，见下方交互说明。窗口位置、角色创建和资源加载约束沿用相关小节 |
+| `ui/mod.rs` | 声明 UI 子模块（含天气和备忘录），对入口导出 `Wife` | 具体组件保持在 UI 模块内部 |
+| `ui/app.rs` | 定义 Wife 与 eframe::App，编排资源、主窗、Codex、提醒及独立设置/人物记忆/备忘录/development viewport；加载 development 工作区，退出时保存任务中断状态 | 测试 from_root 不启动 CLI/监测或访问用户记录；普通/--dev 的位置和任务文件分别隔离；development_turn 标识本轮显示归属，与开发指令模式分开。主窗无论焦点在哪都以 60Hz 定时请求重绘；egui 0.31 会从 request_repaint_after 扣除 predicted_dt，须补回预测时长，避免关闭 vsync 后 16ms 请求退化为零等待忙循环。Codex 批次用完预算时请求下一帧，保留动画刷新机会。热加载失败保留有效配置；developmentMode 改变等待当前任务结束再新建会话。主窗 input_regions 只包含实际可见控件，独立 viewport 不加入 XShape；主窗最终执行透明颜色转换。生成期间既不按超时清除输出，也不响应气泡外点击关闭；turn_ui_hidden 记录用户对本轮的显式收起，见下方交互说明。窗口位置、角色创建和资源加载约束沿用相关小节 |
 | `ui/pet.rs` | `pet_ui` 绘制立绘/默认宠物和阴影，设置宠物、对话、输入层的共同变换，处理圆形命中、点击与拖动；默认宠物几何和变换测试也在此 | 使用 `Picture` 和平台拖动；将当前帧的归一化 alpha 覆盖区域映射到立绘实际位置并应用共同变换，默认宠物按身体轮廓生成输入区域，阴影不拦截点击；返回尺寸、变换和点击结果供 app 编排。容器 450×450，侧栏不参与共同缩放；拖动阈值 5 个逻辑像素；按下时由平台层读取原生屏幕指针/窗口坐标捕获锚点，不使用 egui 可能过时的窗口局部指针 |
 | `ui/settings.rs` | 独立 720×560 设置 viewport，126px 侧栏提供常规/连接/打卡/闹钟/天气/角色卡导航，右侧为标题说明与卡片式滚动内容，各导航页独立保留滚动位置；连接页仅展示继承环境状态、development 模式、任务窗口入口及会话重启；保存开关、刷新资源 | 无边框不透明 Dock/置顶，按原生指针锚点拖动，控制区不拖窗，嵌入后端回退 Foreground Window。操作在 viewport 回调后执行；无模型/API/Key 表单或凭据草稿。developmentMode 保存成功后 reload_config，忙碌结束再建立新会话；手动重启为当前项目新建任务，不恢复旧线程。保留未知配置与旧密钥；设置关闭只销毁子窗口 |
 | `ui/sidebar.rs` | `sidebar` 绘制七个按钮、悬停提示与动画，报告本帧是否处理点击；↻ 调用 `toggle_damage` 切换同服装正常/战损，▶ 调用 `next_illustration` 在当前状态队列循环；`clock` 将持久化后的手动打卡结果转为对话，仅成功开始计时后排队查询天气，取消不查询，失败可从打卡设置查看 | 用 `damage_counterpart` 判断切换按钮是否可用，缺少同角色/格式/服装配对时禁用；战损时 ↻ 为橙色，悬停提示显示正常/战损切换目标；其他按钮统一使用“下一张立绘”“切换正常/Q版立绘”“切换live2d”“切换角色”，不附加实现说明。显示顺序按动作索引 [0,1,2,3,6,4,5] 排列，保留各动作动画 ID。选择变更后通过 app 重载纹理；按钮 40×40、间隔 10，仅按钮自身（随悬停缩放）加入输入区域、间隙穿透；侧栏点击须阻止同帧外部点击关闭 |
@@ -398,6 +400,7 @@ Windows 同样启用 UI 的 Inbox、原生位置保存/恢复、显示器检测�
 | `ui/development_diagnostics.rs` | 诊断列表、过滤、来源检查与分析入口 | 只读项目快照；分析在 viewport 回调后发送，模式关闭不自动附加 |
 | `ui/development_tests.rs` | 测试配置编辑、运行队列、历史结果及失败分析 | 复用 Client::run_test；模型任务和本地测试互斥，状态绑定项目/run ID，重启保存中断 |
 | `ui/development_memory.rs` | 项目记忆草稿、核对/停用/删除、任务摘录候选及来源状态 | 保存先写盘再更新内存；变更记忆新建干净线程，角色记忆独立 |
+| `ui/memo.rs` | `MemoUi` 管理独立备忘录窗口、草稿、筛选及错误；`open_memos/memo_window` 由桌宠右键“备忘录”打开，`memo_ui` 提供新增、完成/恢复、逐条彻底删除与全部/待办/已完成筛选 | 500×520 原生置顶 viewport，最小 380×300，Embedded 回退 Foreground Window 并注册输入区域；首次打开按桌宠所在显示器限制位置并预留原生标题栏空间，映射后延迟激活，关闭只销毁备忘录窗口、保留未添加草稿。局部沿用 panel_style/card；事项复选框和正文靠左，完成文字置灰划线，长事项为删除按钮预留右列并自动换行；多行草稿限高滚动，标题/新增/筛选固定、列表独立滚动。文件仅首次打开时加载，普通/--dev 使用 data_root 下 memos.json/memos-dev.json，各角色共用；viewport 回调后执行操作，写盘成功才更新条目/清空草稿，失败显示错误并保留原状态。读取失败禁用写入并提供重读，不启动模型或改动聊天/设置/人物记忆状态 |
 | `ui/alarm.rs` | `AlarmUi` 管理表单和错误状态；`load_alarms` 加载持久化记录；`alarm_settings_ui` 提供 HH:MM、提示语、每天重复、新增/编辑/删除及启停；`alarm_popup_ui` 每秒检查到期并显示独立原生窗口 | 依赖 AlarmState、clock 本地时间和 paths；弹窗 420×260、无边框不透明置顶，按桌宠所在显示器中央定位（X11 用 RandR，支持负坐标和 DPI），不移动桌宠。X11 使用 Dock 层，普通 AlwaysOnTop 可能被桌宠 Dock 遮挡；映射后 800ms 一次性 Focus/AlwaysOnTop（晚于主窗启动置顶），不复用桌宠 XShape 遮罩。多个到期提醒合并，长文本滚动，固定确认按钮；确认或系统关闭先持久化清除 pending，保存失败保留弹窗。非原生 egui 集成降级为居中 Window 并加入输入区域；Wayland 位置由合成器决定 |
 | `ui/clock.rs` | `poll_clock` 消费系统采样、驱动自动确认及提醒；`clock_settings_ui` 展示自动开关、检测状态、起点和编辑；`clock_action` 保存/撤销/手动操作；`clock_notice_ui` 提供修改和撤销入口 | 调用后端 ClockState 和工具 Monitor；自动打卡成功后排队天气查询（忙碌时也排队但不覆盖聊天）；自动提示加入原生输入区域，关闭立即移除；过期采样不确认，自动开关/确认时长热加载会重置候选；加载失败禁用更改并显示错误，避免覆盖损坏记录 |
 | `ui/input.rs` | 普通输入和 development 输入通过 MessageSource 共用 send_message；poll_handoff 顺序消费外部请求，校验并切换项目后发送，保留宠物输入草稿；输入框、焦点、加载及错误显示 | 主窗输入、开发窗口、外部请求显式标记发送来源；开发来源运行时不绘制主窗输入思考区，结束后主窗不显示该轮错误。原始用户输入只裁首尾空白，不附加路径；持久化副本由 Client::sanitize 遮蔽。发送成功才建立任务记录；模式重连待处理且空闲时先重连再提交。VS Code workspace 优先，其他文件按登记目录/Git 根路由，跨项目或来源不明不发送到活动项目；尚无工作区的旧入口保留普通聊天行为。忙碌继续排队，无焦点抢占或重复提交；原生悬停、失焦及错误输入约束沿用 UI AGENTS |
@@ -405,7 +408,7 @@ Windows 同样启用 UI 的 Inbox、原生位置保存/恢复、显示器检测�
 | `ui/transparency.rs` | Transparency::new/paint/destroy 管理主透明窗口的最终 glow 输出转换；screenshot_rgba 还原桌面预乘读回，check 提供无用户数据的真实 GPU 验收 | UI 层独占 GPU 资源；最终屏幕拷贝纹理采用 RGBA8/nearest，避免额外 sRGB 解码和再次滤波。回调排在 Debug 顶层，不注册输入区域，不改 alpha 或原始素材；细节与验证见下节 |
 | `ui/style.rs` | `install` 注册字体、浅色主题及全 viewport 的 IME 提交兼容回调；`panel_style/card` 为设置和人物记忆提供局部浅灰背景、青绿色选中态、深色文本、圆角控件与白色卡片，不修改全局 Context 样式；`font`、`bubble_tail`、`draw_bubble`、`draw_shadow` 提供共同绘制规则 | 使用 egui 与 `Picture`；CJK TTC 使用简体中文 face index 2；对话尾尖距左边 28px，输入尾尖居中。气泡 Area 的溢出策略由对话/输入组件保持 `constrain(false)`。egui 0.31 对无预编辑的连续 Commit 沿用旧候选光标，首词后会丢字；未处于预编辑的 Commit 转为 Text，让 TextEdit 按当前光标/选区插入。正常 Enabled/Preedit/Commit 流程保留；组合状态按 viewport 与聚焦控件隔离，失焦或 Disabled 清除，同一 Context 重装样式不重复注册。单/多行回归覆盖连续四次中文候选、跨帧预编辑及 Unicode 选区替换，入口 `cargo test --locked ui::style::tests::` |
 | `ui/weather.rs` | `WeatherUi` 保存城市搜索、请求 ID 和待展示天气；`weather_settings_ui/weather_action` 提供搜索、选择保存、停用和主动查看；`queue_clock_weather/poll_weather` 连接手动/自动打卡与对话输出 | 只在打卡成功或用户主动搜索/查看时联网，平时不轮询、不预取；未配置城市维持原打卡消息。工作线程回调只请求重绘；结果按请求 ID、城市、打卡起点及本地日期关联，取消/换城/跨日丢弃，生成中或已有其他消息时延后，错误不回滚打卡；主动查看不要求打卡。显示全文并复用气泡滚动区；测试用夹具验证设置点击、自动/手动触发、闲置不联网、消息避让和失效回复 |
-| `ui/tests.rs` | 使用真实 egui 指针和键盘事件验证组件协作：侧栏、正常/战损对应切换、下一张的状态隔离、跨格式保留服装、角色与格式、对话、打卡、输入、外部请求在任务中排队/同一会话多轮/来源路径和行号保留/完成不覆盖草稿、普通/开发窗口悬停立绘唤出输入、点击聚焦输入、原生失焦后草稿/错误隐藏且内容保留、再悬停恢复及生成中显示、Codex 流式回复/失败、配置热加载/错误保留/忙碌延迟重建、设置开关点击/持久化/同会话连续切换、API 表单本机夹具自动填充/读取不落盘/继承保存不复制凭据和模型/滚动保存/密码遮蔽及按住显示与松开或失焦隐藏/非法地址拒绝/成功保存及忙碌延迟重连、空白背景/隐藏输入框不命中与关闭窗口输入区域立即清理、右键菜单关闭项在立绘外持续接收原生输入并触发退出、自动打卡提示撤销、时间编辑、自动开关持久化和热加载、闹钟表单校验、编辑/保存、启停/删除、弹窗外点击不消失和确认持久化、位置保存/恢复/开发模式隔离/无效或越界位置回退及中文排版；真实立绘下的连续中文输入、输入三个字后异步错误仍可继续、长文本水平滚动与 IME 提交；侧栏资源用例统一验证图片加载、格式/正常战损切换，并在每次切换后调用 `refresh` 验证路径、状态和图片加载保留；资源数量与配对完整性统一由 backend/character.rs 检查 | 使用模拟 Codex 子进程和临时配置，不访问真实模型或凭据；GIF 和几何专项测试靠近各自 UI 实现 |
+| `ui/tests.rs` | 使用真实 egui 指针和键盘事件验证组件协作：侧栏、正常/战损对应切换、下一张的状态隔离、跨格式保留服装、角色与格式、对话、打卡、输入、外部请求在任务中排队/同一会话多轮/来源路径和行号保留/完成不覆盖草稿、普通/开发窗口悬停立绘唤出输入、点击聚焦输入、原生失焦后草稿/错误隐藏且内容保留、再悬停恢复及生成中显示、Codex 流式回复/失败、配置热加载/错误保留/忙碌延迟重建、设置开关点击/持久化/同会话连续切换、API 表单本机夹具自动填充/读取不落盘/继承保存不复制凭据和模型/滚动保存/密码遮蔽及按住显示与松开或失焦隐藏/非法地址拒绝/成功保存及忙碌延迟重连、空白背景/隐藏输入框不命中与关闭窗口输入区域立即清理、右键菜单关闭项在立绘外持续接收原生输入并触发退出、自动打卡提示撤销、时间编辑、自动开关持久化和热加载、闹钟表单校验、编辑/保存、启停/删除、弹窗外点击不消失和确认持久化、位置保存/恢复/开发模式隔离/无效或越界位置回退及中文排版；真实立绘下的连续中文输入、输入三个字后异步错误仍可继续、长文本水平滚动与 IME 提交；侧栏资源用例统一验证图片加载、格式/正常战损切换，并在每次切换后调用 `refresh` 验证路径、状态和图片加载保留；资源数量与配对完整性统一由 backend/character.rs 检查 | 使用模拟 Codex 子进程和临时配置，不访问真实模型或凭据；GIF 和几何专项测试靠近各自 UI 实现；idle_pet_keeps_a_nonzero_refresh_timer_after_focus_moves_away 检查聚焦及失焦时空闲刷新等待约 16.7ms，不因 predicted_dt 抵消而忙循环，也不因失焦停止 |
 
 主窗生成显示由 ui/dialog.rs、input.rs、codex.rs、pet.rs 与 app.rs 协作：尚无正文时输出气泡显示“Lexington正在思考”（开发窗口来源和独立测试执行除外），正文到达后原位显示；生成期间忽略超时与外部点击关闭。两次连续立绘短按将输出气泡与下方输入/思考区一起收起并释放输入焦点，不中断任务；再单击一次恢复本轮累计输出，尚在生成时一并恢复思考区。Live2D 保留部位动作并支持该收起/恢复操作；流式片段不重置两次点击的计数。收起后仍接收文本并更新项目任务记录，流式/最终文本不会自行重开面板；完成后收起状态保留至用户单击恢复，新提交或会话重建重置状态。正常显示的回复在完成后恢复原有自动关闭计时。ui/tests.rs 的 `pending_reply_stays_visible_and_pet_clicks_hide_and_restore_the_live_turn` 使用临时握手文件控制首段、后续与完成，覆盖上述显示/恢复、跨片段点击、完成后不弹回与全文保留；不依赖睡眠猜测流式顺序。
 
@@ -417,7 +420,7 @@ Windows 同样启用 UI 的 Inbox、原生位置保存/恢复、显示器检测�
 
 | 文件 | 职责与主要接口 | 依赖及约束 |
 |---|---|---|
-| `backend/mod.rs` | 声明后端子模块（含天气、外部上下文 handoff 和本机 Codex 配置读取），集中保留配置、审批/自动打卡开关无损保存、确认时长边界及错误保护、扫描的测试及共享临时目录夹具 | 协议测试位于 codex.rs，资源扫描和配置测试不需要外部服务 |
+| `backend/mod.rs` | 声明后端子模块（含天气、备忘录、外部上下文 handoff 和本机 Codex 配置读取），集中保留配置、审批/自动打卡开关无损保存、确认时长边界及错误保护、扫描的测试及共享临时目录夹具 | 协议测试位于 codex.rs，资源扫描和配置测试不需要外部服务 |
 | `backend/handoff.rs` | Request 定义 text/files/source/line 与可选 workspace/diagnostics；校验大小和绝对路径，生成分析提示；Endpoint/Inbox/deliver/native_host 维持本地有界 FIFO 与 ACK | JSON ≤1 MiB、最多 32 路径及 16 待处理；workspace 只能为本地绝对目录，真实路径归属由 development 处理。Unix socket 使用私有目录/0600、flock 与 SO_PEERCRED；Windows 使用用户私有命名管道。ACK 仅表示入队，交付后不重试；无网络监听或剪贴板监听 |
 | `backend/config.rs` | Config/CodexConfig 与尺寸、打卡、天气配置；read/load；save_no_approval/save_development_mode/save_auto_clock/save_weather 无损原子保存 | config.json 保持 camelCase；随包 config.json 仅保留 noApproval/developmentMode（默认均 false）；CodexConfig 仅反序列化这两个开关；executable/working_directory 仅运行时使用。旧 executable/workingDirectory/model/useCustomApi/baseUrl/apiKey 忽略且无损保留，不覆盖环境。connection_changed 包含 developmentMode，排除审批开关。保存失败不更新内存，损坏 JSON 拒绝覆盖，同目录同步后原子替换，Unix 0600；尺寸/计时及天气校验保持 |
 | `backend/resources.rs` | 定义 `Illustration`（含服装名 `outfit` 和战损标记 `damaged`）；`illustrations` 扫描 resource/illustration 与 config/characters 的PNG/GIF 立绘及 live2d/*/actor.json 模型并解析配对元数据；跳过隐藏暂存目录，`background` 选择首张支持的背景，`texts` 读取非空角色台词 | 标准库文件读取和 serde_json；只解析文件名最后的 `_Normal` / `_Damage` 后缀，ASCII 大小写不敏感；无后缀按正常处理，其完整文件名主体作为服装名。保留 `resource/` 布局，按目录识别角色与格式，拒绝台词路径穿越，不解码图片 |
@@ -425,6 +428,7 @@ Windows 同样启用 UI 的 Inbox、原生位置保存/恢复、显示器检测�
 | `backend/codex_config.rs` | LocalCodexConfig::read 只读当前 profile/provider 的 API Key，供输出遮蔽 | 依赖 toml/serde_json；不展示模型/地址/凭据，不保存或覆盖 Codex 配置。支持 env_key、experimental_bearer_token、OpenAI 环境/登录文件中的 API Key，不借用 OAuth tokens。解析错误不带源文本，测试使用临时目录与注入环境 |
 | `backend/codex.rs` | Client::start_in_workspace/start_structured/submit/submit_with_context/steer/run_test/interrupt/reply/poll/sanitize；app-server stdio、线程恢复、审批和执行事件 | 本机 0.167.0 Schema；initialize → initialized → thread/start 或 thread/resume。模型/API/登录继承环境与本机配置；LEXINGTON_CODEX_EXECUTABLE 指定程序，Windows 优先使用环境 exe 并拒绝 cmd/bat；无模型/提供方 -c 覆盖。developmentMode 开启才附加 development::INSTRUCTIONS，并禁用按角色向量历史的混入；结构化后台提炼保持独立临时 cwd、只读和禁用工具。thread ID 回传任务；turn/start 明确传原始审批策略或 never，不扩大沙箱。关联 thread/turn/request，ACK 30 秒，流式生成不限时；命令输出、item 生命周期、plan、累计 diff 和 patch 更新转 Activity，agentMessage 只走文本通道。完整环境/提供方 Key 在事件和持久化前遮蔽。Unix 独立进程组、Windows Job 清理整个子进程树，关闭 stdin 后 join 读取；不记录协议原文或凭据 |
 | `backend/weather.rs` | `City::validate` 校验选定地点；`Client::start/send/poll` 通过有界通道在单个工作线程中搜索城市和查询三天预报；解析 WMO 天气代码并生成中文文本 | ureq + Rustls HTTPS 直连 Open-Meteo 地理编码/预报接口，不经过 Codex，不依赖 egui；请求总超时 10 秒、禁重定向、响应限制 1 MiB、待处理队列 4。按城市及请求日缓存 30 分钟，更新失败可显示同城同日 6 小时内旧数据并注明；缓存只在内存，含更新时间/时区和来源。退出丢弃队列并回收线程，最多等待当前有超时请求。测试用本地 HTTP 夹具覆盖编码、缓存/换城、超时/非法/超大数据及无损配置保存 |
+| `backend/memo.rs` | `MemoState::load/items/add/set_completed/delete` 管理备忘录及持久化 | 不依赖 UI；版本 1 JSON 保存 id/text/completed，新事项置顶、裁首尾空白，正文 1～2000 个 Unicode 字符。读取校验版本、重复 ID、空白与过长正文，损坏/不兼容记录拒绝加载且不覆盖；同目录 NamedTempFile（Unix 0600）写入并同步后原子替换，成功后才提交内存，失败自动清理临时文件。删除从文件直接移除，完成与恢复跨重启保留；存储路径由 UI 注入，测试仅使用临时目录 |
 | `backend/alarm.rs` | `AlarmState::load/save/toggle/delete/poll/dismiss` 管理多个本地时间闹钟、调度与待确认提醒 | 不依赖 UI；时间严格 HH:MM，提示语 1～500 字符；一次性闹钟响后关闭，每天重复按 libc mktime 计算下一本地日期，不能固定加 86400 秒，跳过 DST 不存在时间。设置时间已过时安排下一次；启用重新计算；到期（含休眠/停机错过）每个闹钟只补一次并推进到未来，pending 跨重启保存；同时到期合并，重启不重复。普通/开发记录隔离，0600 临时文件同步后原子替换，保存失败不提交内存，损坏数据拒绝覆盖。含同时触发、重复/错过、重启、校验、编辑启停删除与存储失败测试 |
 | `backend/clock.rs` | `ClockState::load/observe/toggle/edit/undo/poll` 管理本地日期的自动确认、手动打卡、时间修正、撤销和一次性下班提醒；`now/local_time` 处理时间戳与本地时间 | 依赖配置、serde、标准库及 tools/time 跨平台 libc 本地时间转换，不依赖 UI。自动开始须持续活跃默认 180 秒，回溯首次操作；空闲满 60 秒、锁屏/不可用样本、采样间隔超过 10 秒、时钟跳变均重置确认，确认终点须有新操作。每天自动一次，手动取消、撤销或提醒后当天不再自动开始；跨本地日期重置。记录立即原子保存，失败不提交内存状态；起点、已处理和已提醒状态跨启动恢复，开发模式隔离；编辑拒绝未来或不存在的本地时间。含模拟时钟、断档、持久化、撤销、编辑和存储错误测试 |
 
@@ -464,7 +468,7 @@ Windows 非阻塞字节管道使用 PeekNamedPipe 区分暂时无数据与断开
 | `tools/vector_store.rs` | `VectorStore::open/put/pending/set_embedding/search/delete/prune/load_json/save_json` 保存命名空间文档、可重建向量和独立 JSON records；`Document` 保存原文/时间，`SearchHit` 返回文档与距离 | rusqlite 0.37 bundled SQLite + 静态 sqlite-vec 0.1.6，无数据库服务/动态扩展/Python/Node 运行依赖。使用普通 SQLite 表和 sqlite-vec 标量余弦距离精确扫描，按命名空间、模型空间和维度过滤后排序；不伪称 ANN。原文和向量同一行，改正文使索引失效，回填必须匹配当前原文；删除/裁剪同时去掉向量，id=None 表示清空该命名空间，同秒记录按插入顺序稳定裁剪。SQLite 事务语义，busy_timeout 250ms、secure_delete=ON，Unix 新文件 0600，版本 2（从版本 1 事务新增 records 表并保留旧向量）；JSON 单条最多 8 MiB，namespace/id 非空且最多 200 字节，解析错误不重置，向量删除不影响 records；损坏、未知或高版本数据库报错而不重置，不记录 SQL/正文或凭据。最多 4096 维且拒绝 NaN/Inf/零向量，通用层无角色、Embedding 或提示逻辑 |
 | `tools/paths.rs` | `resource_root` 定位资源根目录；`clock_state_file` / `alarm_state_file` 返回普通/开发模式独立的用户数据记录路径 | 顺序：`LEXINGTON_HOME` → 可执行文件旁存在 `resource/` 的目录 → 当前目录；闹钟（alarms.json / alarms-dev.json）及打卡状态使用 XDG_DATA_HOME，默认 ~/.local/share/lexington；Windows data_root 使用 LOCALAPPDATA/lexington，回退 USERPROFILE/AppData/Local，不能写入资源目录 |
 | `tools/activity.rs` | `Monitor::start/poll` 在后台每 2 秒采样系统空闲时间和会话可用性，返回带单调时间戳的 Sample；退出停止并回收线程 | Linux 用 loginctl 排除锁屏、远程和非活动会话，优先 gdbus 调用 Mutter IdleMonitor，原生 X11 可回退 XScreenSaver；Wayland 禁止回退 XWayland 空闲时钟。子进程有超时并清理，UI 不阻塞；不记录键鼠内容；不可用样本重置自动确认，保留手动入口；测试可注入采样 |
-| `tools/gif.rs` | `Decoder::load/advance` 返回当前 RgbaImage；支持 GIF/静态图片，控制隔帧播放、时序、循环次数、索引缓存与超限流式回退 | 不依赖 UI，不创建 GPU 纹理，不缓存合成帧。源帧 0、2、4…输出，各跳过帧先独立归一化延迟再合并到前一显示帧，奇数结尾保留，不跨循环合并，总时长不变。首轮缓存索引帧/调色板，96 MiB 预算仅针对单个当前 GIF，超限释放前缀并保持流式；完整缓存回放不重读源文件，循环时清空处置画布。保留透明索引、局部/全局调色板、交错帧及 Keep/Background/Previous：跳过 Keep 直接更新处置画布，跳过 Background 仅清区域，Previous 保留原画布，无需合成/上传被跳过帧的 RGBA。Finite(0) 视为无限，显式有限次数保留，原帧低于 20ms 按 100ms。回归覆盖无源文件回放、缓存超限、奇数/变延迟、跳过帧依赖、有限循环和 UI 纹理/透明遮罩；全量参考像素与合并延迟对比用 cargo test --release --locked bundled_frames_match_reference_decoder_pixel_for_pixel -- --ignored；frame_sampling_performance 用 --release --ignored --nocapture --test-threads=1 比较同等循环的原帧率/抽帧取帧，不含 UI/纹理开销 |
+| `tools/gif.rs` | `Decoder::load/advance` 返回当前 RgbaImage；支持 GIF/静态图片，控制隔帧播放、单调截止时间、循环次数、索引缓存与超限流式回退 | 不依赖 UI，不创建 GPU 纹理，不缓存合成帧。源帧 0、2、4…输出，各跳过帧先独立归一化延迟再合并到前一显示帧，奇数结尾保留，不跨循环合并，总时长不变。首轮缓存索引帧/调色板，96 MiB 预算仅针对单个当前 GIF，超限释放前缀并保持流式；完整缓存回放不重读源文件，循环时清空处置画布。保留透明索引、局部/全局调色板、交错帧及 Keep/Background/Previous：跳过 Keep 直接更新处置画布，跳过 Background 仅清区域，Previous 保留原画布，无需合成/上传被跳过帧的 RGBA。Finite(0) 视为无限，显式有限次数保留，原帧低于 20ms 按 100ms。额外重绘不得提前推进；普通抖动保留原截止时间相位，若新截止时间仍不晚于当前时间，丢弃整帧积压并从当前时间保留完整新帧延迟，避免窗口阻塞/失焦恢复后逐帧加速追赶，不跳过合成或消耗额外循环。时序回归用注入的 Instant 验证密集调用、轻微迟到及多秒停顿恢复。回归覆盖无源文件回放、缓存超限、奇数/变延迟、跳过帧依赖、有限循环和 UI 纹理/透明遮罩；全量参考像素与合并延迟对比用 cargo test --release --locked bundled_frames_match_reference_decoder_pixel_for_pixel -- --ignored；frame_sampling_performance 用 --release --ignored --nocapture --test-threads=1 比较同等循环的原帧率/抽帧取帧，不含 UI/纹理开销 |
 | `tools/platform.rs` | `configure` 设置平台窗口属性；Linux `DragWindow::new/arm/update/configure/focus` 应用 X11 窗口提示和绝对坐标拖动；`window_at_pointer` 从原生指针下窗口层级查找当前进程/指定标题并返回真实位置；`move_window` 对指定子窗口发送经确认的 _NET_MOVERESIZE_WINDOW，无窗口管理器时直接 ConfigureWindow；`position` 获取原生窗口屏幕坐标；`monitors` 返回 RandR 活动显示器矩形（主屏优先、含负坐标，失败回退根窗口尺寸），统一换算逻辑坐标；`screen_pointer` 获取屏幕绝对指针和左键状态供独立设置拖动；`pointer_position` 获取原生窗口局部指针，`set_input_regions` 应用 XShape Input 区域，含 DPI/拖动锚点回归测试 | 使用 eframe，Linux 另依赖 winit/x11rb（shape、randr、screensaver 特性）；XShape ≥ 1.1 时仅更新 Input、不能裁剪 Bounding/绘制区域；逻辑坐标按 DPI 换算后裁到 viewport，缓存相同输入区域以避免重复请求，使用 checked 请求。原生 Wayland 不应用该 X11 遮罩；Windows 导出 platform_windows.rs 实现，其他平台保留无操作配置入口。X11 请求关闭临时连接前执行 `.check()`；按下时同时查询原生屏幕指针与窗口位置捕获锚点，避免窗口移动后 egui 缓存的局部坐标滞后导致贴边重新拖动跳跃；阈值换算 DPI，不累加局部位移；独立设置使用根窗口指针查询实现 Dock 标题栏拖动，不依赖 WM 的 StartDrag |
 
 | `tools/live2d/mod.rs` / `render.rs` / `layered.rs` / `mesh.rs` | Actor 分派婚纱 IK 与分层网格/刚性部件模型，提供原生分层动画、共享轨道控制、移动 alpha 热区与 RGBA 渲染，接口及限制见原生 Live2D 小节 | 仅标准库、serde、image，不依赖 UI/GPU 或 Python；所有角色坐标和动作数据来自模型文件 |
@@ -509,6 +513,18 @@ GUI smoke 使用 LEXINGTON_CODEX_EXECUTABLE 指向不可用程序，并隔离 CO
 ## 验证入口
 
 `cargo test --locked ui::dialog::tests::` 验证预设台词在无 AI 输出时的原有循环、等待 AI 时不抢占、正常回复关闭后反复点击不回退，以及后续无输出失败轮次可恢复回退；使用临时资源和模拟 app-server，不访问真实模型/登录。
+
+### 备忘录增量验证
+
+`cargo test --locked ::memo::tests:: -- --test-threads=1` 验证新增/裁空白/多行/长度边界、勾选与恢复跨重启保留、彻底删除、0600 权限、坏数据/未知版本/重复 ID 保护及保存失败不提交内存。UI 使用真实 egui 指针事件验证右键菜单入口、新增、删除线、恢复、筛选、删除、关闭重开保留草稿、380×300 下首项/删除按钮可见、长事项换行与长草稿限高，以及保存失败保留草稿/勾选状态、聊天和模型隔离。主菜单变长后补测 `context_menu_close_receives_input_outside_artwork_and_exits` 和 `right_click_in_drag_circle_opens_context_menu`。
+
+Linux Xephyr + GNOME WM 已用临时配置和不可用的 Codex 路径完成原生验收：实际右键打开独立窗口、键盘新增事项、点击完成/恢复/删除、两次应用重启核对完成状态保留及删除不复活；缩至 380×300 后删除按钮仍可点击，截图检查正文靠左、完成删除线与紧凑布局，并核对初始窗口位于实际显示器范围内。未访问真实模型、凭据或用户备忘录；Windows 未作原生验收。
+
+### GIF 多窗口计时增量验收（2026-11-10）
+
+- 9 项相关增量测试通过：GIF 截止时间与停顿恢复、索引/处置、Picture 纹理与 Live2D 点击，以及主窗聚焦/失焦后约 16.7ms 的非零刷新等待；release 的随包 GIF 参考像素/合并延迟专项通过，fmt 与 Clippy 通过。
+- 本地临时 Xephyr + GNOME WM 探针使用临时配置、项目和固定色阶 GIF，按原生窗口像素的颜色序号区分真实 GIF 换帧与桌宠浮动；未访问真实模型/记录。4 秒采样中，单主窗、开发窗聚焦、开发诊断页、开发窗打开且其他应用聚焦分别观察到 101/100/102/101 次换帧（预期约 100 次），最长间隔约 55/68/71/76ms；开发窗与设置同时打开时为 80 次，最长约 113ms。后者在此嵌套显示中仍有渲染负载造成的掉帧，不能据此宣称任何负载/平台都恒定帧率；旧版同场景约 62 次。时序单测另验证多秒停顿后无积压追赶。
+- Linux 安装通过原子替换同步 release，安装二进制与构建产物逐字节一致；运行中旧版在当前开发轮次结束并保存后才通过 WM_DELETE_WINDOW 安全重启，重启程序核对新进程映像与映射窗口。此轮未实测 Windows/原生 Wayland。
 
 ### Linux 新功能增量验收（2026-11-09）
 

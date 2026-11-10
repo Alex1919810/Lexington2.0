@@ -89,6 +89,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Glow,
+        // Immediate child viewports swap on this same UI thread. Waiting for
+        // each surface's vblank serializes (and can throttle) the pet animation.
+        // The root UI schedules its own refresh timer instead.
+        vsync: false,
         persist_window: false,
         ..Default::default()
     };

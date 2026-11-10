@@ -59,7 +59,10 @@ impl Decoder {
         ))
     }
     pub fn advance(&mut self) -> Option<image::RgbaImage> {
-        if self.animation.is_some() && Instant::now() >= self.next_frame {
+        self.advance_at(Instant::now())
+    }
+    fn advance_at(&mut self, now: Instant) -> Option<image::RgbaImage> {
+        if self.animation.is_some() && now >= self.next_frame {
             let mut frame = self.animation.as_mut().and_then(GifFrames::next_sampled);
             if frame.is_none() {
                 if self.repeats_left == Some(0) {
@@ -78,7 +81,14 @@ impl Decoder {
             }
             match frame {
                 Some(Ok(frame)) => {
-                    self.next_frame += delay(&frame);
+                    let duration = delay(&frame);
+                    self.next_frame += duration;
+                    // Keep phase for ordinary repaint jitter, but discard a
+                    // backlog of whole frames after a blocked/hidden viewport.
+                    // Never race through stale deadlines when repaints resume.
+                    if self.next_frame <= now {
+                        self.next_frame = now + duration;
+                    }
                     return Some(frame.into_buffer());
                 }
                 _ => self.animation = None,
@@ -309,6 +319,67 @@ pub(crate) fn delay(frame: &image::Frame) -> Duration {
 mod tests {
     use super::*;
     use image::AnimationDecoder;
+
+    #[test]
+    fn playback_uses_deadlines_without_racing_through_a_stalled_viewport_backlog() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("timing.gif");
+        {
+            let mut encoder =
+                gif::Encoder::new(File::create(&path).unwrap(), 1, 1, &[255, 0, 0, 0, 255, 0])
+                    .unwrap();
+            encoder.set_repeat(gif::Repeat::Infinite).unwrap();
+            for index in [0, 1, 1, 0] {
+                encoder
+                    .write_frame(&gif::Frame {
+                        width: 1,
+                        height: 1,
+                        delay: 2,
+                        buffer: std::borrow::Cow::Owned(vec![index]),
+                        ..Default::default()
+                    })
+                    .unwrap();
+            }
+        }
+        let (mut decoder, first) = Decoder::load(&path).unwrap();
+        let start = decoder.next_frame - Duration::from_millis(40);
+        // Extra repaint calls (including child viewport activity) cannot speed
+        // up playback. Slightly late updates retain the original 40 ms phase.
+        for milliseconds in [0, 5, 16, 33, 39] {
+            assert!(
+                decoder
+                    .advance_at(start + Duration::from_millis(milliseconds))
+                    .is_none()
+            );
+        }
+        let second = decoder
+            .advance_at(start + Duration::from_millis(45))
+            .unwrap();
+        assert_ne!(first, second);
+        assert_eq!(decoder.next_frame, start + Duration::from_millis(80));
+        assert!(
+            decoder
+                .advance_at(start + Duration::from_millis(79))
+                .is_none()
+        );
+        // A multi-second interruption must not produce a fast catch-up loop.
+        let resumed = start + Duration::from_secs(5);
+        assert_eq!(decoder.advance_at(resumed).unwrap(), first);
+        assert_eq!(decoder.next_frame, resumed + Duration::from_millis(40));
+        for milliseconds in [0, 1, 5, 16, 33, 39] {
+            assert!(
+                decoder
+                    .advance_at(resumed + Duration::from_millis(milliseconds))
+                    .is_none()
+            );
+        }
+        assert_eq!(
+            decoder
+                .advance_at(resumed + Duration::from_millis(40))
+                .unwrap(),
+            second
+        );
+    }
 
     #[test]
     fn indexed_cache_replays_without_file_and_over_budget_stays_streaming() {

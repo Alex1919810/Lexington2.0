@@ -35,6 +35,40 @@ fn click(app: &mut Wife, ctx: &egui::Context, point: egui::Pos2) {
     );
 }
 #[test]
+fn idle_pet_keeps_a_nonzero_refresh_timer_after_focus_moves_away() {
+    let directory = tempfile::tempdir().unwrap();
+    let ctx = egui::Context::default();
+    let mut app = Wife::from_root(&ctx, false, directory.path().to_path_buf());
+    for focused in [true, false] {
+        // Settle initial widget animations before inspecting the idle timer.
+        for _ in 0..60 {
+            let mut input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0., 0.), vec2(500., 500.))),
+                focused,
+                ..Default::default()
+            };
+            input
+                .viewports
+                .get_mut(&egui::ViewportId::ROOT)
+                .unwrap()
+                .focused = Some(focused);
+            let output = ctx.run(input, |ctx| app.ui(ctx));
+            if ctx.cumulative_pass_nr() % 60 == 0 {
+                let delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+                assert!(
+                    delay >= Duration::from_millis(16),
+                    "busy repaint loop: {delay:?}"
+                );
+                assert!(
+                    delay <= Duration::from_millis(17),
+                    "animation timer stopped: {delay:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn character_switch_discards_old_codex_session_and_missing_persona_cannot_reuse_it() {
     let root = std::env::temp_dir().join(format!("lexington-ui-persona-{}", rand::random::<u64>()));
     for name in ["a", "b"] {
