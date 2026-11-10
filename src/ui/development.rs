@@ -315,6 +315,9 @@ impl Wife {
                         if self.busy && ui.button("停止任务").clicked() && let Some(client) = &self.codex {
                             client.interrupt();
                         }
+                        if self.busy {
+                            ui.add(egui::Spinner::new().size(16.).color(accent)).on_hover_text("任务执行中");
+                        }
                         ui.add(egui::Label::new(egui::RichText::new(&self.codex_status).size(12.).color(egui::Color32::from_gray(100))).truncate());
                     });
                 });
@@ -420,6 +423,13 @@ impl Wife {
                                     if response.on_hover_text(format!("{}\n{} · {} 轮",task.title, task.turns.last().map(|turn|status_text(&turn.status)).unwrap_or("未开始"),task.turns.len())).clicked() {
                                         self.development.viewed_task = Some(task.id);
                                         self.development.detail_task = None;
+                                        let compatible = task.character==self.library.character && task.development_mode==self.config.codex.development_mode && (!self.config.codex.development_mode || (task.memory_revision==project.memory_revision && task.memory_context_stamp==crate::development::memory::context_stamp(&self.development.memory_context)));
+                                        if !self.busy && compatible {
+                                            resume_task = Some(task.id);
+                                            self.development.error.clear();
+                                        } else if project.current_task != Some(task.id) {
+                                            self.development.error = if self.busy {"当前任务仍在运行，此记录仅供查看；任务结束后点击即可切换。"} else {"此任务与当前角色、开发模式或项目记忆不兼容，仅供查看。"}.into();
+                                        }
                                     }
                                 }
                                 if count==0 {ui.weak(if project.tasks.is_empty() {"还没有任务"} else {"没有匹配的任务"});}
@@ -438,16 +448,14 @@ impl Wife {
                                 ui.add(egui::Label::new(egui::RichText::new(&task.title).size(17.).strong()).truncate()).on_hover_text(&task.title);
                                 ui.horizontal(|ui| {
                                     ui.weak(format!("{} 轮对话",task.turns.len()));
-                                    let compatible = task.character==self.library.character && task.development_mode==self.config.codex.development_mode && (!self.config.codex.development_mode || (task.memory_revision==project.memory_revision && task.memory_context_stamp==crate::development::memory::context_stamp(&self.development.memory_context)));
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                         if ui.add_enabled(!self.busy,egui::Button::new("删除记录").small()).clicked() {delete_task = Some(task.id);}
-                                        if ui.add_enabled(!self.busy && compatible,egui::Button::new("继续此任务").small()).clicked() {resume_task = Some(task.id);}
                                     });
                                 });
                             } else {ui.label(egui::RichText::new("新任务").size(17.).strong());ui.weak("在下方描述希望完成的工作。");}
                             ui.separator();
                             let detail_height = (height-260.).max(12.);
-                            egui::ScrollArea::vertical().id_salt(("development-detail",&project.path,task.map(|task|task.id))).max_height(detail_height).min_scrolled_height(0.).auto_shrink([false,false]).animated(!scroll_to_bottom).show(ui, |ui| {
+                            egui::ScrollArea::vertical().id_salt(("development-detail",&project.path,task.map(|task|task.id))).max_height(detail_height).min_scrolled_height(0.).auto_shrink([false,false]).stick_to_bottom(true).animated(!scroll_to_bottom).show(ui, |ui| {
                                 if let Some(task) = task {task_details(ui,task,&project.path);}
                                 else {ui.add_space(20.);ui.weak("任务的对话、执行记录和代码变更会显示在这里。");}
                                 if scroll_to_bottom {ui.scroll_to_cursor(Some(egui::Align::BOTTOM));}
@@ -517,6 +525,7 @@ impl Wife {
             self.new_development_task(ctx);
         }
         if let Some(id) = resume_task
+            && !self.busy
             && let Some(project) = self.development.book.current_mut()
             && project.current_task != Some(id)
         {
@@ -769,6 +778,7 @@ fn code_text(ui: &mut egui::Ui, text: &str, diff: bool) {
                 .max_height(240.)
                 .min_scrolled_height(0.)
                 .auto_shrink([false, true])
+                .stick_to_bottom(true)
                 .show_rows(ui, row_height, lines.len(), |ui, rows| {
                     ui.push_id(rows.start, |ui| {
                         output_text(ui, &lines[rows].join("\n"), true, diff);
@@ -1095,6 +1105,138 @@ mod tests {
     }
 
     #[test]
+    fn clicking_tasks_switches_send_target_and_resumes_only_compatible_idle_sessions() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = Wife::from_root(&ctx, false, root.path().into());
+        app.config.codex.executable = fixture(root.path(), "development-on");
+        app.config.codex.development_mode = true;
+        app.development.storage = Some(root.path().join("history.json"));
+        app.development.storage_ok = true;
+        app.switch_development_workspace(Some(root.path().into()), &ctx)
+            .unwrap();
+        send(&mut app, &ctx, "Task A");
+        let a = app.development.book.task().unwrap().id;
+        let thread = app.development.thread_id.clone().unwrap();
+        app.new_development_task(&ctx);
+        send(&mut app, &ctx, "Task B");
+        let b = app.development.book.task().unwrap().id;
+        app.development.input = "保留草稿".into();
+        app.development.open = true;
+        let frame = |app: &mut Wife, events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200., 900.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.development_window(ctx),
+            )
+        };
+        let click_task = |app: &mut Wife, title: &str| {
+            let mut output = frame(app, vec![]);
+            for _ in 0..3 {
+                output = frame(app, vec![]);
+            }
+            assert!(!output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "继续此任务")
+            }));
+            let point = output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    if let egui::Shape::Text(text) = &shape.shape
+                        && text.galley.job.text == title
+                    {
+                        let rect = text.galley.rect.translate(text.pos.to_vec2());
+                        if shape.clip_rect.contains_rect(rect) {
+                            return Some(rect);
+                        }
+                    }
+                    None
+                })
+                .min_by(|a, b| a.left().total_cmp(&b.left()))
+                .expect("task list button")
+                .center();
+            for pressed in [true, false] {
+                let _ = frame(
+                    app,
+                    vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+        };
+        // Reselecting the current task must keep the connected session.
+        click_task(&mut app, "Task B");
+        assert_eq!(app.development.thread_id.as_deref(), Some(thread.as_str()));
+        click_task(&mut app, "Task A");
+        assert_eq!(app.development.book.task().unwrap().id, a);
+        assert_eq!(app.development.viewed_task, Some(a));
+        assert_eq!(app.development.input, "保留草稿");
+        let saved = Workspaces::read(app.development.storage.as_ref().unwrap()).unwrap();
+        assert_eq!(saved.task().unwrap().id, a);
+        send(&mut app, &ctx, "resume-status");
+        assert!(app.text.starts_with("thread/resume:"));
+        assert_eq!(app.development.book.task().unwrap().turns.len(), 2);
+        assert_eq!(app.development.thread_id.as_deref(), Some(thread.as_str()));
+        let output = frame(&mut app, vec![]);
+        assert!(output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "发送到：Task A")
+        }));
+
+        app.send_message(&ctx, "interrupt".into(), MessageSource::Development);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.development.book.turn_mut().unwrap().messages.is_empty()
+            && Instant::now() < deadline
+        {
+            app.poll_codex();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(app.busy);
+        click_task(&mut app, "Task B");
+        assert!(app.busy);
+        assert_eq!(app.development.book.task().unwrap().id, a);
+        assert_eq!(app.development.viewed_task, Some(b));
+        assert!(app.development.error.contains("仍在运行"));
+        app.codex.as_ref().unwrap().interrupt();
+        while app.busy && Instant::now() < deadline {
+            app.poll_codex();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!app.busy);
+        click_task(&mut app, "Task B");
+        assert_eq!(app.development.book.task().unwrap().id, b);
+        assert!(app.development.error.is_empty());
+
+        let original = app.development.book.current().unwrap().tasks[0].clone();
+        for reason in 0..4 {
+            let task = &mut app.development.book.current_mut().unwrap().tasks[0];
+            *task = original.clone();
+            match reason {
+                0 => task.character = "Other".into(),
+                1 => task.development_mode = false,
+                2 => task.memory_revision += 1,
+                _ => task.memory_context_stamp = "outdated".into(),
+            }
+            click_task(&mut app, "Task A");
+            assert_eq!(app.development.viewed_task, Some(a));
+            assert_eq!(app.development.book.task().unwrap().id, b);
+            assert!(app.development.error.contains("不兼容"));
+            assert_eq!(app.development.input, "保留草稿");
+        }
+    }
+
+    #[test]
     fn opening_tasks_scrolls_to_latest_output_and_preserves_manual_reading() {
         let root = tempfile::tempdir().unwrap();
         let a = root.path().join("a");
@@ -1131,6 +1273,8 @@ mod tests {
             .tasks
             .push(other);
         app.development.viewed_task = Some(ids[0]);
+        // While a task is running, history remains browseable without switching.
+        app.busy = true;
         app.development.open = true;
         let time = std::cell::Cell::new(0.);
         let frame = |app: &mut Wife, events| {
@@ -1184,6 +1328,17 @@ mod tests {
             output = frame(&mut app, vec![]);
         }
         let tail = visible(&output, "TAIL-A").expect("opening a long task shows its last output");
+        app.development.book.current_mut().unwrap().tasks[0].turns[0]
+            .messages
+            .extend((0..10).map(|index| (format!("live-{index}"), format!("LIVE-{index}"))));
+        for _ in 0..3 {
+            output = frame(&mut app, vec![]);
+        }
+        assert!(
+            visible(&output, "LIVE-9").is_some(),
+            "follow new output at the bottom"
+        );
+        let tail = visible(&output, "LIVE-9").unwrap_or(tail);
         output = scroll_up(&mut app, tail);
         assert!(
             visible(&output, "TAIL-A").is_none(),
@@ -1204,10 +1359,33 @@ mod tests {
             output = frame(&mut app, vec![]);
         }
         assert!(visible(&output, "TAIL-A-NEW").is_none());
+        // Returning to the bottom resumes following future output.
+        let _ = frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(tail.center()),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0., -1000.),
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        for _ in 0..60 {
+            output = frame(&mut app, vec![]);
+        }
+        assert!(visible(&output, "TAIL-A-NEW").is_some());
+        app.development.book.current_mut().unwrap().tasks[0].turns[0]
+            .messages
+            .push(("resumed".into(), "FOLLOW-RESUMED".into()));
+        for _ in 0..3 {
+            output = frame(&mut app, vec![]);
+        }
+        assert!(visible(&output, "FOLLOW-RESUMED").is_some());
         assert_eq!(
             app.development.book.task().unwrap().id,
             ids[1],
-            "browsing must not change the send target"
+            "browsing while busy must not change the send target"
         );
         for (id, marker) in [(ids[1], "TAIL-B"), (ids[0], "TAIL-A-NEW")] {
             app.development.viewed_task = Some(id);
