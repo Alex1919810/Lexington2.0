@@ -13,6 +13,7 @@ pub enum Data {
     Message { id: String, text: String },
     Execution(Box<ExecutionItem>),
     Diff(String),
+    Review(Vec<super::review::FileReview>),
     Plan(Value),
     Context(Box<Manifest>),
     Supplement(String),
@@ -26,6 +27,7 @@ impl Data {
             Self::Message { .. } => "回复快照",
             Self::Execution(_) => "执行记录快照",
             Self::Diff(_) => "文件差异",
+            Self::Review(_) => "文件全文快照",
             Self::Plan(_) => "计划更新",
             Self::Context(_) => "发送清单",
             Self::Supplement(_) => "已确认的运行中补充",
@@ -42,6 +44,7 @@ impl Data {
             }
             Self::Execution(item) => item.sanitize(filter),
             Self::Diff(text) | Self::Supplement(text) => *text = filter(text),
+            Self::Review(files) => files.iter_mut().for_each(|file| file.sanitize(filter)),
             Self::Plan(plan) => sanitize_value(plan, filter),
             Self::Context(manifest) => manifest.sanitize(filter),
             Self::Finished { status, error } => {
@@ -132,6 +135,7 @@ impl Journal {
                     }
                 }
                 Data::Diff(diff) => turn.diff.clone_from(diff),
+                Data::Review(files) => turn.review = Some(files.clone()),
                 Data::Plan(plan) => turn.plan.clone_from(plan),
                 Data::Context(manifest) => {
                     if manifest.version != 1 || manifest.preview {

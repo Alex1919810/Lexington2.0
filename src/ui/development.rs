@@ -11,6 +11,7 @@ pub(super) struct DevelopmentUi {
     pub diagnostics_ui: super::development_diagnostics::DiagnosticsUi,
     pub memory_ui: super::development_memory::MemoryUi,
     pub tests_ui: super::development_tests::TestsUi,
+    pub review_ui: super::development_review::ReviewUi,
     pub memory_context: String,
     viewport_open: bool,
     branch: String,
@@ -207,9 +208,17 @@ impl Wife {
         self.save_development(true);
     }
     pub(super) fn finish_development(&mut self, status: &str, error: &str) {
+        let project = self.development.book.active.clone();
         if let Some(turn) = self.development.book.turn_mut()
             && turn.status == "running"
         {
+            if let Some(project) = project {
+                turn.capture_review(&project, |text| {
+                    self.codex
+                        .as_ref()
+                        .map_or_else(|| text.to_owned(), |client| client.sanitize(text))
+                });
+            }
             turn.finish(status, error);
             self.save_development(true);
         }
@@ -257,6 +266,7 @@ impl Wife {
         if !self.development.open {
             self.development.viewport_open = false;
             self.development.detail_task = None;
+            self.development.review_ui.clear();
             return;
         }
         if self.development.branch_project != self.development.book.active
@@ -279,7 +289,14 @@ impl Wife {
         let builder = egui::ViewportBuilder::default()
             .with_title("Lexington development")
             .with_inner_size([1040., 740.])
-            .with_min_inner_size([740., 500.])
+            .with_min_inner_size([
+                if self.development.review_ui.has_selection() && self.development.page == 0 {
+                    1040.
+                } else {
+                    740.
+                },
+                500.,
+            ])
             .with_transparent(false)
             .with_resizable(true)
             .with_window_level(egui::WindowLevel::Normal);
@@ -290,12 +307,24 @@ impl Wife {
         let mut resume_task = None;
         let mut delete_task = None;
         let mut pick_project = false;
+        let mut review_selection = None;
+        let mut review_window_size = None;
         ctx.show_viewport_immediate(id, builder, |child, class| {
+            if class != egui::ViewportClass::Embedded {
+                review_window_size = Some((child.screen_rect().size(), child.input(|input| input.viewport().monitor_size)));
+            }
             let mut contents = |ui: &mut egui::Ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(10., 8.);
                 ui.spacing_mut().button_padding = egui::vec2(12., 6.);
                 ui.style_mut().text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(14.));
                 ui.style_mut().text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(14.));
+                let review_owner = self.development.book.current().and_then(|project| {
+                    let task = project.tasks.iter().find(|task| Some(task.id) == self.development.viewed_task.or(project.current_task))?;
+                    Some((project.path.clone(), task.id))
+                });
+                if self.development.page == 0 {
+                    self.development.review_ui.panel(ui, review_owner.as_ref());
+                }
                 let accent = egui::Color32::from_rgb(57, 97, 185);
                 let border = egui::Color32::from_rgb(222, 227, 236);
                 ui.horizontal(|ui| {
@@ -461,7 +490,7 @@ impl Wife {
                             ui.separator();
                             let detail_height = (height-260.).max(12.);
                             egui::ScrollArea::vertical().id_salt(("development-detail",&project.path,task.map(|task|task.id))).max_height(detail_height).min_scrolled_height(0.).auto_shrink([false,false]).stick_to_bottom(true).animated(!scroll_to_bottom).show(ui, |ui| {
-                                if let Some(task) = task {task_details(ui,task,&project.path);}
+                                if let Some(task) = task {review_selection = task_details(ui,task,&project.path).or(review_selection.take());}
                                 else {ui.add_space(20.);ui.weak("任务的对话、执行记录和代码变更会显示在这里。");}
                                 if scroll_to_bottom {ui.scroll_to_cursor(Some(egui::Align::BOTTOM));}
                             });
@@ -509,6 +538,26 @@ impl Wife {
         if !open {
             self.development.detail_task = None;
             ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Close);
+        }
+        if let Some(selection) = review_selection {
+            let opening = !self.development.review_ui.has_selection();
+            self.development
+                .review_ui
+                .select(selection, self.development.detail_task.clone());
+            if opening && let Some((size, monitor)) = review_window_size {
+                let maximum =
+                    monitor.map_or(size.x + 480., |monitor| (monitor.x - 80.).max(size.x));
+                let width = (size.x + 480.).min(maximum);
+                if width > size.x + 1. {
+                    ctx.send_viewport_cmd_to(
+                        id,
+                        egui::ViewportCommand::InnerSize(egui::vec2(width, size.y)),
+                    );
+                }
+            }
+        }
+        if !open {
+            self.development.review_ui.clear();
         }
         if pick_project && !self.busy && self.development.picker.is_none() {
             let initial = self.development.book.active.clone();
@@ -644,7 +693,12 @@ pub(super) fn status_text(status: &str) -> &str {
     }
 }
 
-fn task_details(ui: &mut egui::Ui, task: &Task, project: &std::path::Path) {
+fn task_details(
+    ui: &mut egui::Ui,
+    task: &Task,
+    project: &std::path::Path,
+) -> Option<super::development_review::Selection> {
+    let mut selection = None;
     for (index, turn) in task.turns.iter().enumerate() {
         ui.push_id(index, |ui| {
             ui.label(format!(
@@ -818,6 +872,11 @@ fn task_details(ui: &mut egui::Ui, task: &Task, project: &std::path::Path) {
                     output_text(ui, &turn.error, false, false);
                 });
             }
+            if turn.status != "running" && !turn.status.is_empty() {
+                ui.push_id((project, task.id, "file-review"), |ui| {
+                    selection = super::development_review::show(ui, turn).or(selection.take());
+                });
+            }
             // Confirmed inputs belong at the live end of the task, where the
             // bottom-following scroll area can reveal them after a long reply.
             for (supplement_index, text) in turn.supplements.iter().enumerate() {
@@ -840,6 +899,7 @@ fn task_details(ui: &mut egui::Ui, task: &Task, project: &std::path::Path) {
             ui.separator();
         });
     }
+    selection
 }
 fn diff_text(ui: &mut egui::Ui, diff: &str) {
     code_text(ui, diff, true);
@@ -884,7 +944,7 @@ pub(super) fn code_text(ui: &mut egui::Ui, text: &str, diff: bool) {
                 });
         });
 }
-fn output_text(ui: &mut egui::Ui, mut text: &str, code: bool, diff: bool) {
+pub(super) fn output_text(ui: &mut egui::Ui, mut text: &str, code: bool, diff: bool) {
     let id = ui.next_auto_id();
     let focused = ui.memory(|memory| memory.has_focus(id));
     let previous =
@@ -914,6 +974,13 @@ fn output_text(ui: &mut egui::Ui, mut text: &str, code: bool, diff: bool) {
                     egui::TextFormat {
                         font_id: font.clone(),
                         color,
+                        background: if diff && line.starts_with('+') {
+                            egui::Color32::from_rgb(226, 245, 232)
+                        } else if diff && line.starts_with('-') {
+                            egui::Color32::from_rgb(253, 232, 232)
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        },
                         line_height: Some(
                             ui.text_style_height(&egui::TextStyle::Monospace)
                                 + ui.spacing().item_spacing.y,
@@ -2522,7 +2589,10 @@ mod tests {
                 match expected.trim() {
                     "/status" | "/STATUS" => assert!(
                         reply.contains("会话：fixture-thread")
-                            && reply.contains("模型：fixture-model"),
+                            && reply.contains("模型：fixture-model")
+                            && reply.contains("5小时额度：剩余 75%")
+                            && reply.contains("每周额度（7天）：剩余 65%")
+                            && reply.contains("（本地时间）"),
                         "{reply}"
                     ),
                     "/compact" => assert!(reply.contains("暂不支持 /compact")),

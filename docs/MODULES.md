@@ -47,6 +47,7 @@ src/
 │   ├── development_diagnostics.rs
 │   ├── development_tests.rs
 │   ├── development_memory.rs
+│   ├── development_review.rs
 │   ├── input.rs
 │   ├── assets.rs
 │   ├── style.rs
@@ -75,6 +76,7 @@ src/
 │   ├── mod.rs
 │   ├── context.rs
 │   ├── journal.rs
+│   ├── review.rs
 │   ├── diagnostics.rs
 │   ├── testing.rs
 │   └── memory.rs
@@ -376,6 +378,20 @@ Windows x64 增量验收：27 项相关 Rust 测试、fmt 和 Clippy 通过；Wi
 - UI 增量用例 `ui::development::tests::development_input_keeps_streams_and_waiting_out_of_main_window` 使用临时项目、模拟服务和阶段握手，覆盖 developmentMode 开/关下实际 Enter 发送、关闭开发窗口后的等待/流式/最终输出隔离、立绘点击不恢复开发内容、项目最终回复去重落盘、主窗草稿保留、开发失败及随后主窗正常发送；不连接真实模型。
 - 增量测试：`cargo test --locked development` 覆盖 canonical 路由/嵌套项目/跨项目拒绝、分支读取、私密存储/损坏保护/恢复、乱序执行/最终去重/UTF-8 截断；Unix UI 模拟协议覆盖 A→B→A 的真实 thread/resume、任务记录/代码渲染、模式忙碌延期与关闭后的无开发指令新线程。fixture 不连接模型或读取真实凭据。Linux 本机已在隔离 Xephyr + GNOME WM 中验证独立窗口、显式 workspace 外部路由、执行/累计 diff 落盘、真实编辑器输入/Ctrl+Enter 与关闭子窗不退出宠物，并检查测试窗口截图；本次布局增量还实测 Zenity 目录浏览器的取消、当前项目定位、添加/切换新目录及窗口堆叠，并在 740×500 下通过真实键盘输入/Ctrl+Enter 完成发送；截图核对目录选择器未被遮挡、输入区与发送按钮可见。其他 Portal 后端及其他平台的实际窗口行为需对应原生环境验证。
 
+### 任务结束后的文件汇总与全文差异
+
+- `development/review.rs` 从当前轮累计 unified diff 解析文件，优先使用累计证据，同路径的工具 patch 不重复计数；没有累计证据的文件按执行记录顺序合并 patch，不读取工作区的 Git 差异，避免混入任务开始前已有修改。文件头不计入增删行；修改以删除旧行和增加新行表示，总差异为两者之和。保留新增、删除、重命名及仅权限变化的文件记录，兼容 Git 引号/八进制 UTF-8 路径和零长度 hunk。
+- `ui/development.rs::finish_development` 在完成、失败或中断时捕获 `Turn.review`，经 Client 的凭据遮蔽后通过日志 `Data::Review` 保存，并在 finish 后原子落盘。单文件全文最多 1 MiB、单轮最多 4 MiB；只读取规范化后位于项目中的普通 UTF-8 文件，二进制、不可访问、超限和项目外路径保留差异并注明原因。删除文件由完整删除 patch 还原；后续磁盘编辑不改变保存的快照。旧轮次无 review 字段时兼容加载，仅展示保存的差异，不伪造历史全文。
+- `FileReview::lines` 逆序核对各 patch 的新行、上下文及旧行范围，重建原行号和最终行号，利用最终行身份合并重复编辑并裁去已回退的相同边缘。内容不匹配时分别显示结束时的全文和原始差异，不给无关行着色；无法核对全文的统计按协议变更记录计数。改动来源仅为 Codex 发出的变更证据，不宣称包含没有文件变更事件的任意外部写入。
+- `ui/development_review.rs::show` 仅在开发窗口终态轮次回复后显示文件数、总差异/增删数和可点击文件列表，不在输出框内展开全文。点击返回 Selection，经 `task_details` 和 development 回调交给 DevelopmentUi 持有的 `ReviewUi`；文件快照与不可变布局缓存沿用原有隔离，不写领域历史。
+- `ReviewUi::panel` 在 development 现有 viewport 的内容区使用 `SidePanel::right(...).show_inside` 布局全文差异，与任务列表、对话和编辑器共用一个原生窗口，不创建第二个 viewport 或浮动 egui Window。右侧面板默认 480px，分隔线可拖动，最小宽度 280px、最大为窗口可用宽度减 600px（不再固定限制 680px），为左侧内容保留至少 600px；只在任务页展示。首次点击文件时，在屏幕尺寸允许范围内将当前开发窗口拓宽最多 480px，保留高度；打开面板时开发窗口最小宽度为 1040px，关闭后恢复 740px 的最小宽度，不主动缩回用户窗口。
+- 面板包含关闭入口、文件切换器、双列行号、红绿文字/背景、未修改内容和全文复制；正文按面板宽度自动换行并只作纵向滚动，使用全部剩余高度；按当前等宽字体逐字符宽度预计算显示行边界，长标识符、中文和 emoji 可折行，续行只保留增删标记和空行号栏。布局结果按文件作用域、宽度、字体和 DPI 缓存，变宽时替换旧缓存；`show_rows` 仅布局可见显示行，不能继续用逻辑代码行高度虚拟化已换行文本。宽度变化须隔离可见片段选区 ID，避免新行边界套用旧选区，长路径截断且悬停可见。折行只影响显示；复制全文保持原始缩进、tab 和换行，增删统计仍按原始逻辑行。旧记录或核对失败时，完整快照与原始差异在同一换行容器中分段展示，保留复制差异入口。文件列表虚拟行高须包含 SelectableLabel 的上下按钮边距及最小交互高度，避免末行被裁掉。关闭只清除面板选择，点击文件可重开；换项目/任务清除旧内容，切离任务页时隐藏，关闭开发窗口时清除选择。使用同一 viewport 的输入、焦点、移动、缩放和最小化生命周期，无原生位置跟随或平台窗口查询。
+- 增量入口：`cargo test --locked ui::development_review::tests::` 验证文件点击、同一 viewport 内的左右分栏、输出区和输入区不被全文覆盖、红绿颜色/全文/行号、分隔线拖动、关闭/重开及跨项目同任务 ID 隔离、最小窗口、6000 行虚拟化/长路径边界、中文/emoji/无空格长行折行、变宽重排与缓存复用、完整复制保留 tab/换行；UI 直接链路使用 `cargo test --locked ui::development::tests:: -- --test-threads=1`。原领域解析/快照测试继续使用 `cargo test --locked development::review::tests::`，纯布局调整不重复执行不受影响的领域测试。
+
+Linux 原生验收使用隔离 Xephyr + GNOME WM、临时双文件快照和离线协议桩：点击文件后枚举本进程原生窗口，始终只有桌宠和 development，差异全文/红绿行位于 development 内部；实际拖动分隔线、缩至 1040×500、关闭面板并点击文件重开均通过。实际点击编辑器输入并 Enter 发送，协议桩收到原文、回复完成且任务落盘；截图核对输入区和差异区可见。无真实模型或用户历史访问；Windows/Wayland 原生运行本轮未实测。
+
+原生换行增量验证仍使用上述隔离环境与离线协议桩：无空格长标识符及中文代码在右面板自动折行；真实拖宽分隔线后，绿色新增块的显示高度减少，1040×500、关闭/重开和编辑器实际 Enter 往返均通过，原生窗口数保持不变。
+
 ### 发送清单、开发事件与后台任务
 
 - `development/context.rs` 定义独立于 UI、后端和角色模块的 Manifest/Block/Channel/Delivery 数据契约及项目背景选择。条目记录来源、角色/项目/线程归属、作用域、内容版本、失效/排除原因和字符数；传输状态区分待发送、写入请求、沿用会话、未载入与预览，Debug 只显示元数据计数。项目记忆仍按原有确认/依据/预算规则选择，测试命令含说明共用 6000 字符预算，历史测试结果只登记未附加原因，不自动注入。关闭 development 模式不读取项目记忆依据或组装项目内容。
@@ -426,6 +442,7 @@ Windows 同样启用 UI 的 Inbox、原生位置保存/恢复、显示器检测�
 | `ui/development.rs` | development 原生任务窗口、项目选择通道、按项目草稿、任务浏览/复制、发送及运行中补充确认、待答状态及重新打开入口 | 顶部项目栏、左任务列表、右详情和固定编辑卡片；右上角 busy 时显示 16px 旋转指示器；存在提问/审批时改为橙色待答/待确认标记和入口，并暂停开发输入发送，各页签和历史浏览共用当前状态。完成/失败/中断后指示器及待处理标记隐藏。选择项目使用后台原生目录选择器，支持取消与空闲后切换，任务窗口使用普通层级，避免遮挡目录浏览器。内部域与记录在 development 模块；右键菜单显示“开发” |
 | `ui/development_diagnostics.rs` | 诊断列表、过滤、来源检查与分析入口 | 只读项目快照；分析在 viewport 回调后发送，模式关闭不自动附加 |
 | `ui/development_tests.rs` | 测试配置编辑、运行队列、历史结果及失败分析 | 复用 Client::run_test；模型任务和本地测试互斥，状态绑定项目/run ID，重启保存中断 |
+| `ui/development_review.rs` | 终态轮次的文件汇总与开发窗口内部可调宽度、自动换行的全文差异右面板 | Selection 交给 ReviewUi；共用一个原生窗口，宽度上限保留左侧 600px；按文件/字体/宽度缓存折行边界并虚拟化可见显示行；全文复制保持原文，任务归属隔离 |
 | `ui/development_memory.rs` | 项目记忆草稿、核对/停用/删除、任务摘录候选及来源状态 | 保存先写盘再更新内存；变更记忆新建干净线程，角色记忆独立 |
 | `ui/memo.rs` | `MemoUi` 管理独立备忘录窗口、草稿、筛选及错误；`open_memos/memo_window` 由桌宠右键“备忘录”打开，`memo_ui` 提供新增、完成/恢复、逐条彻底删除与全部/待办/已完成筛选 | 500×520 原生置顶 viewport，最小 380×300，Embedded 回退 Foreground Window 并注册输入区域；首次打开按桌宠所在显示器限制位置并预留原生标题栏空间，映射后延迟激活，关闭只销毁备忘录窗口、保留未添加草稿。局部沿用 panel_style/card；事项复选框和正文靠左，完成文字置灰划线，长事项为删除按钮预留右列并自动换行；多行草稿限高滚动，标题/新增/筛选固定、列表独立滚动。文件仅首次打开时加载，普通/--dev 使用 data_root 下 memos.json/memos-dev.json，各角色共用；viewport 回调后执行操作，写盘成功才更新条目/清空草稿，失败显示错误并保留原状态。读取失败禁用写入并提供重读，不启动模型或改动聊天/设置/人物记忆状态 |
 | `ui/alarm.rs` | `AlarmUi` 管理表单和错误状态；`load_alarms` 加载持久化记录；`alarm_settings_ui` 提供 HH:MM、提示语、每天重复、新增/编辑/删除及启停；`alarm_popup_ui` 每秒检查到期并显示独立原生窗口 | 依赖 AlarmState、clock 本地时间和 paths；弹窗 420×260、无边框不透明置顶，按桌宠所在显示器中央定位（X11 用 RandR，支持负坐标和 DPI），不移动桌宠。X11 使用 Dock 层，普通 AlwaysOnTop 可能被桌宠 Dock 遮挡；映射后 800ms 一次性 Focus/AlwaysOnTop（晚于主窗启动置顶），不复用桌宠 XShape 遮罩。多个到期提醒合并，长文本滚动，固定确认按钮；确认或系统关闭先持久化清除 pending，保存失败保留弹窗。非原生 egui 集成降级为居中 Window 并加入输入区域；Wayland 位置由合成器决定 |
@@ -453,9 +470,9 @@ Windows 同样启用 UI 的 Inbox、原生位置保存/恢复、显示器检测�
 | `backend/config.rs` | Config/CodexConfig 与尺寸、打卡、天气配置；read/load；save_no_approval/save_development_mode/save_auto_clock/save_weather 无损原子保存 | config.json 保持 camelCase；随包 config.json 仅保留 noApproval/developmentMode（默认均 false）；CodexConfig 仅反序列化这两个开关；executable/working_directory 仅运行时使用。旧 executable/workingDirectory/model/useCustomApi/baseUrl/apiKey 忽略且无损保留，不覆盖环境。connection_changed 包含 developmentMode，排除审批开关。保存失败不更新内存，损坏 JSON 拒绝覆盖，同目录同步后原子替换，Unix 0600；尺寸/计时及天气校验保持 |
 | `backend/resources.rs` | 定义 `Illustration`（含服装名 `outfit` 和战损标记 `damaged`）；`illustrations` 扫描 resource/illustration 与 config/characters 的PNG/GIF 立绘及 live2d/*/actor.json 模型并解析配对元数据；跳过隐藏暂存目录，`background` 选择首张支持的背景，`texts` 读取非空角色台词 | 标准库文件读取和 serde_json；只解析文件名最后的 `_Normal` / `_Damage` 后缀，ASCII 大小写不敏感；无后缀按正常处理，其完整文件名主体作为服装名。保留 `resource/` 布局，按目录识别角色与格式，拒绝台词路径穿越，不解码图片 |
 | `backend/character.rs` | `CharacterState` 持有资源列表、角色、格式、正常/战损状态、选中索引与台词；`filtered` 返回当前角色/格式/状态的队列，`damage_counterpart` 查同服装的相反状态，`toggle_damage` 双向切换；`refresh` 保留当前路径并恢复失效选择，`next_illustration` 循环当前队列，`toggle_format`/`toggle_live2d`/`next_character` 切换格式/角色，`selected_path` 提供路径 | 仅依赖资源扫描模块和标准库；默认 GIF + 正常。配对严格限制同角色、同格式、服装名 ASCII 大小写不敏感，缺少对应版本时不切换；格式切换尽量保留同服装。选取回退顺序为当前格式/当前状态 → 另一格式/当前状态 → 当前格式/另一状态 → 另一格式/另一状态。含现有 15 对资源双向匹配、独立队列循环、后缀大小写、缺失配对及删除恢复测试；只选择路径，纹理和默认宠物由 UI 处理 |
-| `backend/commands.rs` | 客户端指令候选、识别与只读结果格式化；/status、/model、/permissions、/help | 不依赖 UI，不启动进程；状态依据本机会话握手字段和已收到的 token 用量，缺失标为未返回/尚未收到；审批展示下一轮的 noApproval 覆盖或原策略，保留 granular。/model 与 /permissions 仅查询，参数拒绝执行；已知未接入的 CLI 指令明确提示，未知词、路径及普通文本不拦截。无配置写入或任意协议调用 |
+| `backend/commands.rs` | 客户端指令候选、识别与只读结果格式化；/status、/model、/permissions、/help | 不依赖 UI，不启动进程；状态依据本机会话握手字段和已收到的 token 用量，缺失标为未返回/尚未收到；账号额度格式化使用 account/rateLimits/read 的多分组视图，旧版回退单分组而不重复展示，按 usedPercent 转剩余比例、实际 windowDurationMins 区分小时/每周窗口，resetsAt 按 Unix 秒转换本地时间。只显示服务端提供的套餐/积分/重置次数及使用许可；缺失额度或窗口不伪造每周余额；审批展示下一轮的 noApproval 覆盖或原策略，保留 granular。/model 与 /permissions 仅查询，参数拒绝执行；已知未接入的 CLI 指令明确提示，未知词、路径及普通文本不拦截。不写配置或直接发协议 |
 | `backend/codex_config.rs` | LocalCodexConfig::read 只读当前 profile/provider 的 API Key，供输出遮蔽 | 依赖 toml/serde_json；不展示模型/地址/凭据，不保存或覆盖 Codex 配置。支持 env_key、experimental_bearer_token、OpenAI 环境/登录文件中的 API Key，不借用 OAuth tokens。解析错误不带源文本，测试使用临时目录与注入环境 |
-| `backend/codex.rs` | Client::start_in_workspace/start_structured/submit/submit_with_context/steer/run_test/interrupt/reply/poll/sanitize；run_command 接收显式客户端指令；app-server stdio、线程恢复、审批和执行事件 | 本机 0.167.0 Schema；initialize → initialized → thread/start 或 thread/resume。模型/API/登录继承环境与本机配置；LEXINGTON_CODEX_EXECUTABLE 指定程序，Windows 优先使用环境 exe 并拒绝 cmd/bat；无模型/提供方 -c 覆盖。developmentMode 开启才附加 development::INSTRUCTIONS，并禁用按角色向量历史的混入；结构化后台提炼保持独立临时 cwd、只读和禁用工具。thread ID 回传任务；只缓存 thread/start/resume 的模型、cwd、沙箱、审批等查询字段及本线程 tokenUsage 通知。run_command 等握手完成后生成 Text + CommandFinished，不写 turn/start、不推进角色会话或生成发送清单，结构化后台线程拒绝此入口；握手前取消查询返回 interrupted，沿用草稿保留逻辑；turn/start 明确传原始审批策略或 never，不扩大沙箱。关联 thread/turn/request，ACK 30 秒，流式生成不限时；命令输出、item 生命周期、plan、累计 diff 和 patch 更新转 Activity，agentMessage 只走文本通道。完整环境/提供方 Key 在事件和持久化前遮蔽。Unix 独立进程组、Windows Job 清理整个子进程树，关闭 stdin 后 join 读取；不记录协议原文或凭据 |
+| `backend/codex.rs` | Client::start_in_workspace/start_structured/submit/submit_with_context/steer/run_test/interrupt/reply/poll/sanitize；run_command 接收显式客户端指令；app-server stdio、线程恢复、审批和执行事件 | 本机 0.167.0 Schema；initialize → initialized → thread/start 或 thread/resume。模型/API/登录继承环境与本机配置；LEXINGTON_CODEX_EXECUTABLE 指定程序，Windows 优先使用环境 exe 并拒绝 cmd/bat；无模型/提供方 -c 覆盖。developmentMode 开启才附加 development::INSTRUCTIONS，并禁用按角色向量历史的混入；结构化后台提炼保持独立临时 cwd、只读和禁用工具。thread ID 回传任务；只缓存 thread/start/resume 的模型、cwd、沙箱、审批等查询字段及本线程 tokenUsage 通知。精确 /status（大小写无关、不带参数）在握手后按需请求 account/rateLimits/read（params=null），每次重新读取，不启动时预取或周期轮询；其他指令不查额度。查询的请求 ID 与排队指令绑定，30 秒超时/服务端错误只附加额度失败提示，仍返回其他状态并保持模型连接；取消移除请求和指令并保留草稿，迟到 ACK 不影响后续轮次。run_command 生成 Text + CommandFinished，不写 turn/start、不推进角色会话或生成发送清单，结构化后台线程拒绝此入口；握手前取消查询返回 interrupted，沿用草稿保留逻辑；turn/start 明确传原始审批策略或 never，不扩大沙箱。关联 thread/turn/request，ACK 30 秒，流式生成不限时；命令输出、item 生命周期、plan、累计 diff 和 patch 更新转 Activity，agentMessage 只走文本通道。完整环境/提供方 Key 在事件和持久化前遮蔽。Unix 独立进程组、Windows Job 清理整个子进程树，关闭 stdin 后 join 读取；不记录协议原文或凭据 |
 | `backend/weather.rs` | `City::validate` 校验选定地点；`Client::start/send/poll` 通过有界通道在单个工作线程中搜索城市和查询三天预报；解析 WMO 天气代码并生成中文文本 | ureq + Rustls HTTPS 直连 Open-Meteo 地理编码/预报接口，不经过 Codex，不依赖 egui；请求总超时 10 秒、禁重定向、响应限制 1 MiB、待处理队列 4。按城市及请求日缓存 30 分钟，更新失败可显示同城同日 6 小时内旧数据并注明；缓存只在内存，含更新时间/时区和来源。退出丢弃队列并回收线程，最多等待当前有超时请求。测试用本地 HTTP 夹具覆盖编码、缓存/换城、超时/非法/超大数据及无损配置保存 |
 | `backend/memo.rs` | `MemoState::load/items/add/set_completed/delete` 管理备忘录及持久化 | 不依赖 UI；版本 1 JSON 保存 id/text/completed，新事项置顶、裁首尾空白，正文 1～2000 个 Unicode 字符。读取校验版本、重复 ID、空白与过长正文，损坏/不兼容记录拒绝加载且不覆盖；同目录 NamedTempFile（Unix 0600）写入并同步后原子替换，成功后才提交内存，失败自动清理临时文件。删除从文件直接移除，完成与恢复跨重启保留；存储路径由 UI 注入，测试仅使用临时目录 |
 | `backend/alarm.rs` | `AlarmState::load/save/toggle/delete/poll/dismiss` 管理多个本地时间闹钟、调度与待确认提醒 | 不依赖 UI；时间严格 HH:MM，提示语 1～500 字符；一次性闹钟响后关闭，每天重复按 libc mktime 计算下一本地日期，不能固定加 86400 秒，跳过 DST 不存在时间。设置时间已过时安排下一次；启用重新计算；到期（含休眠/停机错过）每个闹钟只补一次并推进到未来，pending 跨重启保存；同时到期合并，重启不重复。普通/开发记录隔离，0600 临时文件同步后原子替换，保存失败不提交内存，损坏数据拒绝覆盖。含同时触发、重复/错过、重启、校验、编辑启停删除与存储失败测试 |
@@ -535,9 +552,11 @@ GUI smoke 使用 LEXINGTON_CODEX_EXECUTABLE 指向不可用程序，并隔离 CO
 
 ## 测试夹具
 
-`tests/fixtures/codex-server.py` 用 Python 3 模拟 stdio app-server，支持 turn/steer 的多行补充、拒绝、编号不匹配、完成先于确认与断连，供后端与 UI 测试共享；commands 模式提供固定模型/沙箱/token 用量并拒绝客户端指令落入 turn/start；覆盖初始化、Unicode 输入、流式/最终消息去重、同一会话多轮与延迟 ACK、模型/提供方启动参数与 Key 环境/命令行隔离及完整 Key 遮蔽、无需审批/原策略逐轮恢复（含 granular）、沙箱保持、命令/文件审批、提问、未支持请求、中断、失败恢复、崩溃和持有 stdout 的启动器后代清理。`visibility:<临时目录>` 按 first/next/finish 文件分阶段发送文本，验证用户收起与恢复不改变实际流式/完成事件。还覆盖结构化后台线程、嵌套 MCP 禁用、JSON Schema、无效提炼/失败与交互拒绝；只在测试中通过 `include_str!` 使用，不作为发布版运行依赖；不访问用户 Codex 登录信息或真实模型。
+`tests/fixtures/codex-server.py` 用 Python 3 模拟 stdio app-server，支持 turn/steer 的多行补充、拒绝、编号不匹配、完成先于确认与断连，供后端与 UI 测试共享；commands 模式提供固定模型/沙箱/token 用量和可变账号额度并拒绝客户端指令落入 turn/start；quota-error/empty/late 模式覆盖不支持、缺失、超时/取消和迟到回复；覆盖初始化、Unicode 输入、流式/最终消息去重、同一会话多轮与延迟 ACK、模型/提供方启动参数与 Key 环境/命令行隔离及完整 Key 遮蔽、无需审批/原策略逐轮恢复（含 granular）、沙箱保持、命令/文件审批、提问、未支持请求、中断、失败恢复、崩溃和持有 stdout 的启动器后代清理。`visibility:<临时目录>` 按 first/next/finish 文件分阶段发送文本，验证用户收起与恢复不改变实际流式/完成事件。还覆盖结构化后台线程、嵌套 MCP 禁用、JSON Schema、无效提炼/失败与交互拒绝；只在测试中通过 `include_str!` 使用，不作为发布版运行依赖；不访问用户 Codex 登录信息或真实模型。
 
 斜杠指令增量入口为 `cargo test --locked slash_ -- --test-threads=1`、`cargo test --locked backend::commands::tests::` 和 `cargo test --locked ui::completion::`。覆盖握手前查询排队与取消、真实模型/提供方/推理强度/沙箱字段、下一轮审批开关与 granular、有/无 token 用量、指令不创建模型轮次/清单、未知词与本地路径透传；两个真实 egui 编辑器覆盖前缀补全、完整指令一次 Enter 返回、大小写匹配、未接入指令及参数提示、来源隔离与任务完成。补全独立验证方向键、Tab/前缀 Enter 不误发送、Esc 保留草稿、鼠标选择和 IME 预编辑。`only_successful_conversations_enter_the_background_queue_without_a_switch` 验证状态/帮助查询不排队人物记忆；原有输入与换行回归使用 `ui::tests::input_` 和 `ui::development::tests::development_enter_sends_and_ctrl_enter_inserts_newline` 过滤器。
+
+账号额度增量入口为 `cargo test --locked quota_ -- --test-threads=1`：固定 5 小时/7 天窗口的剩余比例与本地重置时间、多分组优先且不重复旧视图、旧版/空数据/未知时长/缺比例/积分/额外重置次数、接口错误不终止连接、取消与 30 秒超时后迟到 ACK 隔离。`slash_` 同时验证 /status 连续查询更新、主窗和开发窗口的返回含短时/每周余额；所有用量由模拟协议提供，不调用真实模型或查询用户账号。
 
 `backend::codex::Client::mock_events` 仅在测试构建中使用上述隔离模拟进程，并将消费通道替换为预先排好的事件及夹具凭据，确定地验证 UI 事件洪峰与跨批遮蔽；不读取真实连接设置，不发送模型任务。
 

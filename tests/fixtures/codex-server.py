@@ -31,6 +31,8 @@ pending = None
 turn = None
 deferred_ack = None
 steers = []
+rate_limit_reads = 0
+delayed_rate_limit = None
 
 
 def send(value):
@@ -61,6 +63,18 @@ for line in sys.stdin:
         pass
     elif method == "config/read" and mode.startswith("memory-"):
         send({"id":message["id"],"result":{"config":{"mcp_servers":{"fixture.with.dot":{"command":"fixture-only","required":True}}}}})
+    elif method == "account/rateLimits/read":
+        assert params is None, "quota reads must not advertise unsupported features"
+        rate_limit_reads += 1
+        if mode == "quota-error":
+            send({"id": message["id"], "error": {"code": -32000, "message": "当前登录方式不支持账号额度查询"}})
+        elif mode == "quota-late":
+            delayed_rate_limit = message["id"]
+        elif mode == "quota-empty":
+            send({"id": message["id"], "result": {"rateLimits": {}, "rateLimitsByLimitId": None}})
+        else:
+            bucket = {"limitId": "codex", "planType": "plus", "primary": {"usedPercent": 25 if rate_limit_reads == 1 else 40, "windowDurationMins": 300, "resetsAt": 1800000000}, "secondary": {"usedPercent": 35 if rate_limit_reads == 1 else 50, "windowDurationMins": 10080, "resetsAt": 1800600000}}
+            send({"id": message["id"], "result": {"rateLimits": bucket, "rateLimitsByLimitId": {"codex": bucket}}})
     elif method in ("thread/start", "thread/resume"):
         session_method = method
         if method == "thread/resume":
@@ -106,6 +120,9 @@ for line in sys.stdin:
         pending=None
     elif method == "turn/start":
         assert params["threadId"] == thread
+        if delayed_rate_limit is not None:
+            send({"id": delayed_rate_limit, "result": {"rateLimits": {"primary": {"usedPercent": 99, "windowDurationMins": 300}}}})
+            delayed_rate_limit = None
         if deferred_ack is not None:
             send(deferred_ack)
             deferred_ack = None

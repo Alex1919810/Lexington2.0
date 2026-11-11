@@ -3,6 +3,7 @@ pub mod context;
 pub mod diagnostics;
 pub mod journal;
 pub mod memory;
+pub mod review;
 pub mod testing;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -86,6 +87,7 @@ impl Activity {
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Turn {
+    pub review: Option<Vec<review::FileReview>>,
     pub manifest: Option<context::Manifest>,
     pub journal: Option<journal::Journal>,
     #[serde(skip)]
@@ -112,6 +114,11 @@ impl Turn {
         self.status = filter(&self.status);
         self.error = filter(&self.error);
         self.diff = filter(&self.diff);
+        if let Some(files) = &mut self.review {
+            for file in files {
+                file.sanitize(filter);
+            }
+        }
         journal::sanitize_value(&mut self.plan, filter);
         for (id, text) in &mut self.messages {
             *id = filter(id);

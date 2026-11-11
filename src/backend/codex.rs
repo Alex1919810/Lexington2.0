@@ -577,6 +577,8 @@ fn communicate(
     let mut thread_settings = Value::Null;
     let mut token_usage = Value::Null;
     let mut queued_command: Option<(String, bool)> = None;
+    let mut rate_limits_request: Option<u64> = None;
+    let mut rate_limits: Option<Result<Value, String>> = None;
     let mut turn_id: Option<String> = None;
     let mut active_request = None;
     let mut steering: Option<(u64, String)> = None;
@@ -589,6 +591,15 @@ fn communicate(
     let mut before_turn = None;
     let mut final_messages = std::collections::BTreeMap::<String, String>::new();
     loop {
+        if let Some(id) = rate_limits_request
+            && pending
+                .get(&id)
+                .is_some_and(|(_, started)| started.elapsed() > Duration::from_secs(30))
+        {
+            pending.remove(&id);
+            rate_limits_request = None;
+            rate_limits = Some(Err("查询超时，请稍后重新输入 /status。".into()));
+        }
         if pending.values().any(|(method, started)| {
             !matches!(*method, "command/exec" | "turn/steer")
                 && started.elapsed() > Duration::from_secs(30)
@@ -613,16 +624,38 @@ fn communicate(
             return Err("测试执行通道未在超时后返回，已停止连接。".into());
         }
         if let Some(thread) = &thread_id {
-            if let Some((text, no_approval)) = queued_command.take() {
+            let status = queued_command
+                .as_ref()
+                .is_some_and(|(text, _)| text.trim().eq_ignore_ascii_case("/status"));
+            if status && rate_limits.is_none() {
+                if rate_limits_request.is_none() {
+                    rate_limits_request = Some(next);
+                    request(
+                        writer,
+                        &mut pending,
+                        &mut next,
+                        "account/rateLimits/read",
+                        Value::Null,
+                    )?;
+                    emit(Event::Notice("正在查询账号额度…".into()));
+                }
+            } else if let Some((text, no_approval)) = queued_command.take() {
+                let mut text = super::commands::response(
+                    &text,
+                    &thread_settings,
+                    &token_usage,
+                    directory,
+                    no_approval,
+                );
+                if let Some(limits) = rate_limits.take() {
+                    text.push_str("\n\n");
+                    text.push_str(&super::commands::rate_limits(
+                        limits.as_ref().map_err(String::as_str),
+                    ));
+                }
                 emit(Event::Text {
                     id: "lexington-command".into(),
-                    text: super::commands::response(
-                        &text,
-                        &thread_settings,
-                        &token_usage,
-                        directory,
-                        no_approval,
-                    ),
+                    text,
                     replace: true,
                 });
                 emit(Event::CommandFinished);
@@ -808,6 +841,10 @@ fn communicate(
             }
             Input::Interrupt => {
                 if queued_command.take().is_some() {
+                    if let Some(id) = rate_limits_request.take() {
+                        pending.remove(&id);
+                    }
+                    rate_limits = None;
                     emit(Event::Finished { interrupted: true });
                 }
                 if let Some(test) = queued_test.take() {
@@ -1114,6 +1151,20 @@ fn communicate(
                 } else if let Some(id) = message["id"].as_u64()
                     && let Some((method, _)) = pending.remove(&id)
                 {
+                    if method == "account/rateLimits/read" {
+                        if rate_limits_request == Some(id) {
+                            rate_limits_request = None;
+                            rate_limits = Some(if let Some(error) = message.get("error") {
+                                Err(error["message"]
+                                    .as_str()
+                                    .unwrap_or("当前登录方式或提供方未能返回账号额度。")
+                                    .into())
+                            } else {
+                                Ok(message["result"].clone())
+                            });
+                        }
+                        continue;
+                    }
                     // An earlier turn can finish before its acknowledgement, even after a new turn starts.
                     if method == "turn/start" && active_request != Some(id) {
                         continue;
@@ -1406,7 +1457,7 @@ mod tests {
                 match client.events.recv_timeout(Duration::from_secs(5)).unwrap() {
                     Event::Text { text, .. } => reply.push_str(&text),
                     Event::CommandFinished => break,
-                    Event::Ready | Event::ThreadReady(_) => (),
+                    Event::Ready | Event::ThreadReady(_) | Event::Notice(_) => (),
                     event => panic!("command unexpectedly produced {event:?}"),
                 }
             }
@@ -1416,6 +1467,9 @@ mod tests {
                 assert!(reply.contains("推理强度：high"));
                 assert!(reply.contains("沙箱：workspaceWrite"));
                 assert!(reply.contains("token 用量：尚未收到"));
+                assert!(reply.contains("5小时额度：剩余 75%"), "{reply}");
+                assert!(reply.contains("每周额度（7天）：剩余 65%"), "{reply}");
+                assert!(reply.contains("（本地时间）"), "{reply}");
             }
         }
         assert!(client.run_command("/unknown".into(), false).is_err());
@@ -1438,6 +1492,91 @@ mod tests {
         assert!(text.contains("累计 token：1234"));
         assert!(text.contains("最近一次 token：234"));
         assert!(text.contains("上下文窗口：128000 token"));
+        assert!(text.contains("5小时额度：剩余 60%"));
+        assert!(text.contains("每周额度（7天）：剩余 50%"));
+    }
+    #[test]
+    fn status_quota_errors_and_missing_data_preserve_the_model_session() {
+        for (mode, expected) in [
+            (
+                "quota-error",
+                "账号额度：查询失败（当前登录方式不支持账号额度查询）",
+            ),
+            ("quota-empty", "未返回可用额度数据"),
+        ] {
+            let client = Client::mock(mode);
+            client.run_command("/status".into(), false).unwrap();
+            let Event::Text { text, .. } =
+                wait_for(&client, |event| matches!(event, Event::Text { .. }))
+            else {
+                unreachable!()
+            };
+            assert!(text.contains("会话：fixture-thread"));
+            assert!(text.contains(expected), "{text}");
+            wait_for(&client, |event| matches!(event, Event::CommandFinished));
+            client.submit("查询后继续聊天".into(), false).unwrap();
+            let Event::Text { text, .. } = wait_for(&client, |event| {
+                matches!(event, Event::Text { replace: true, .. })
+            }) else {
+                unreachable!()
+            };
+            assert_eq!(text, "第1轮：查询后继续聊天");
+        }
+    }
+    #[test]
+    fn status_quota_cancellation_ignores_late_responses() {
+        let client = Client::mock("quota-late");
+        client.run_command("/status".into(), false).unwrap();
+        wait_for(
+            &client,
+            |event| matches!(event, Event::Notice(message) if message == "正在查询账号额度…"),
+        );
+        client.interrupt();
+        wait_for(&client, |event| {
+            matches!(event, Event::Finished { interrupted: true })
+        });
+        client.submit("取消后继续聊天".into(), false).unwrap();
+        let mut reply = String::new();
+        loop {
+            match client.events.recv_timeout(Duration::from_secs(5)).unwrap() {
+                Event::Text { id, text, replace } => {
+                    assert_ne!(id, "lexington-command");
+                    if replace {
+                        reply = text;
+                    } else {
+                        reply.push_str(&text);
+                    }
+                }
+                Event::Finished { interrupted: false } => break,
+                Event::Stopped(error) | Event::Failed(error) => panic!("{error}"),
+                Event::CommandFinished => panic!("cancelled status must not finish a later turn"),
+                _ => (),
+            }
+        }
+        assert_eq!(reply, "第1轮：取消后继续聊天");
+    }
+    #[test]
+    fn status_quota_timeout_keeps_the_connection_available() {
+        let client = Client::mock("quota-late");
+        client.run_command("/status".into(), false).unwrap();
+        let mut reply = String::new();
+        loop {
+            match client.events.recv_timeout(Duration::from_secs(35)).unwrap() {
+                Event::Text { text, .. } => reply = text,
+                Event::CommandFinished => break,
+                Event::Ready | Event::ThreadReady(_) | Event::Notice(_) => (),
+                event => panic!("unexpected status result: {event:?}"),
+            }
+        }
+        assert!(reply.contains("会话：fixture-thread"));
+        assert!(reply.contains("账号额度：查询失败（查询超时"));
+        client.submit("超时后继续聊天".into(), false).unwrap();
+        let Event::Text { text, .. } = wait_for(&client, |event| {
+            matches!(event, Event::Text { replace: true, .. })
+        }) else {
+            unreachable!()
+        };
+        assert_eq!(text, "第1轮：超时后继续聊天");
     }
     #[test]
     fn request_manifest_matches_written_blocks_and_preview_does_not_send_a_turn() {

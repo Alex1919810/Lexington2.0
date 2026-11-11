@@ -8,6 +8,7 @@ mod completion;
 mod development;
 mod development_diagnostics;
 mod development_memory;
+mod development_review;
 mod development_tests;
 mod dialog;
 mod input;
