@@ -28,6 +28,7 @@ src/
 │   ├── AGENTS.md
 │   ├── mod.rs
 │   ├── alarm.rs
+│   ├── schedule.rs
 │   ├── app.rs
 │   ├── pet.rs
 │   ├── sidebar.rs
@@ -58,6 +59,7 @@ src/
 │   ├── AGENTS.md
 │   ├── mod.rs
 │   ├── alarm.rs
+│   ├── schedule.rs
 │   ├── config.rs
 │   ├── resources.rs
 │   ├── weather.rs
@@ -432,8 +434,8 @@ Windows 同样启用 UI 的 Inbox、原生位置保存/恢复、显示器检测�
 
 | 文件 | 职责与主要接口 | 依赖及约束 |
 |---|---|---|
-| `ui/mod.rs` | 声明 UI 子模块（含天气和备忘录），对入口导出 `Wife` | 具体组件保持在 UI 模块内部 |
-| `ui/app.rs` | 定义 Wife 与 eframe::App，编排资源、主窗、Codex、提醒及独立设置/人物记忆/备忘录/development viewport；加载 development 工作区，退出时保存任务中断状态；右键菜单提供“重启/关闭”，重启只设置标记并正常关闭，不在 UI 中拉起进程 | 测试 from_root 不启动 CLI/监测或访问用户记录；普通/--dev 的位置和任务文件分别隔离；development_turn 标识本轮显示归属，与开发指令模式分开。主窗无论焦点在哪都以 60Hz 定时请求重绘；egui 0.31 会从 request_repaint_after 扣除 predicted_dt，须补回预测时长，避免关闭 vsync 后 16ms 请求退化为零等待忙循环。Codex 批次用完预算时请求下一帧，保留动画刷新机会。热加载失败保留有效配置；developmentMode 改变等待当前任务结束再新建会话。主窗 input_regions 只包含实际可见控件，独立 viewport 不加入 XShape；主窗最终执行透明颜色转换。生成期间既不按超时清除输出，也不响应气泡外点击关闭；turn_ui_hidden 记录用户对本轮的显式收起，见下方交互说明。窗口位置、角色创建和资源加载约束沿用相关小节 |
+| `ui/mod.rs` | 声明 UI 子模块（含天气、备忘录和定时任务），对入口导出 `Wife` | 具体组件保持在 UI 模块内部 |
+| `ui/app.rs` | 定义 Wife 与 eframe::App，编排资源、主窗、Codex、独立后台定时任务、结果通知、提醒及独立设置/人物记忆/备忘录/development viewport；加载 development 工作区，退出时回收后台定时任务并保存历史中断状态，保存前台任务中断状态；右键菜单提供“重启/关闭”，重启只设置标记并正常关闭，不在 UI 中拉起进程 | 测试 from_root 不启动 CLI/监测或访问用户记录；普通/--dev 的位置和任务文件分别隔离；development_turn 标识本轮显示归属，与开发指令模式分开。主窗无论焦点在哪都以 60Hz 定时请求重绘；egui 0.31 会从 request_repaint_after 扣除 predicted_dt，须补回预测时长，避免关闭 vsync 后 16ms 请求退化为零等待忙循环。Codex 批次用完预算时请求下一帧，保留动画刷新机会。热加载失败保留有效配置；developmentMode 改变等待当前任务结束再新建会话。主窗 input_regions 只包含实际可见控件，独立 viewport 不加入 XShape；主窗最终执行透明颜色转换。生成期间既不按超时清除输出，也不响应气泡外点击关闭；turn_ui_hidden 记录用户对本轮的显式收起，见下方交互说明。窗口位置、角色创建和资源加载约束沿用相关小节 |
 | `ui/pet.rs` | `pet_ui` 绘制立绘/默认宠物和阴影，设置宠物、对话、输入层的共同变换，处理圆形命中、点击与拖动；默认宠物几何和变换测试也在此 | 使用 `Picture` 和平台拖动；将当前帧的归一化 alpha 覆盖区域映射到立绘实际位置并应用共同变换，默认宠物按身体轮廓生成输入区域，阴影不拦截点击；返回尺寸、变换和点击结果供 app 编排。容器 450×450，侧栏不参与共同缩放；拖动阈值 5 个逻辑像素；按下时由平台层读取原生屏幕指针/窗口坐标捕获锚点，不使用 egui 可能过时的窗口局部指针 |
 | `ui/settings.rs` | 独立 720×560 设置 viewport，126px 侧栏提供常规/连接/打卡/闹钟/天气/角色卡导航，右侧为标题说明与卡片式滚动内容，各导航页独立保留滚动位置；连接页仅展示继承环境状态、development 模式、任务窗口入口及会话重启；保存开关、刷新资源 | 无边框不透明 Dock/置顶，按原生指针锚点拖动，控制区不拖窗，嵌入后端回退 Foreground Window。操作在 viewport 回调后执行；无模型/API/Key 表单或凭据草稿。developmentMode 保存成功后 reload_config，忙碌结束再建立新会话；手动重启为当前项目新建任务，不恢复旧线程。保留未知配置与旧密钥；设置关闭只销毁子窗口 |
 | `ui/sidebar.rs` | `sidebar` 绘制七个按钮、悬停提示与动画，报告本帧是否处理点击；↻ 调用 `toggle_damage` 切换同服装正常/战损，▶ 调用 `next_illustration` 在当前状态队列循环；`clock` 将持久化后的手动打卡结果转为对话，仅成功开始计时后排队查询天气，取消不查询，失败可从打卡设置查看 | 用 `damage_counterpart` 判断切换按钮是否可用，缺少同角色/格式/服装配对时禁用；战损时 ↻ 为橙色，悬停提示显示正常/战损切换目标；其他按钮统一使用“下一张立绘”“切换正常/Q版立绘”“切换live2d”“切换角色”，不附加实现说明。显示顺序按动作索引 [0,1,2,3,6,4,5] 排列，保留各动作动画 ID。选择变更后通过 app 重载纹理；按钮 40×40、间隔 10，仅按钮自身（随悬停缩放）加入输入区域、间隙穿透；侧栏点击须阻止同帧外部点击关闭 |
@@ -445,6 +447,7 @@ Windows 同样启用 UI 的 Inbox、原生位置保存/恢复、显示器检测�
 | `ui/development_review.rs` | 终态轮次的文件汇总与开发窗口内部可调宽度、自动换行的全文差异右面板 | Selection 交给 ReviewUi；共用一个原生窗口，宽度上限保留左侧 600px；按文件/字体/宽度缓存折行边界并虚拟化可见显示行；全文复制保持原文，任务归属隔离 |
 | `ui/development_memory.rs` | 项目记忆草稿、核对/停用/删除、任务摘录候选及来源状态 | 保存先写盘再更新内存；变更记忆新建干净线程，角色记忆独立 |
 | `ui/memo.rs` | `MemoUi` 管理独立备忘录窗口、草稿、筛选及错误；`open_memos/memo_window` 由桌宠右键“备忘录”打开，`memo_ui` 提供新增、完成/恢复、逐条彻底删除与全部/待办/已完成筛选 | 500×520 原生置顶 viewport，最小 380×300，Embedded 回退 Foreground Window 并注册输入区域；首次打开按桌宠所在显示器限制位置并预留原生标题栏空间，映射后延迟激活，关闭只销毁备忘录窗口、保留未添加草稿。局部沿用 panel_style/card；事项复选框和正文靠左，完成文字置灰划线，长事项为删除按钮预留右列并自动换行；多行草稿限高滚动，标题/新增/筛选固定、列表独立滚动。文件仅首次打开时加载，普通/--dev 使用 data_root 下 memos.json/memos-dev.json，各角色共用；viewport 回调后执行操作，写盘成功才更新条目/清空草稿，失败显示错误并保留原状态。读取失败禁用写入并提供重读，不启动模型或改动聊天/设置/人物记忆状态 |
+| `ui/schedule.rs` | `ScheduleUi` 管理任务表单、后台 Executor、待保存结果、历史选择与未读结果；右键菜单平级入口打开独立 640×620（最小 480×380）原生无边框 Dock/置顶窗口，标题区域按原生指针按下位置移动（X11/Windows），其他平台回退 StartDrag；关闭按钮和正文控件不拖窗，关闭时清除拖动锚点；任务/执行历史页签固定，正文滚动；支持单次/每天/固定间隔、新增编辑启停删除、立即排队、中断、历史浏览和复制回复；本地时间采用 0～23 时与 0～59 分的两位数 DragValue，保存格式固定 HH:MM，无需输入冒号；每秒检查到期，每帧有界消费独立后台事件 | 目标冻结资源根、工作区、角色与 developmentMode，执行不要求当前会话匹配、不等待前台 busy，不切换或重建前台会话。每次使用新线程，按目标工作区组装项目背景；无需审批，仅该任务显式 never，沿用本机沙箱。主窗单独通知卡片显示未读结果，查看打开定时任务历史且不抢先 Focus 未创建 viewport，不覆盖聊天、busy、草稿或开发记录。保存/排队等动作在定时任务 viewport 回调后执行，关闭只销毁窗口并保留草稿及后台执行，首次位置约束在桌宠所在显示器，映射后延迟激活；Embedded 回退注册主窗输入区域；完成先释放 Executor、再原子保存历史，保存失败保留结果并阻止后续派发重试落盘。退出保存中断及已收到的回复；from_root 不加载用户任务或启动任务；普通/--dev 的 schedules.json/schedules-dev.json 隔离 |
 | `ui/alarm.rs` | `AlarmUi` 管理表单和错误状态；`load_alarms` 加载持久化记录；`alarm_settings_ui` 提供 HH:MM、提示语、每天重复、新增/编辑/删除及启停；`alarm_popup_ui` 每秒检查到期并显示独立原生窗口 | 依赖 AlarmState、clock 本地时间和 paths；弹窗 420×260、无边框不透明置顶，按桌宠所在显示器中央定位（X11 用 RandR，支持负坐标和 DPI），不移动桌宠。X11 使用 Dock 层，普通 AlwaysOnTop 可能被桌宠 Dock 遮挡；映射后 800ms 一次性 Focus/AlwaysOnTop（晚于主窗启动置顶），不复用桌宠 XShape 遮罩。多个到期提醒合并，长文本滚动，固定确认按钮；确认或系统关闭先持久化清除 pending，保存失败保留弹窗。非原生 egui 集成降级为居中 Window 并加入输入区域；Wayland 位置由合成器决定 |
 | `ui/clock.rs` | `poll_clock` 消费系统采样、驱动自动确认及提醒；`clock_settings_ui` 展示自动开关、检测状态、起点和编辑；`clock_action` 保存/撤销/手动操作；`clock_notice_ui` 提供修改和撤销入口 | 调用后端 ClockState 和工具 Monitor；自动打卡成功后排队天气查询（忙碌时也排队但不覆盖聊天）；自动提示加入原生输入区域，关闭立即移除；过期采样不确认，自动开关/确认时长热加载会重置候选；加载失败禁用更改并显示错误，避免覆盖损坏记录 |
 | `ui/input.rs` | 普通输入和 development 输入通过 MessageSource 共用 send_message；poll_handoff 顺序消费外部请求，校验并切换项目后发送，保留宠物输入草稿；输入框、焦点、加载及错误显示 | 主窗输入、开发窗口、外部请求显式标记发送来源；开发来源运行时不绘制主窗输入思考区，结束后主窗不显示该轮错误。原始用户输入只裁首尾空白，不附加路径；持久化副本由 Client::sanitize 遮蔽。发送成功才建立任务记录；模式重连待处理且空闲时先重连再提交。VS Code workspace 优先，其他文件按登记目录/Git 根路由，跨项目或来源不明不发送到活动项目；尚无工作区的旧入口保留普通聊天行为。忙碌继续排队，无焦点抢占或重复提交；本地输入的已知斜杠指令显式转交 Client::run_command，不组装项目背景或因项目记忆变化重建会话；外部交付始终沿普通文本链路。原生悬停、失焦及错误输入约束沿用 UI AGENTS |
@@ -475,7 +478,8 @@ Windows 同样启用 UI 的 Inbox、原生位置保存/恢复、显示器检测�
 | `backend/codex.rs` | Client::start_in_workspace/start_structured/submit/submit_with_context/steer/run_test/interrupt/reply/poll/sanitize；run_command 接收显式客户端指令；app-server stdio、线程恢复、审批和执行事件 | 本机 0.167.0 Schema；initialize → initialized → thread/start 或 thread/resume。模型/API/登录继承环境与本机配置；LEXINGTON_CODEX_EXECUTABLE 指定程序，Windows 优先使用环境 exe 并拒绝 cmd/bat；无模型/提供方 -c 覆盖。developmentMode 开启才附加 development::INSTRUCTIONS，并禁用按角色向量历史的混入；结构化后台提炼保持独立临时 cwd、只读和禁用工具。thread ID 回传任务；只缓存 thread/start/resume 的模型、cwd、沙箱、审批等查询字段及本线程 tokenUsage 通知。精确 /status（大小写无关、不带参数）在握手后按需请求 account/rateLimits/read（params=null），每次重新读取，不启动时预取或周期轮询；其他指令不查额度。查询的请求 ID 与排队指令绑定，30 秒超时/服务端错误只附加额度失败提示，仍返回其他状态并保持模型连接；取消移除请求和指令并保留草稿，迟到 ACK 不影响后续轮次。run_command 生成 Text + CommandFinished，不写 turn/start、不推进角色会话或生成发送清单，结构化后台线程拒绝此入口；握手前取消查询返回 interrupted，沿用草稿保留逻辑；turn/start 明确传原始审批策略或 never，不扩大沙箱。关联 thread/turn/request，ACK 30 秒，流式生成不限时；命令输出、item 生命周期、plan、累计 diff 和 patch 更新转 Activity，agentMessage 只走文本通道。完整环境/提供方 Key 在事件和持久化前遮蔽。Unix 独立进程组、Windows Job 清理整个子进程树，关闭 stdin 后 join 读取；不记录协议原文或凭据 |
 | `backend/weather.rs` | `City::validate` 校验选定地点；`Client::start/send/poll` 通过有界通道在单个工作线程中搜索城市和查询三天预报；解析 WMO 天气代码并生成中文文本 | ureq + Rustls HTTPS 直连 Open-Meteo 地理编码/预报接口，不经过 Codex，不依赖 egui；请求总超时 10 秒、禁重定向、响应限制 1 MiB、待处理队列 4。按城市及请求日缓存 30 分钟，更新失败可显示同城同日 6 小时内旧数据并注明；缓存只在内存，含更新时间/时区和来源。退出丢弃队列并回收线程，最多等待当前有超时请求。测试用本地 HTTP 夹具覆盖编码、缓存/换城、超时/非法/超大数据及无损配置保存 |
 | `backend/memo.rs` | `MemoState::load/items/add/set_completed/delete` 管理备忘录及持久化 | 不依赖 UI；版本 1 JSON 保存 id/text/completed，新事项置顶、裁首尾空白，正文 1～2000 个 Unicode 字符。读取校验版本、重复 ID、空白与过长正文，损坏/不兼容记录拒绝加载且不覆盖；同目录 NamedTempFile（Unix 0600）写入并同步后原子替换，成功后才提交内存，失败自动清理临时文件。删除从文件直接移除，完成与恢复跨重启保留；存储路径由 UI 注入，测试仅使用临时目录 |
-| `backend/alarm.rs` | `AlarmState::load/save/toggle/delete/poll/dismiss` 管理多个本地时间闹钟、调度与待确认提醒 | 不依赖 UI；时间严格 HH:MM，提示语 1～500 字符；一次性闹钟响后关闭，每天重复按 libc mktime 计算下一本地日期，不能固定加 86400 秒，跳过 DST 不存在时间。设置时间已过时安排下一次；启用重新计算；到期（含休眠/停机错过）每个闹钟只补一次并推进到未来，pending 跨重启保存；同时到期合并，重启不重复。普通/开发记录隔离，0600 临时文件同步后原子替换，保存失败不提交内存，损坏数据拒绝覆盖。含同时触发、重复/错过、重启、校验、编辑启停删除与存储失败测试 |
+| `backend/schedule.rs` | `ScheduleState::load/save/toggle/delete/poll/queue/begin/sent/finish/history/mark_read` 管理调度与持久化历史；`Executor::start/poll/reply/interrupt` 使用独立 Client 运行模型任务，并回传 Sent/Prompt/Finished | 不依赖 UI/egui；版本 1 camelCase JSON 最多 100 个任务、最近 200 次执行，名称 1～80 字符，提示词 1～20000 字符，历史快照保留任务目标与提示词、开始结束时间、终态、回复/错误和 unread；删任务保留历史。单次/每天严格本地 HH:MM（已过安排明天），复用 alarm::next_due 日历/DST 规则；间隔 1～525600 分钟，从保存/启用或到期轮询时间推进。停机/休眠/忙碌积压每任务合并一次，后台串行、前台独立；执行中不积压补跑。begin 先落盘派发状态再发送，Manifest 才标记 Running，Finished 才视为完成；异常重启将未确认执行标为 Unknown 并通知，须显式重新排队。每次新建普通 Codex 线程且审批 never，不改全局开关或沙箱；已支持的审批请求自动同意，补充信息交回独立原生提问。每帧最多 64 事件/4ms，回复按 item ID 合并并在落盘前整体遮蔽，超过 1 MiB 停止，持久化回复/错误各限 64000 字符。0600 同目录临时文件同步并原子替换，成功后才提交内存；坏记录拒绝覆盖。测试覆盖错过/合并、重启不重发、失败落盘、历史保存/删任务保留、自动审批、提问、中断、跨片段凭据遮蔽及前台并行 |
+| `backend/alarm.rs` | `AlarmState::load/save/toggle/delete/poll/dismiss` 管理多个本地时间闹钟、调度与待确认提醒；模块内共享 `next_due` 供定时任务计算本地 HH:MM | 不依赖 UI；时间严格 HH:MM，提示语 1～500 字符；一次性闹钟响后关闭，每天重复按 libc mktime 计算下一本地日期，不能固定加 86400 秒，跳过 DST 不存在时间。设置时间已过时安排下一次；启用重新计算；到期（含休眠/停机错过）每个闹钟只补一次并推进到未来，pending 跨重启保存；同时到期合并，重启不重复。普通/开发记录隔离，0600 临时文件同步后原子替换，保存失败不提交内存，损坏数据拒绝覆盖。含同时触发、重复/错过、重启、校验、编辑启停删除与存储失败测试 |
 | `backend/clock.rs` | `ClockState::load/observe/toggle/edit/undo/poll` 管理本地日期的自动确认、手动打卡、时间修正、撤销和一次性下班提醒；`now/local_time` 处理时间戳与本地时间 | 依赖配置、serde、标准库及 tools/time 跨平台 libc 本地时间转换，不依赖 UI。自动开始须持续活跃默认 180 秒，回溯首次操作；空闲满 60 秒、锁屏/不可用样本、采样间隔超过 10 秒、时钟跳变均重置确认，确认终点须有新操作。每天自动一次，手动取消、撤销或提醒后当天不再自动开始；跨本地日期重置。记录立即原子保存，失败不提交内存状态；起点、已处理和已提醒状态跨启动恢复，开发模式隔离；编辑拒绝未来或不存在的本地时间。含模拟时钟、断档、持久化、撤销、编辑和存储错误测试 |
 
 ## 工具代码
@@ -649,7 +653,7 @@ python3 scripts/test-dependencies.py
 - 配置：旧 `llm` 与 Codex 连接字段仅兼容保留，不再用于覆盖；模型、API 和登录由外部 Codex 环境负责。developmentMode 是 Lexington 独立开关，不改变本机 Codex 权限。
 - UI：设置两栏为“常规 / 连接 / 打卡 / 闹钟 / 天气 / 角色卡”导航与分组滚动内容，操作补充说明用悬停提示；设置拖动在 primary_pressed 时取得 interaction_snapshot 命中 ID，再于锁外 read_response 排除其他 click/drag 控件，禁止锁内重入；无 WM 时直接 ConfigureWindow。气泡/输入局部坐标检查后再平移到窗口中心。字体组合为 Noto Sans CJK TTC 简体 face index 2、Liberation、Noto Sans Math；14px 中文字宽应接近 14px，不额外 FontTweak.scale 放大。
 - 立绘与 GIF：`Normal_Normal` 的服装名为 `Normal`；随包 GIF 7 对、PNG 8 对。现有 1024×1024、67 帧 GIF 索引约 67 MiB；完整 RGBA 全库缓存曾导致系统杀进程。LZ4 压缩 RGBA 本机解压慢于索引合成，不作为默认方案；性能测试不代表整程序 CPU/RSS，后者需另行采样。跳过 Keep/Any 帧均更新处置画布，UI 不额外保存合成帧副本。
-- 状态文件：打卡为 `$XDG_DATA_HOME/lexington/clock.json` / `clock-dev.json`（默认 `~/.local/share`），闹钟为同目录 `alarms.json` / `alarms-dev.json`，含 alarms/pending。Unix 本地时间使用 libc；打卡提醒后保留起点并立即保存已提醒状态，取消、撤销、午休和重启当天不再自动开始。
+- 状态文件：打卡为 `$XDG_DATA_HOME/lexington/clock.json` / `clock-dev.json`（默认 `~/.local/share`），闹钟为同目录 `alarms.json` / `alarms-dev.json`，含 alarms/pending；定时任务为 `schedules.json` / `schedules-dev.json`，含 tasks/history。Unix 本地时间使用 libc；打卡提醒后保留起点并立即保存已提醒状态，取消、撤销、午休和重启当天不再自动开始。
 - 安装：用 `xdg-user-dir DESKTOP`，桌面文件为 `Lexington.desktop`，迁移小写旧文件，菜单 ID 仍为 `lexington.desktop`；设可执行并尝试可信标记。缺 Rust 时安装最小稳定工具链；发布包 `install.sh` 仅安装运行依赖。Codex 原生包须保留 `bin/codex-code-mode-host`、`codex-resources`、`codex-path`、`codex-package.json` 完整布局后链接 `~/.local/bin/codex`；`--skip-optional` 可跳过可选系统包。
 
 
@@ -661,3 +665,11 @@ cargo test --locked ui::weather::tests::
 ```
 
 天气测试使用固定 JSON 和本地 HTTP 夹具，不连接真实天气服务或模型。配置、打卡或设置联动变化再选择对应模块/用例补测。
+
+### 定时任务增量验证
+
+`cargo test --locked schedule::tests::` 验证后台调度与 UI 并行链路；`cargo test --locked backend::alarm::tests::` 验证共享日历计算；提问路由调整补测 `cargo test --locked development_questions_show_waiting_and_resume_after_reply_or_stop -- --test-threads=1`。协议夹具 schedule 模式断言审批 never、未覆盖 sandboxPolicy，并接受审批应答；普通模式仍断言本机策略不变。任务测试只使用临时目录与模拟服务，不启动真实模型或读取用户记录。后台执行要求 Lexington 保持运行，关闭后不会由系统唤醒；重新启动合并补发到期任务。历史正文按 64000 字符封顶，界面明确截断提示。
+
+定时任务的补充信息与主会话提问共用原生 viewport，PendingPrompt.scheduled 标明归属并给标题加前缀；回答/中断分别交 Executor 或主 Client。主会话完成、失败和重建只清理主会话提问，后台终态只清理后台提问，避免两条会话互相丢失请求。
+
+定时任务界面增量回归：`cargo test --locked scheduled_time_controls_save_padded_time_and_reopen_preserves_drafts` 验证时/分控件两位显示与 HH:MM 保存，`cargo test --locked memo_and_schedule_context_menu_entries_open_independent_windows` 复用备忘录菜单驱动验证两个平级入口，`cargo test --locked context_menu_exit_actions_receive_input_outside_artwork` 验证新增菜单后退出/重启命中。`ui/memo.rs` 的菜单测试因此扩展到两个入口，备忘录运行逻辑不变。

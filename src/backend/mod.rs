@@ -10,6 +10,7 @@ pub mod handoff;
 pub mod jobs;
 pub mod memo;
 pub mod resources;
+pub mod schedule;
 pub mod weather;
 
 #[cfg(test)]

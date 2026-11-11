@@ -93,6 +93,10 @@ for line in sys.stdin:
         elif mode.startswith("development-"):
             instructions = params.get("developerInstructions", "")
             assert ("[Lexington development]" in instructions) == (mode == "development-on")
+        elif mode == "schedule":
+            assert method == "thread/start", "scheduled runs must use isolated fresh threads"
+            if params.get("developerInstructions"):
+                assert "[Lexington development]" in params["developerInstructions"]
         elif mode == "context":
             assert params.get("developerInstructions")
         else:
@@ -132,7 +136,7 @@ for line in sys.stdin:
         if mode == "commands":
             assert text.split()[0].lower() not in ("/status", "/model", "/permissions", "/help", "/compact"), "client commands must not start a model turn"
             notify("thread/tokenUsage/updated", {"tokenUsage": {"total": {"totalTokens": 1234}, "last": {"totalTokens": 234}, "modelContextWindow": 128000}})
-        expected = "never" if text.startswith("no-approval") or mode.startswith('memory-') else ({"granular": {"sandbox_approval": True, "rules": False, "skill_approval": True, "request_permissions": True, "mcp_elicitations": True}} if mode == "granular" else "on-request")
+        expected = "never" if text.startswith("no-approval") or mode.startswith('memory-') or mode == "schedule" else ({"granular": {"sandbox_approval": True, "rules": False, "skill_approval": True, "request_permissions": True, "mcp_elicitations": True}} if mode == "granular" else "on-request")
         assert params["approvalPolicy"] == expected, (params["approvalPolicy"], expected)
         if mode.startswith('memory-'):
             assert params['sandboxPolicy']=={'type':'readOnly','networkAccess':False}
@@ -243,11 +247,11 @@ for line in sys.stdin:
     elif method is None:
         if pending == "approve":
             assert message["id"] == "approval-1"
-            assert message["result"]["decision"] == "decline"
+            assert message["result"]["decision"] == ("accept" if mode == "schedule" else "decline")
             complete("已拒绝命令")
         elif pending == "file-approval":
             assert message["id"] == "approval-file"
-            assert message["result"]["decision"] == "decline"
+            assert message["result"]["decision"] == ("accept" if mode == "schedule" else "decline")
             complete("已拒绝文件改动")
         elif pending == "question":
             assert message["result"]["answers"]["choice"]["answers"] == ["A"]

@@ -32,7 +32,7 @@ pub struct AlarmState {
 
 /// Next occurrence of a local HH:MM, strictly after now. mktime handles local
 /// calendar days rather than adding 86400 seconds across DST changes.
-fn next_due(text: &str, now: i64) -> Result<i64, String> {
+pub(super) fn next_due(text: &str, now: i64) -> Result<i64, String> {
     let bytes = text.as_bytes();
     if bytes.len() != 5
         || bytes[2] != b':'

@@ -94,6 +94,7 @@ pub struct Wife {
     pub(super) context_ui: super::roleplay_context::ContextUi,
     pub(super) character_memory_ui: super::character_memories::CharacterMemoryUi,
     pub(super) memo: super::memo::MemoUi,
+    pub(super) schedule: super::schedule::ScheduleUi,
     transparency: Option<std::sync::Arc<super::transparency::Transparency>>,
 }
 impl Wife {
@@ -128,6 +129,7 @@ impl Wife {
         }
         let ctx = cc.egui_ctx.clone();
         app.load_alarms();
+        app.load_schedules();
         app.activity_monitor = Some(activity::Monitor::start(move || ctx.request_repaint()));
         app.start_codex(&cc.egui_ctx);
         #[cfg(any(target_os = "linux", windows))]
@@ -245,6 +247,7 @@ impl Wife {
             context_ui: Default::default(),
             character_memory_ui: Default::default(),
             memo: Default::default(),
+            schedule: Default::default(),
             transparency: None,
         };
         app.refresh(ctx);
@@ -311,6 +314,10 @@ impl Wife {
                 self.open_character_memories();
                 ui.close_menu();
             }
+            if ui.button("定时任务").clicked() {
+                self.schedule.open = true;
+                ui.close_menu();
+            }
             if ui.button("备忘录").clicked() {
                 self.open_memos();
                 ui.close_menu();
@@ -347,6 +354,7 @@ impl Wife {
 }
 impl eframe::App for Wife {
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
+        self.stop_schedules();
         self.interrupt_development_test("应用已退出。");
         self.finish_development("interrupted", "应用已退出。");
         self.save_development(true);
@@ -550,6 +558,7 @@ impl Wife {
         }
         #[cfg(any(target_os = "linux", windows))]
         self.poll_handoff(ctx);
+        self.poll_schedules(ctx);
         if !self.busy
             && !self.text.is_empty()
             && self.last_activity.elapsed().as_secs_f64() >= self.config.dialog.auto_close_delay
@@ -589,10 +598,12 @@ impl Wife {
         {
             self.input_regions.push(window.response.rect);
         }
+        self.schedule_notice_ui(ctx);
         self.settings_ui(ctx);
         self.development_window(ctx);
         self.character_memories_window(ctx);
         self.memo_window(ctx);
+        self.schedule_window(ctx);
         self.codex_prompt_ui(ctx);
         self.clock_notice_ui(ctx);
         self.alarm_popup_ui(ctx);

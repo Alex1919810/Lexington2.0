@@ -19,6 +19,7 @@ mod role_card;
 mod roleplay_context;
 mod roleplay_memory;
 mod roleplay_vector;
+mod schedule;
 mod settings;
 mod sidebar;
 mod style;

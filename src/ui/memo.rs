@@ -416,65 +416,69 @@ mod tests {
     }
 
     #[test]
-    fn memo_context_menu_entry_opens_independent_window() {
-        let directory = tempfile::tempdir().unwrap();
-        let ctx = egui::Context::default();
-        let mut app = Wife::from_root(&ctx, true, directory.path().to_path_buf());
-        app.memo.state = Some(MemoState::load(directory.path().join("memos.json")).unwrap());
-        let mut run = |events| {
-            ctx.run(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(500., 500.),
-                    )),
-                    events,
-                    ..Default::default()
-                },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        let response =
-                            ui.allocate_response(egui::vec2(100., 100.), egui::Sense::click());
-                        app.context_menu(ctx, &response);
-                    });
-                },
-            )
-        };
-        run(vec![]);
-        let point = egui::pos2(40., 40.);
-        run(vec![egui::Event::PointerMoved(point)]);
-        for pressed in [true, false] {
-            run(vec![egui::Event::PointerButton {
-                pos: point,
-                button: egui::PointerButton::Secondary,
-                pressed,
-                modifiers: Default::default(),
-            }]);
+    fn memo_and_schedule_context_menu_entries_open_independent_windows() {
+        for label in ["备忘录", "定时任务"] {
+            let directory = tempfile::tempdir().unwrap();
+            let ctx = egui::Context::default();
+            let mut app = Wife::from_root(&ctx, true, directory.path().to_path_buf());
+            app.memo.state = Some(MemoState::load(directory.path().join("memos.json")).unwrap());
+            let mut run = |events| {
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(500., 500.),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            let response =
+                                ui.allocate_response(egui::vec2(100., 100.), egui::Sense::click());
+                            app.context_menu(ctx, &response);
+                        });
+                    },
+                )
+            };
+            run(vec![]);
+            let point = egui::pos2(40., 40.);
+            run(vec![egui::Event::PointerMoved(point)]);
+            for pressed in [true, false] {
+                run(vec![egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Secondary,
+                    pressed,
+                    modifiers: Default::default(),
+                }]);
+            }
+            let output = run(vec![]);
+            let point = output
+                .shapes
+                .iter()
+                .find_map(|shape| {
+                    if let egui::Shape::Text(text) = &shape.shape
+                        && text.galley.job.text == label
+                    {
+                        Some(text.pos + text.galley.size() / 2.)
+                    } else {
+                        None
+                    }
+                })
+                .expect("memo entry in pet context menu");
+            run(vec![egui::Event::PointerMoved(point)]);
+            for pressed in [true, false] {
+                run(vec![egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                }]);
+            }
+            assert_eq!(app.memo.open, label == "备忘录");
+            assert_eq!(app.schedule.open, label == "定时任务");
+            assert!(!app.settings && !app.character_memory_ui.open);
+            assert!(app.codex.is_none());
         }
-        let output = run(vec![]);
-        let point = output
-            .shapes
-            .iter()
-            .find_map(|shape| {
-                if let egui::Shape::Text(text) = &shape.shape
-                    && text.galley.job.text == "备忘录"
-                {
-                    Some(text.pos + text.galley.size() / 2.)
-                } else {
-                    None
-                }
-            })
-            .expect("memo entry in pet context menu");
-        run(vec![egui::Event::PointerMoved(point)]);
-        for pressed in [true, false] {
-            run(vec![egui::Event::PointerButton {
-                pos: point,
-                button: egui::PointerButton::Primary,
-                pressed,
-                modifiers: Default::default(),
-            }]);
-        }
-        assert!(app.memo.open && !app.settings && !app.character_memory_ui.open);
-        assert!(app.codex.is_none());
     }
 }

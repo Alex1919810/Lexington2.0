@@ -44,3 +44,5 @@
 - 结构化后台工作使用 jobs::StructuredJobs，任务绑定 owner 与连接快照，轮询有帧预算；先释放 Client/临时 cwd 再交付终态。普通对话和测试执行不迁入后台队列，角色模块不持有进程。
 
 - app-server 不解析 CLI 斜杠文本；客户端指令用独立 run_command 入口，查询依据 thread/start/resume 的实际设置与本线程 tokenUsage 通知；/status 的账号余额须额外按需调用 account/rateLimits/read，不能从 token 用量估算，也不能把 secondary 固定当作每周额度，必须按 windowDurationMins 判断。多分组视图优先、旧单分组仅回退；接口失败/超时保留会话，取消后丢弃迟到回复。结果沿已遮蔽 Text + CommandFinished 返回，不创建模型 turn、不推进角色历史或伪造发送清单；候选与识别共用 commands 模块，未接入指令明确提示。
+
+- 定时任务使用 schedule::Executor 的独立普通 Client，每次新线程，显式 approvalPolicy=never（用户已要求无需审批），不改全局 noApproval 或沙箱；不能迁入禁工具的 StructuredJobs。持久化 begin 先于发送，Manifest 才标已发送，终态整体遮蔽回复后写历史；异常退出的未确认运行不得自动重试。

@@ -7,11 +7,23 @@ use std::time::{Duration, Instant};
 pub(super) struct PendingPrompt {
     pub request: Prompt,
     pub open: bool,
+    pub scheduled: bool,
     answers: Vec<String>,
     started: Option<Instant>,
     raised: bool,
 }
 impl PendingPrompt {
+    pub(super) fn scheduled(mut request: Prompt) -> Self {
+        request.title = format!("定时任务 · {}", request.title);
+        Self {
+            answers: vec![String::new(); request.questions.len()],
+            request,
+            open: true,
+            scheduled: true,
+            started: None,
+            raised: false,
+        }
+    }
     pub(super) fn reopen(&mut self) {
         self.open = true;
         self.started = None;
@@ -73,7 +85,7 @@ impl Wife {
         self.busy = false;
         self.development_turn = false;
         self.external_turn = false;
-        self.codex_prompts.clear();
+        self.codex_prompts.retain(|prompt| prompt.scheduled);
         self.error.clear();
         let ctx = ctx.clone();
         let mut config = self.config.codex.clone();
@@ -227,7 +239,7 @@ impl Wife {
                         self.input.clear();
                     }
                     self.external_turn = false;
-                    self.codex_prompts.clear();
+                    self.codex_prompts.retain(|prompt| prompt.scheduled);
                     self.last_activity = Instant::now();
                 }
                 Event::Failed(error) | Event::Stopped(error) => {
@@ -243,7 +255,7 @@ impl Wife {
                     }
                     self.external_turn = false;
                     self.codex_status = "连接或任务失败".into();
-                    self.codex_prompts.clear();
+                    self.codex_prompts.retain(|prompt| prompt.scheduled);
                     self.error = error;
                 }
                 Event::Notice(message) => self.codex_status = message,
@@ -253,6 +265,7 @@ impl Wife {
                         request,
                         answers,
                         open: true,
+                        scheduled: false,
                         started: None,
                         raised: false,
                     });
@@ -487,14 +500,25 @@ impl Wife {
             prompt.raised = false;
             ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Close);
         }
-        if stop && let Some(codex) = &self.codex {
-            codex.interrupt();
+        if stop {
+            if prompt.scheduled {
+                if let Some(executor) = &self.schedule.executor {
+                    executor.interrupt();
+                }
+            } else if let Some(codex) = &self.codex {
+                codex.interrupt();
+            }
         }
         if let Some(answer) = answer
             && let Some(prompt) = self.codex_prompts.pop_front()
-            && let Some(codex) = &self.codex
         {
-            codex.reply(prompt.request.id, answer);
+            if prompt.scheduled {
+                if let Some(executor) = &self.schedule.executor {
+                    executor.reply(prompt.request.id, answer);
+                }
+            } else if let Some(codex) = &self.codex {
+                codex.reply(prompt.request.id, answer);
+            }
         }
     }
 }
