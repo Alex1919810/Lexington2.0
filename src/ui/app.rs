@@ -592,7 +592,7 @@ impl Wife {
         if let Some(window) = egui::Window::new("关于")
             .open(&mut self.about)
             .show(ctx, |ui| {
-                ui.label("Lexington 2.0\n纯 Rust 桌面宠物\neframe / egui");
+                ui.label("我觉得列克星敦是世界的主宰，所有人都是她的奴仆");
             })
             && self.about
         {
