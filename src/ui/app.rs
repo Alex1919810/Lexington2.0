@@ -95,6 +95,7 @@ pub struct Wife {
     pub(super) context_ui: super::roleplay_context::ContextUi,
     pub(super) character_memory_ui: super::character_memories::CharacterMemoryUi,
     pub(super) memo: super::memo::MemoUi,
+    pub(super) calendar: super::calendar::CalendarUi,
     pub(super) schedule: super::schedule::ScheduleUi,
     transparency: Option<std::sync::Arc<super::transparency::Transparency>>,
 }
@@ -249,6 +250,7 @@ impl Wife {
             context_ui: Default::default(),
             character_memory_ui: Default::default(),
             memo: Default::default(),
+            calendar: Default::default(),
             schedule: Default::default(),
             transparency: None,
         };
@@ -322,6 +324,10 @@ impl Wife {
             }
             if ui.button("备忘录").clicked() {
                 self.open_memos();
+                ui.close_menu();
+            }
+            if ui.button("日历").clicked() {
+                self.open_calendar();
                 ui.close_menu();
             }
             ui.separator();
@@ -608,6 +614,7 @@ impl Wife {
         }
         self.character_memories_window(ctx);
         self.memo_window(ctx);
+        self.calendar_window(ctx);
         self.schedule_window(ctx);
         self.codex_prompt_ui(ctx);
         self.clock_notice_ui(ctx);

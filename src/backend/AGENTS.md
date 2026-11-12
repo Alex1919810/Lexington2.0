@@ -48,3 +48,5 @@
 - 定时任务使用 schedule::Executor 的独立普通 Client，每次新线程，显式 approvalPolicy=never（用户已要求无需审批），不改全局 noApproval 或沙箱；不能迁入禁工具的 StructuredJobs。持久化 begin 先于发送，Manifest 才标已发送，终态整体遮蔽回复后写历史；异常退出的未确认运行不得自动重试。
 
 - `/model` 交互目录只通过按需 model/list 获取并遍历分页，取消移除请求 ID，错误不得终止连接；SelectModel 必须在空闲时按已读取目录校验，独立 ModelSelected 确认，不借此创建 turn。选择仅缓存于当前 Client，后续 turn/start 明确传 model/effort，保持原始审批基线和沙箱；Panel/错误沿用凭据遮蔽。
+
+- 日历加班记录独立于每天重置的 ClockState，自动记录保存下班基准与加班打卡时间快照，手动记录单独保存分钟数（每日 0～1440），两者互斥且兼容既有自动记录，不伪造手动上下班时间；重复日期替换，月统计累计各日完整分钟，不能按点击次数累加或用后来配置重算历史。日历公历网格用年月日运算，避免以固定秒数计算月份/星期。
