@@ -20,13 +20,8 @@ pub(super) struct ScheduleUi {
     pointer_down: bool,
     pub(super) state: Option<ScheduleState>,
     pub(super) error: String,
-    editing: Option<u64>,
-    name: String,
-    prompt: String,
-    kind: usize,
-    time_parts: [u32; 2],
-    minutes: u32,
-    target: Option<Target>,
+    editing: Option<(u64, ScheduleDraft)>,
+    draft: ScheduleDraft,
     last_poll: Instant,
     active: Option<u64>,
     pub(super) executor: Option<Executor>,
@@ -45,12 +40,7 @@ impl Default for ScheduleUi {
             state: None,
             error: String::new(),
             editing: None,
-            name: String::new(),
-            prompt: String::new(),
-            kind: 0,
-            time_parts: [9, 0],
-            minutes: 60,
-            target: None,
+            draft: ScheduleDraft::default(),
             last_poll: Instant::now() - Duration::from_secs(2),
             active: None,
             executor: None,
@@ -61,12 +51,145 @@ impl Default for ScheduleUi {
     }
 }
 pub(super) enum ScheduleAction {
-    Save(TaskSpec),
+    Save(Option<u64>, TaskSpec),
+    Edit(u64),
+    CancelEdit,
     Toggle(u64),
     Delete(u64),
     Queue(u64),
     MarkRead,
     Stop,
+}
+struct ScheduleDraft {
+    name: String,
+    prompt: String,
+    kind: usize,
+    time_parts: [u32; 2],
+    minutes: u32,
+    target: Option<Target>,
+}
+impl Default for ScheduleDraft {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            prompt: String::new(),
+            kind: 0,
+            time_parts: [9, 0],
+            minutes: 60,
+            target: None,
+        }
+    }
+}
+impl ScheduleDraft {
+    fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        target: Target,
+        id: Option<u64>,
+    ) -> Option<ScheduleAction> {
+        let mut action = None;
+        let target = self.target.clone().unwrap_or(target);
+        ui.add(
+            egui::TextEdit::singleline(&mut self.name)
+                .hint_text("任务名称")
+                .char_limit(80)
+                .desired_width(f32::INFINITY),
+        );
+        ui.horizontal(|ui| {
+            for (kind, label) in [(0, "单次"), (1, "每天"), (2, "固定间隔")] {
+                ui.selectable_value(&mut self.kind, kind, label);
+            }
+        });
+        ui.horizontal(|ui| {
+            if self.kind == 2 {
+                ui.label("每");
+                ui.add(egui::DragValue::new(&mut self.minutes).range(1..=525_600));
+                ui.label("分钟（保存后开始计时）");
+            } else {
+                ui.label("本地时间");
+                for (index, (max, unit)) in [(23, "时"), (59, "分")].into_iter().enumerate() {
+                    ui.add(
+                        egui::DragValue::new(&mut self.time_parts[index])
+                            .range(0..=max)
+                            .speed(1.)
+                            .custom_formatter(|value, _| format!("{:02}", value as u32)),
+                    );
+                    ui.label(unit);
+                }
+                ui.weak("已过则安排明天");
+            }
+        });
+        egui::ScrollArea::vertical()
+            .id_salt("scheduled-prompt-editor")
+            .max_height(110.)
+            .min_scrolled_height(0.)
+            .show(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.prompt)
+                        .hint_text("到期时发送给 Codex 的提示词")
+                        .desired_rows(3)
+                        .desired_width(f32::INFINITY)
+                        .char_limit(MAX_PROMPT_CHARS),
+                );
+            });
+        ui.add(
+            egui::Label::new(format!(
+                "目标：{} · {} · {}",
+                if target.character.is_empty() {
+                    "默认角色"
+                } else {
+                    &target.character
+                },
+                target.workspace.as_ref().unwrap_or(&target.root).display(),
+                if target.development_mode {
+                    "开发模式"
+                } else {
+                    "普通模式"
+                }
+            ))
+            .wrap(),
+        );
+        ui.horizontal(|ui| {
+            if ui
+                .button(if id.is_some() {
+                    "保存任务"
+                } else {
+                    "添加任务"
+                })
+                .clicked()
+            {
+                action = Some(ScheduleAction::Save(
+                    id,
+                    TaskSpec {
+                        name: self.name.clone(),
+                        prompt: self.prompt.clone(),
+                        target,
+                        schedule: match self.kind {
+                            1 => Schedule::Daily {
+                                time: format!(
+                                    "{:02}:{:02}",
+                                    self.time_parts[0], self.time_parts[1]
+                                ),
+                            },
+                            2 => Schedule::Interval {
+                                minutes: self.minutes,
+                            },
+                            _ => Schedule::Once {
+                                time: format!(
+                                    "{:02}:{:02}",
+                                    self.time_parts[0], self.time_parts[1]
+                                ),
+                            },
+                        },
+                    },
+                ));
+            }
+            if id.is_some() && ui.button("取消编辑").clicked() {
+                action = Some(ScheduleAction::CancelEdit);
+            }
+        });
+        action
+    }
 }
 impl Wife {
     pub(super) fn load_schedules(&mut self) {
@@ -256,111 +379,11 @@ impl Wife {
             return self.schedule_history_ui(ui);
         }
         let mut action = None;
-        let target = self
-            .schedule
-            .target
-            .clone()
-            .unwrap_or_else(|| self.schedule_target());
+        let target = self.schedule_target();
         ui.small("后台自动执行，无需审批，不占用当前聊天。保持 Lexington 运行；关闭期间错过的多次执行会在下次启动合并补发一次。");
         ui.add_enabled_ui(self.schedule.state.is_some(), |ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.schedule.name)
-                    .hint_text("任务名称")
-                    .char_limit(80)
-                    .desired_width(f32::INFINITY),
-            );
-            ui.horizontal(|ui| {
-                for (kind, label) in [(0, "单次"), (1, "每天"), (2, "固定间隔")] {
-                    ui.selectable_value(&mut self.schedule.kind, kind, label);
-                }
-            });
-            ui.horizontal(|ui| {
-                if self.schedule.kind == 2 {
-                    ui.label("每");
-                    ui.add(egui::DragValue::new(&mut self.schedule.minutes).range(1..=525_600));
-                    ui.label("分钟（保存后开始计时）");
-                } else {
-                    ui.label("本地时间");
-                    for (index, (max, unit)) in [(23, "时"), (59, "分")].into_iter().enumerate() {
-                        ui.add(
-                            egui::DragValue::new(&mut self.schedule.time_parts[index])
-                                .range(0..=max)
-                                .speed(1.)
-                                .custom_formatter(|value, _| format!("{:02}", value as u32)),
-                        );
-                        ui.label(unit);
-                    }
-                    ui.weak("已过则安排明天");
-                }
-            });
-            egui::ScrollArea::vertical()
-                .id_salt("scheduled-prompt-editor")
-                .max_height(110.)
-                .min_scrolled_height(0.)
-                .show(ui, |ui| {
-                    ui.add(
-                        egui::TextEdit::multiline(&mut self.schedule.prompt)
-                            .hint_text("到期时发送给 Codex 的提示词")
-                            .desired_rows(3)
-                            .desired_width(f32::INFINITY)
-                            .char_limit(MAX_PROMPT_CHARS),
-                    );
-                });
-            ui.add(
-                egui::Label::new(format!(
-                    "目标：{} · {} · {}",
-                    if target.character.is_empty() {
-                        "默认角色"
-                    } else {
-                        &target.character
-                    },
-                    target.workspace.as_ref().unwrap_or(&target.root).display(),
-                    if target.development_mode {
-                        "开发模式"
-                    } else {
-                        "普通模式"
-                    }
-                ))
-                .wrap(),
-            );
-            ui.horizontal(|ui| {
-                if ui
-                    .button(if self.schedule.editing.is_some() {
-                        "保存任务"
-                    } else {
-                        "添加任务"
-                    })
-                    .clicked()
-                {
-                    action = Some(ScheduleAction::Save(TaskSpec {
-                        name: self.schedule.name.clone(),
-                        prompt: self.schedule.prompt.clone(),
-                        target,
-                        schedule: match self.schedule.kind {
-                            1 => Schedule::Daily {
-                                time: format!(
-                                    "{:02}:{:02}",
-                                    self.schedule.time_parts[0], self.schedule.time_parts[1]
-                                ),
-                            },
-                            2 => Schedule::Interval {
-                                minutes: self.schedule.minutes,
-                            },
-                            _ => Schedule::Once {
-                                time: format!(
-                                    "{:02}:{:02}",
-                                    self.schedule.time_parts[0], self.schedule.time_parts[1]
-                                ),
-                            },
-                        },
-                    }));
-                }
-                if self.schedule.editing.is_some() && ui.button("取消编辑").clicked() {
-                    self.schedule.editing = None;
-                    self.schedule.target = None;
-                    self.schedule.name.clear();
-                    self.schedule.prompt.clear();
-                }
+            ui.push_id("new-scheduled-task", |ui| {
+                action = self.schedule.draft.show(ui, target, None);
             });
             ui.separator();
             if let Some(state) = &self.schedule.state {
@@ -379,43 +402,17 @@ impl Wife {
                                 ui.add(egui::Label::new(&task.spec.name).wrap());
                                 if ui
                                     .add_enabled(
-                                        !task.status.active(),
+                                        !task.status.active()
+                                            && !self
+                                                .schedule
+                                                .editing
+                                                .as_ref()
+                                                .is_some_and(|(id, _)| *id == task.id),
                                         egui::Button::new("编辑").small(),
                                     )
                                     .clicked()
                                 {
-                                    self.schedule.editing = Some(task.id);
-                                    self.schedule.name = task.spec.name.clone();
-                                    self.schedule.prompt = task.spec.prompt.clone();
-                                    self.schedule.target = Some(task.spec.target.clone());
-                                    match &task.spec.schedule {
-                                        Schedule::Once { time } => {
-                                            self.schedule.kind = 0;
-                                            for (value, part) in self
-                                                .schedule
-                                                .time_parts
-                                                .iter_mut()
-                                                .zip(time.split(':'))
-                                            {
-                                                *value = part.parse().unwrap_or_default();
-                                            }
-                                        }
-                                        Schedule::Daily { time } => {
-                                            self.schedule.kind = 1;
-                                            for (value, part) in self
-                                                .schedule
-                                                .time_parts
-                                                .iter_mut()
-                                                .zip(time.split(':'))
-                                            {
-                                                *value = part.parse().unwrap_or_default();
-                                            }
-                                        }
-                                        Schedule::Interval { minutes } => {
-                                            self.schedule.kind = 2;
-                                            self.schedule.minutes = *minutes;
-                                        }
-                                    }
+                                    action = Some(ScheduleAction::Edit(task.id));
                                 }
                                 if ui
                                     .add_enabled(
@@ -436,27 +433,38 @@ impl Wife {
                                     action = Some(ScheduleAction::Queue(task.id));
                                 }
                             });
-                            ui.weak(match &task.spec.schedule {
-                                Schedule::Once { time } => format!("单次 {time}"),
-                                Schedule::Daily { time } => format!("每天 {time}"),
-                                Schedule::Interval { minutes } => format!("每 {minutes} 分钟"),
-                            });
-                            ui.add(egui::Label::new(&task.spec.prompt).truncate())
-                                .on_hover_text(&task.spec.prompt);
-                            let target = &task.spec.target;
-                            ui.add(
-                                egui::Label::new(format!(
-                                    "{} · {} · {}",
-                                    target.character,
-                                    target.workspace.as_ref().unwrap_or(&target.root).display(),
-                                    if target.development_mode {
-                                        "开发模式"
-                                    } else {
-                                        "普通模式"
-                                    }
-                                ))
-                                .wrap(),
-                            );
+                            if let Some((id, draft)) = &mut self.schedule.editing
+                                && *id == task.id
+                            {
+                                ui.separator();
+                                if let Some(edit_action) =
+                                    draft.show(ui, task.spec.target.clone(), Some(task.id))
+                                {
+                                    action = Some(edit_action);
+                                }
+                            } else {
+                                ui.weak(match &task.spec.schedule {
+                                    Schedule::Once { time } => format!("单次 {time}"),
+                                    Schedule::Daily { time } => format!("每天 {time}"),
+                                    Schedule::Interval { minutes } => format!("每 {minutes} 分钟"),
+                                });
+                                ui.add(egui::Label::new(&task.spec.prompt).truncate())
+                                    .on_hover_text(&task.spec.prompt);
+                                let target = &task.spec.target;
+                                ui.add(
+                                    egui::Label::new(format!(
+                                        "{} · {} · {}",
+                                        target.character,
+                                        target.workspace.as_ref().unwrap_or(&target.root).display(),
+                                        if target.development_mode {
+                                            "开发模式"
+                                        } else {
+                                            "普通模式"
+                                        }
+                                    ))
+                                    .wrap(),
+                                );
+                            }
                             ui.label(task.status.label());
                             if task.status.active() && ui.small_button("中断后台任务").clicked()
                             {
@@ -484,18 +492,52 @@ impl Wife {
         let Some(state) = &mut self.schedule.state else {
             return;
         };
-        let saving = matches!(action, ScheduleAction::Save(_));
+        let saving = match &action {
+            ScheduleAction::Save(id, _) => Some(*id),
+            _ => None,
+        };
         let deleting = match &action {
             ScheduleAction::Delete(id) => Some(*id),
             _ => None,
         };
         let result = match action {
-            ScheduleAction::Save(mut spec) => {
+            ScheduleAction::Save(id, mut spec) => {
                 if let Some(client) = &self.codex {
                     spec.name = client.sanitize(&spec.name);
                     spec.prompt = client.sanitize(&spec.prompt);
                 }
-                state.save(self.schedule.editing, spec, clock::now())
+                state.save(id, spec, clock::now())
+            }
+            ScheduleAction::Edit(id) => {
+                if let Some(task) = state.tasks().iter().find(|task| task.id == id)
+                    && !task.status.active()
+                {
+                    let mut draft = ScheduleDraft {
+                        name: task.spec.name.clone(),
+                        prompt: task.spec.prompt.clone(),
+                        target: Some(task.spec.target.clone()),
+                        ..Default::default()
+                    };
+                    match &task.spec.schedule {
+                        Schedule::Once { time } | Schedule::Daily { time } => {
+                            draft.kind =
+                                usize::from(matches!(task.spec.schedule, Schedule::Daily { .. }));
+                            for (value, part) in draft.time_parts.iter_mut().zip(time.split(':')) {
+                                *value = part.parse().unwrap_or_default();
+                            }
+                        }
+                        Schedule::Interval { minutes } => {
+                            draft.kind = 2;
+                            draft.minutes = *minutes;
+                        }
+                    }
+                    self.schedule.editing = Some((id, draft));
+                }
+                Ok(())
+            }
+            ScheduleAction::CancelEdit => {
+                self.schedule.editing = None;
+                Ok(())
             }
             ScheduleAction::Toggle(id) => state.toggle(id, clock::now()),
             ScheduleAction::Delete(id) => state.delete(id),
@@ -508,11 +550,15 @@ impl Wife {
                 Ok(())
             }
         };
-        if result.is_ok() && (saving || (deleting.is_some() && deleting == self.schedule.editing)) {
-            self.schedule.editing = None;
-            self.schedule.target = None;
-            self.schedule.name.clear();
-            self.schedule.prompt.clear();
+        if result.is_ok() {
+            if saving == Some(None) {
+                self.schedule.draft.name.clear();
+                self.schedule.draft.prompt.clear();
+            }
+            let editing = self.schedule.editing.as_ref().map(|(id, _)| *id);
+            if editing.is_some() && (saving == Some(editing) || deleting == editing) {
+                self.schedule.editing = None;
+            }
         }
         self.schedule.error = result.err().unwrap_or_default();
     }
@@ -989,6 +1035,148 @@ mod tests {
         );
     }
     #[test]
+    fn scheduled_tasks_edit_inside_their_cards_without_overwriting_new_task_drafts() {
+        fn frame(
+            app: &mut Wife,
+            ctx: &egui::Context,
+            events: Vec<egui::Event>,
+        ) -> egui::FullOutput {
+            let mut action = None;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(640., 1000.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default()
+                        .show(ctx, |ui| action = app.schedule_panel(ui, &mut false));
+                },
+            );
+            if let Some(action) = action {
+                app.apply_schedule_action(action);
+            }
+            output
+        }
+        let point = |output: &egui::FullOutput, label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| {
+                    if let egui::Shape::Text(text) = &shape.shape
+                        && text.galley.job.text == label
+                    {
+                        Some(text.pos + text.galley.size() / 2.)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| panic!("missing {label}"))
+        };
+        let click = |app: &mut Wife, ctx: &egui::Context, pos| {
+            frame(app, ctx, vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame(
+                    app,
+                    ctx,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    }],
+                );
+            }
+        };
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = Wife::from_root(&ctx, false, root.path().to_path_buf());
+        let path = root.path().join("schedules.json");
+        let mut state = ScheduleState::load(path.clone()).unwrap();
+        let target = app.schedule_target();
+        for name in ["FIRST-TASK", "SECOND-TASK"] {
+            state
+                .save(
+                    None,
+                    TaskSpec {
+                        name: name.into(),
+                        prompt: "原始提示词".into(),
+                        schedule: Schedule::Daily {
+                            time: "09:05".into(),
+                        },
+                        target: target.clone(),
+                    },
+                    clock::now(),
+                )
+                .unwrap();
+        }
+        let id = state.tasks()[0].id;
+        app.schedule.state = Some(state);
+        app.schedule.draft.name = "NEW-TASK-DRAFT".into();
+        app.schedule.draft.prompt = "新增草稿".into();
+        let output = frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, point(&output, "编辑"));
+        let output = frame(&mut app, &ctx, vec![]);
+        let save = point(&output, "保存任务");
+        assert!(save.y > point(&output, "FIRST-TASK").y);
+        assert!(save.y < point(&output, "SECOND-TASK").y);
+        assert!(point(&output, "添加任务").y < point(&output, "FIRST-TASK").y);
+        assert_eq!(app.schedule.draft.name, "NEW-TASK-DRAFT");
+        assert_eq!(app.schedule.draft.prompt, "新增草稿");
+        let (_, draft) = app.schedule.editing.as_mut().unwrap();
+        assert_eq!(draft.kind, 1);
+        assert_eq!(draft.time_parts, [9, 5]);
+        draft.prompt.clear();
+        click(&mut app, &ctx, save);
+        assert!(!app.schedule.error.is_empty());
+        assert!(app.schedule.editing.is_some());
+        assert_eq!(
+            ScheduleState::load(path.clone()).unwrap().tasks()[0]
+                .spec
+                .prompt,
+            "原始提示词"
+        );
+        let (_, draft) = app.schedule.editing.as_mut().unwrap();
+        draft.prompt = "修改后的提示词".into();
+        draft.time_parts = [10, 7];
+        click(&mut app, &ctx, save);
+        assert!(app.schedule.error.is_empty());
+        assert!(app.schedule.editing.is_none());
+        let state = ScheduleState::load(path.clone()).unwrap();
+        assert_eq!(state.tasks().len(), 2);
+        assert_eq!(state.tasks()[0].spec.prompt, "修改后的提示词");
+        assert!(state.tasks()[0].spec.target == target);
+        assert!(
+            matches!(&state.tasks()[0].spec.schedule, Schedule::Daily { time } if time == "10:07")
+        );
+        assert_eq!(app.schedule.draft.name, "NEW-TASK-DRAFT");
+        assert_eq!(app.schedule.draft.prompt, "新增草稿");
+
+        let output = frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, point(&output, "编辑"));
+        app.schedule.editing.as_mut().unwrap().1.prompt = "未保存的修改".into();
+        let output = frame(&mut app, &ctx, vec![]);
+        // Adding a task while editing must not save over the task being edited.
+        click(&mut app, &ctx, point(&output, "添加任务"));
+        assert_eq!(app.schedule.editing.as_ref().unwrap().0, id);
+        assert!(app.schedule.draft.name.is_empty() && app.schedule.draft.prompt.is_empty());
+        let state = ScheduleState::load(path.clone()).unwrap();
+        assert_eq!(state.tasks().len(), 3);
+        assert_eq!(state.tasks()[0].spec.prompt, "修改后的提示词");
+        assert_eq!(state.tasks()[2].spec.name, "NEW-TASK-DRAFT");
+        let output = frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, point(&output, "取消编辑"));
+        assert!(app.schedule.editing.is_none());
+        assert_eq!(
+            ScheduleState::load(path).unwrap().tasks()[0].spec.prompt,
+            "修改后的提示词"
+        );
+        assert!(!app.busy && app.codex.is_none());
+    }
+    #[test]
     fn scheduled_time_controls_save_padded_time_and_reopen_preserves_drafts() {
         let root = tempfile::tempdir().unwrap();
         let ctx = egui::Context::default();
@@ -996,9 +1184,9 @@ mod tests {
         let path = root.path().join("schedules.json");
         app.schedule.state = Some(ScheduleState::load(path.clone()).unwrap());
         app.schedule.open = true;
-        app.schedule.time_parts = [9, 5];
-        app.schedule.name = "早间任务".into();
-        app.schedule.prompt = "检查当天任务".into();
+        app.schedule.draft.time_parts = [9, 5];
+        app.schedule.draft.name = "早间任务".into();
+        app.schedule.draft.prompt = "检查当天任务".into();
         let mut frame = |events| {
             let mut action = None;
             let output = ctx.run(
@@ -1050,11 +1238,11 @@ mod tests {
         assert!(
             matches!(&state.tasks()[0].spec.schedule, Schedule::Once { time } if time == "09:05")
         );
-        assert!(app.schedule.name.is_empty() && app.schedule.prompt.is_empty());
-        app.schedule.prompt = "关闭窗口保留草稿".into();
+        assert!(app.schedule.draft.name.is_empty() && app.schedule.draft.prompt.is_empty());
+        app.schedule.draft.prompt = "关闭窗口保留草稿".into();
         app.schedule.open = false;
         app.schedule.open = true;
-        assert_eq!(app.schedule.prompt, "关闭窗口保留草稿");
+        assert_eq!(app.schedule.draft.prompt, "关闭窗口保留草稿");
         assert!(!app.settings && app.codex.is_none());
     }
 }
