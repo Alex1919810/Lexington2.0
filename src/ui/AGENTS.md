@@ -94,3 +94,5 @@
 - 定时任务从主窗右键菜单打开独立原生 viewport，不放入设置；时/分控件自动补齐为 HH:MM，关闭窗口保留草稿与后台任务。定时任务与前台聊天分别持有 Client、状态和输出；后台结果通过独立通知与历史展示，不能改主窗 text/input/busy 或开发任务。PendingPrompt.scheduled 绑定回答/中断目标，清理提问必须按来源保留另一会话；后台完成落盘失败须保留结果并暂停后续派发，避免丢历史或重复发送。
 
 - 无边框 Dock 的定时任务窗口必须显式实现标题拖动；X11/Windows 沿用原生指针按下锚点与 move_window，不能只画标题或依赖 Dock 的系统装饰。关闭及释放时清除锚点，按钮和正文不启动拖窗。
+
+- 斜杠交互面板按发送来源放入对应 viewport，不能仅把 /model 的结果当作只读回复。模型目录及强度来自 backend，确认等待 ModelSelected；取消不应用，新发送或重建会话清理旧面板，不能清已有草稿。/permissions 只复用现有 noApproval 保存，不改变沙箱；主窗面板及展开的 ComboBox 菜单都要注册原生输入区域，development 操作在 viewport 回调后应用。

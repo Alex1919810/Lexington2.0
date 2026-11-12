@@ -28,6 +28,8 @@ pub enum Event {
         interrupted: bool,
     },
     CommandFinished,
+    CommandPanel(Box<super::commands::Panel>),
+    ModelSelected(Result<(), String>),
     Failed(String),
     Notice(String),
     Prompt(Prompt),
@@ -52,6 +54,7 @@ pub struct Question {
 enum Input {
     Submit(String, bool, crate::development::context::Manifest),
     Command(String, bool),
+    SelectModel(String, String),
     Steer(String),
     Execute(crate::development::testing::TestRequest),
     Preview(String, crate::development::context::Manifest),
@@ -403,6 +406,8 @@ impl Client {
                         | Event::Notice(text)
                         | Event::Text { text, .. } => *text = text.replace(secret, "[hidden]"),
                         Event::Steered(Err(text)) => *text = text.replace(secret, "[hidden]"),
+                        Event::ModelSelected(Err(text)) => *text = text.replace(secret, "[hidden]"),
+                        Event::CommandPanel(panel) => panel.redact(secret),
                         Event::Prompt(prompt) => {
                             prompt.title = prompt.title.replace(secret, "[hidden]");
                             prompt.details = prompt.details.replace(secret, "[hidden]");
@@ -476,6 +481,11 @@ impl Client {
         }
         self.input
             .send(Input::Command(text, no_approval))
+            .map_err(|_| "Codex 已停止，请在设置中重启会话。".into())
+    }
+    pub fn select_model(&self, model: String, effort: String) -> Result<(), String> {
+        self.input
+            .send(Input::SelectModel(model, effort))
             .map_err(|_| "Codex 已停止，请在设置中重启会话。".into())
     }
     pub fn steer(&self, text: String) -> Result<(), String> {
@@ -579,6 +589,11 @@ fn communicate(
     let mut queued_command: Option<(String, bool)> = None;
     let mut rate_limits_request: Option<u64> = None;
     let mut rate_limits: Option<Result<Value, String>> = None;
+    let mut model_request: Option<u64> = None;
+    let mut model_result: Option<Result<(), String>> = None;
+    let mut models = Vec::<super::commands::Model>::new();
+    let mut model_cursors = std::collections::HashSet::new();
+    let mut selected_model: Option<(String, String)> = None;
     let mut turn_id: Option<String> = None;
     let mut active_request = None;
     let mut steering: Option<(u64, String)> = None;
@@ -591,6 +606,15 @@ fn communicate(
     let mut before_turn = None;
     let mut final_messages = std::collections::BTreeMap::<String, String>::new();
     loop {
+        if let Some(id) = model_request
+            && pending
+                .get(&id)
+                .is_some_and(|(_, started)| started.elapsed() > Duration::from_secs(30))
+        {
+            pending.remove(&id);
+            model_request = None;
+            model_result = Some(Err("模型列表查询超时，请重新输入 /model。".into()));
+        }
         if let Some(id) = rate_limits_request
             && pending
                 .get(&id)
@@ -624,10 +648,25 @@ fn communicate(
             return Err("测试执行通道未在超时后返回，已停止连接。".into());
         }
         if let Some(thread) = &thread_id {
+            let model = queued_command
+                .as_ref()
+                .is_some_and(|(text, _)| text.trim().eq_ignore_ascii_case("/model"));
             let status = queued_command
                 .as_ref()
                 .is_some_and(|(text, _)| text.trim().eq_ignore_ascii_case("/status"));
-            if status && rate_limits.is_none() {
+            if model && model_result.is_none() {
+                if model_request.is_none() {
+                    model_request = Some(next);
+                    request(
+                        writer,
+                        &mut pending,
+                        &mut next,
+                        "model/list",
+                        json!({"limit":100}),
+                    )?;
+                    emit(Event::Notice("正在读取可用模型…".into()));
+                }
+            } else if status && rate_limits.is_none() {
                 if rate_limits_request.is_none() {
                     rate_limits_request = Some(next);
                     request(
@@ -640,6 +679,7 @@ fn communicate(
                     emit(Event::Notice("正在查询账号额度…".into()));
                 }
             } else if let Some((text, no_approval)) = queued_command.take() {
+                let permissions = text.trim().eq_ignore_ascii_case("/permissions");
                 let mut text = super::commands::response(
                     &text,
                     &thread_settings,
@@ -647,6 +687,34 @@ fn communicate(
                     directory,
                     no_approval,
                 );
+                if model {
+                    match model_result.take().unwrap() {
+                        Ok(()) => {
+                            text.push_str("\n\n请选择模型与推理强度，应用后从下一轮生效。");
+                            emit(Event::CommandPanel(Box::new(
+                                super::commands::Panel::Model {
+                                    current: thread_settings["model"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .into(),
+                                    effort: thread_settings["reasoningEffort"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .into(),
+                                    models: models.clone(),
+                                },
+                            )));
+                        }
+                        Err(error) => {
+                            text.push_str("\n\n");
+                            text.push_str(&error);
+                        }
+                    }
+                } else if permissions {
+                    emit(Event::CommandPanel(Box::new(
+                        super::commands::Panel::Permissions(text.clone()),
+                    )));
+                }
                 if let Some(limits) = rate_limits.take() {
                     text.push_str("\n\n");
                     text.push_str(&super::commands::rate_limits(
@@ -713,6 +781,10 @@ fn communicate(
                     }
                     let mut turn_params = json!({"threadId":thread,"input":input,
                         "approvalPolicy": if structured || no_approval {json!("never")} else {original_approval_policy.clone()}});
+                    if let Some((model, effort)) = &selected_model {
+                        turn_params["model"] = json!(model);
+                        turn_params["effort"] = json!(effort);
+                    }
                     if let Some(schema) = &schema {
                         turn_params["outputSchema"] = schema.clone();
                         turn_params["sandboxPolicy"] =
@@ -745,6 +817,31 @@ fn communicate(
             Err(_) => return Ok(()),
         };
         match input {
+            Input::SelectModel(model, effort) => {
+                let result = if structured
+                    || active
+                    || queued.is_some()
+                    || queued_test.is_some()
+                    || running_test.is_some()
+                    || queued_command.is_some()
+                {
+                    Err("当前任务仍在运行，请结束后再切换模型。".into())
+                } else if !models.iter().any(|entry| {
+                    entry.model == model
+                        && entry
+                            .supported_reasoning_efforts
+                            .iter()
+                            .any(|option| option.reasoning_effort == effort)
+                }) {
+                    Err("该模型或推理强度不在可用列表中，请重新输入 /model。".into())
+                } else {
+                    thread_settings["model"] = json!(model);
+                    thread_settings["reasoningEffort"] = json!(effort);
+                    selected_model = Some((model, effort));
+                    Ok(())
+                };
+                emit(Event::ModelSelected(result));
+            }
             Input::Command(text, no_approval) => {
                 if structured
                     || active
@@ -757,6 +854,9 @@ fn communicate(
                         "当前任务仍在运行，请结束后再执行指令。".into(),
                     ));
                 } else {
+                    models.clear();
+                    model_cursors.clear();
+                    model_result = None;
                     queued_command = Some((text, no_approval));
                 }
             }
@@ -845,6 +945,11 @@ fn communicate(
                         pending.remove(&id);
                     }
                     rate_limits = None;
+                    if let Some(id) = model_request.take() {
+                        pending.remove(&id);
+                    }
+                    models.clear();
+                    model_result = None;
                     emit(Event::Finished { interrupted: true });
                 }
                 if let Some(test) = queued_test.take() {
@@ -1151,6 +1256,52 @@ fn communicate(
                 } else if let Some(id) = message["id"].as_u64()
                     && let Some((method, _)) = pending.remove(&id)
                 {
+                    if method == "model/list" {
+                        if model_request != Some(id) {
+                            continue;
+                        }
+                        model_request = None;
+                        if let Some(error) = message.get("error") {
+                            model_result = Some(Err(format!(
+                                "模型列表查询失败：{}",
+                                error["message"].as_str().unwrap_or("服务未返回模型列表")
+                            )));
+                        } else if let Ok(page) = serde_json::from_value::<Vec<super::commands::Model>>(
+                            message["result"]["data"].clone(),
+                        ) {
+                            models.extend(page);
+                            if models.len() > 4096 || model_cursors.len() >= 32 {
+                                model_result = Some(Err("模型列表过大，请检查提供方配置。".into()));
+                            } else if let Some(cursor) = message["result"]["nextCursor"].as_str() {
+                                if model_cursors.insert(cursor.to_owned()) {
+                                    model_request = Some(next);
+                                    request(
+                                        writer,
+                                        &mut pending,
+                                        &mut next,
+                                        "model/list",
+                                        json!({"limit":100,"cursor":cursor}),
+                                    )?;
+                                } else {
+                                    model_result =
+                                        Some(Err("模型列表分页重复，请重新输入 /model。".into()));
+                                }
+                            } else {
+                                model_result = Some(if models.is_empty() {
+                                    Err("当前提供方未返回可用模型。".into())
+                                } else {
+                                    Ok(())
+                                });
+                            }
+                        } else {
+                            model_result =
+                                Some(Err("无法识别模型列表，请检查 Codex 版本。".into()));
+                        }
+                        if matches!(model_result, Some(Err(_))) {
+                            models.clear();
+                        }
+                        continue;
+                    }
                     if method == "account/rateLimits/read" {
                         if rate_limits_request == Some(id) {
                             rate_limits_request = None;
@@ -1410,6 +1561,120 @@ impl Client {
 mod tests {
     use super::*;
     #[test]
+    fn slash_model_selection_uses_catalog_efforts_and_overrides_only_the_next_turn() {
+        let client = Client::mock("model-switch");
+        client.run_command("/model".into(), false).unwrap();
+        let Event::CommandPanel(panel) =
+            wait_for(&client, |event| matches!(event, Event::CommandPanel(_)))
+        else {
+            unreachable!()
+        };
+        let super::super::commands::Panel::Model {
+            current,
+            effort,
+            models,
+        } = *panel
+        else {
+            panic!("wrong panel")
+        };
+        assert_eq!(current, "fixture-model");
+        assert_eq!(effort, "high");
+        assert_eq!(models.len(), 2, "must consume all catalog pages");
+        assert_eq!(
+            models[0].supported_reasoning_efforts[1].reasoning_effort,
+            "ultra"
+        );
+        assert_eq!(models[1].model, "fixture-other");
+        wait_for(&client, |event| matches!(event, Event::CommandFinished));
+        for (model, effort) in [("missing", "high"), ("fixture-other", "ultra")] {
+            client.select_model(model.into(), effort.into()).unwrap();
+            assert!(matches!(
+                wait_for(&client, |event| matches!(event, Event::ModelSelected(_))),
+                Event::ModelSelected(Err(_))
+            ));
+        }
+        client
+            .select_model("fixture-other".into(), "high".into())
+            .unwrap();
+        assert!(matches!(
+            wait_for(&client, |event| matches!(event, Event::ModelSelected(_))),
+            Event::ModelSelected(Ok(()))
+        ));
+        client.run_command("/status".into(), false).unwrap();
+        let Event::Text { text, .. } =
+            wait_for(&client, |event| matches!(event, Event::Text { .. }))
+        else {
+            unreachable!()
+        };
+        assert!(text.contains("模型：fixture-other") && text.contains("推理强度：high"));
+        wait_for(&client, |event| matches!(event, Event::CommandFinished));
+        // The fixture checks model, effort, unchanged policy/sandbox and that this is turn 1.
+        client
+            .submit("verify selected model".into(), false)
+            .unwrap();
+        let Event::Text { text, .. } = wait_for(&client, |event| {
+            matches!(event, Event::Text { replace: true, .. })
+        }) else {
+            unreachable!()
+        };
+        assert_eq!(text, "第1轮：verify selected model");
+        wait_for(&client, |event| {
+            matches!(event, Event::Finished { interrupted: false })
+        });
+    }
+
+    #[test]
+    fn slash_model_catalog_failures_and_cancelled_late_pages_keep_connection() {
+        for (mode, expected) in [
+            ("model-error", "fixture model unavailable"),
+            ("model-empty", "未返回可用模型"),
+            ("model-repeat", "分页重复"),
+            ("model-malformed", "无法识别模型列表"),
+            ("model-late", ""),
+        ] {
+            let client = Client::mock(mode);
+            client.run_command("/model".into(), false).unwrap();
+            if mode == "model-late" {
+                wait_for(
+                    &client,
+                    |event| matches!(event, Event::Notice(text) if text.contains("读取可用模型")),
+                );
+                client.interrupt();
+                wait_for(&client, |event| {
+                    matches!(event, Event::Finished { interrupted: true })
+                });
+            } else {
+                let mut reply = String::new();
+                loop {
+                    match client.events.recv_timeout(Duration::from_secs(5)).unwrap() {
+                        Event::Text { text, .. } => reply.push_str(&text),
+                        Event::CommandFinished => break,
+                        Event::Ready | Event::ThreadReady(_) | Event::Notice(_) => (),
+                        event => panic!("unexpected catalog result {event:?}"),
+                    }
+                }
+                assert!(reply.contains(expected), "{reply}");
+            }
+            client.submit("still connected".into(), false).unwrap();
+            loop {
+                match client.events.recv_timeout(Duration::from_secs(5)).unwrap() {
+                    Event::Text {
+                        text,
+                        replace: true,
+                        ..
+                    } => assert_eq!(text, "第1轮：still connected"),
+                    Event::Finished { interrupted: false } => break,
+                    Event::CommandPanel(_)
+                    | Event::CommandFinished
+                    | Event::Failed(_)
+                    | Event::Stopped(_) => panic!("late catalog changed following turn"),
+                    _ => (),
+                }
+            }
+        }
+    }
+
+    #[test]
     fn slash_command_cancelled_before_handshake_uses_interrupted_completion() {
         let (sender, receiver) = mpsc::channel();
         sender
@@ -1457,7 +1722,10 @@ mod tests {
                 match client.events.recv_timeout(Duration::from_secs(5)).unwrap() {
                     Event::Text { text, .. } => reply.push_str(&text),
                     Event::CommandFinished => break,
-                    Event::Ready | Event::ThreadReady(_) | Event::Notice(_) => (),
+                    Event::Ready
+                    | Event::ThreadReady(_)
+                    | Event::Notice(_)
+                    | Event::CommandPanel(_) => (),
                     event => panic!("command unexpectedly produced {event:?}"),
                 }
             }

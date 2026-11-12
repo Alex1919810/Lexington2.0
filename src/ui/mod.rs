@@ -4,6 +4,7 @@ mod assets;
 mod character_memories;
 mod clock;
 mod codex;
+mod command_panel;
 mod completion;
 mod development;
 mod development_diagnostics;

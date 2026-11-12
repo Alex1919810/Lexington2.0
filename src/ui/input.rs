@@ -19,6 +19,7 @@ impl Wife {
     #[cfg(any(target_os = "linux", windows))]
     pub(super) fn poll_handoff(&mut self, ctx: &egui::Context) {
         if !self.busy
+            && !self.command_ui.as_ref().is_some_and(|state| state.pending)
             && let Some(request) = self.inbox.as_ref().and_then(|inbox| inbox.poll())
         {
             self.last_activity = std::time::Instant::now();
@@ -88,6 +89,11 @@ impl Wife {
             self.error = "当前任务仍在运行。".into();
             return;
         }
+        if self.command_ui.as_ref().is_some_and(|state| state.pending) {
+            self.error = "正在应用模型选择，请稍候。".into();
+            return;
+        }
+        self.command_ui = None;
         let command = !matches!(source, MessageSource::External(_))
             && crate::backend::commands::is_command(&text);
         let mut context = if command {

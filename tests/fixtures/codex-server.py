@@ -33,6 +33,7 @@ deferred_ack = None
 steers = []
 rate_limit_reads = 0
 delayed_rate_limit = None
+delayed_model = None
 
 
 def send(value):
@@ -63,6 +64,19 @@ for line in sys.stdin:
         pass
     elif method == "config/read" and mode.startswith("memory-"):
         send({"id":message["id"],"result":{"config":{"mcp_servers":{"fixture.with.dot":{"command":"fixture-only","required":True}}}}})
+    elif method == "model/list":
+        if mode == "model-error":
+            send({"id": message["id"], "error": {"code": -32000, "message": "fixture model unavailable"}})
+        elif mode == "model-empty":
+            send({"id": message["id"], "result": {"data": [], "nextCursor": None}})
+        elif mode == "model-malformed":
+            send({"id": message["id"], "result": {"data": [{}]}})
+        elif mode == "model-late":
+            delayed_model = message["id"]
+        else:
+            second = params.get("cursor") == "fixture-next"
+            model = {"model": "fixture-other" if second else "fixture-model", "displayName": "Other model" if second else "Current model", "description": "fixture catalog", "defaultReasoningEffort": "low" if second else "high", "supportedReasoningEfforts": [{"reasoningEffort": effort, "description": effort} for effort in (["low", "high"] if second else ["high", "ultra"])]}
+            send({"id": message["id"], "result": {"data": [model], "nextCursor": "fixture-next" if not second or mode == "model-repeat" else None}})
     elif method == "account/rateLimits/read":
         assert params is None, "quota reads must not advertise unsupported features"
         rate_limit_reads += 1
@@ -102,7 +116,7 @@ for line in sys.stdin:
         else:
             assert "developerInstructions" not in params
         result = {"thread": {"id": thread}, "approvalPolicy": {"granular": {"sandbox_approval": True, "rules": False, "skill_approval": True, "request_permissions": True, "mcp_elicitations": True}} if mode == "granular" else "on-request"}
-        if mode == "commands":
+        if mode == "commands" or mode.startswith("model-"):
             result.update(model="fixture-model", modelProvider="fixture-provider", reasoningEffort="high", cwd=os.getcwd(), sandbox={"type": "workspaceWrite", "networkAccess": False})
         send({"id": message["id"], "result": result})
     elif method == "command/exec":
@@ -123,6 +137,16 @@ for line in sys.stdin:
         send({'id':pending[1],'result':{'exitCode':130,'stdout':'cancelled output','stderr':''}})
         pending=None
     elif method == "turn/start":
+        if delayed_model is not None:
+            send({"id": delayed_model, "result": {"data": [], "nextCursor": None}})
+            delayed_model = None
+        if mode == "model-switch":
+            assert params["model"] == "fixture-other"
+            assert params["effort"] == "high"
+            assert params["approvalPolicy"] == "on-request"
+            assert "sandboxPolicy" not in params
+        if mode == "model-cancel":
+            assert "model" not in params and "effort" not in params
         assert params["threadId"] == thread
         if delayed_rate_limit is not None:
             send({"id": delayed_rate_limit, "result": {"rateLimits": {"primary": {"usedPercent": 99, "windowDurationMins": 300}}}})

@@ -69,6 +69,7 @@ impl Wife {
         self.development.thread_id = None;
         self.development.session_mode = self.config.codex.development_mode;
         self.context_ui = Default::default();
+        self.command_ui = None;
         self.codex_restart_pending = false;
         self.complete_development_supplement(Err("会话已重启，未确认的补充保留在草稿中。".into()));
         // Drop the previous process before replacing it, so restarts cannot leave orphan servers.
@@ -137,6 +138,25 @@ impl Wife {
                 }
             }
             match event {
+                Event::CommandPanel(panel) => {
+                    self.command_ui = Some(super::command_panel::CommandUi::new(
+                        *panel,
+                        self.development_turn,
+                        self.config.codex.no_approval,
+                    ));
+                }
+                Event::ModelSelected(result) => {
+                    if let Some(state) = &mut self.command_ui {
+                        state.pending = false;
+                        match result {
+                            Ok(()) => {
+                                self.codex_status = "模型选择已应用，从下一轮生效".into();
+                                self.command_ui = None;
+                            }
+                            Err(error) => state.error = error,
+                        }
+                    }
+                }
                 Event::Steered(result) => self.complete_development_supplement(result),
                 Event::TestResult(result) => self.receive_test_result(*result),
                 Event::Context(plan) => {
@@ -243,6 +263,10 @@ impl Wife {
                     self.last_activity = Instant::now();
                 }
                 Event::Failed(error) | Event::Stopped(error) => {
+                    if let Some(state) = &mut self.command_ui {
+                        state.pending = false;
+                        state.error = error.clone();
+                    }
                     self.complete_development_supplement(Err(error.clone()));
                     self.interrupt_development_test(&error);
                     self.finish_development("failed", &error);

@@ -308,6 +308,7 @@ impl Wife {
         let mut delete_task = None;
         let mut pick_project = false;
         let mut review_selection = None;
+        let mut command_action = None;
         let mut review_window_size = None;
         ctx.show_viewport_immediate(id, builder, |child, class| {
             if class != egui::ViewportClass::Embedded {
@@ -532,7 +533,11 @@ impl Wife {
                 if child.input(|input|input.viewport().close_requested()) {open = false;}
                 egui::CentralPanel::default().frame(egui::Frame::central_panel(&child.style()).fill(egui::Color32::from_rgb(247,249,252)).inner_margin(16)).show(child,&mut contents);
             }
+            command_action = self.command_panel_ui(child, true, class == egui::ViewportClass::Embedded);
         });
+        if let Some(action) = command_action {
+            self.apply_command_panel(action);
+        }
         self.development.viewport_open = true;
         self.development.open = open;
         if !open {
@@ -1073,6 +1078,7 @@ fn rich_text(ui: &mut egui::Ui, text: &str) {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::backend::config::Config;
     use std::{
         fs,
         time::{Duration, Instant},
@@ -2467,6 +2473,233 @@ mod tests {
             let output = frame(vec![egui::Event::Text("cannot edit".into())]);
             assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(shape) if shape.galley.job.text == text)));
         }
+    }
+
+    #[test]
+    fn slash_model_picker_applies_from_both_viewports_and_preserves_drafts() {
+        for development in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let ctx = egui::Context::default();
+            let mut app = Wife::from_root(&ctx, false, root.path().into());
+            let project = app.development.book.add(root.path()).unwrap();
+            app.development.book.active = Some(project);
+            app.development.open = development;
+            app.codex = Some(crate::backend::codex::Client::mock("model-switch"));
+            let source = if development {
+                MessageSource::Development
+            } else {
+                MessageSource::Main
+            };
+            app.send_message(&ctx, "/model".into(), source);
+            let wait = |app: &mut Wife| {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while (app.busy || app.command_ui.as_ref().is_some_and(|state| state.pending))
+                    && Instant::now() < deadline
+                {
+                    app.poll_codex();
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                assert!(!app.busy && app.error.is_empty(), "{}", app.error);
+            };
+            wait(&mut app);
+            assert_eq!(app.command_ui.as_ref().unwrap().development, development);
+            app.input = "main draft".into();
+            app.development.input = "development draft".into();
+            let frame = |app: &mut Wife, events| {
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800., 600.),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        app.input_regions.clear();
+                        if development {
+                            app.development_window(ctx);
+                        } else if let Some(action) = app.command_panel_ui(ctx, false, true) {
+                            app.apply_command_panel(action);
+                        }
+                    },
+                )
+            };
+            let click = |app: &mut Wife, label: &str| {
+                for _ in 0..2 {
+                    frame(app, vec![]);
+                }
+                let output = frame(app, vec![]);
+                let point = output
+                    .shapes
+                    .iter()
+                    .rev()
+                    .find_map(|shape| {
+                        if let egui::Shape::Text(text) = &shape.shape
+                            && text.galley.job.text == label
+                        {
+                            Some(text.galley.rect.translate(text.pos.to_vec2()).center())
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_else(|| panic!("missing {label}, development={development}"));
+                if !development {
+                    assert!(
+                        app.input_regions.iter().any(|rect| rect.contains(point)),
+                        "panel or dropdown must receive native input"
+                    );
+                }
+                for pressed in [true, false] {
+                    frame(
+                        app,
+                        vec![
+                            egui::Event::PointerMoved(point),
+                            egui::Event::PointerButton {
+                                pos: point,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: Default::default(),
+                            },
+                        ],
+                    );
+                }
+            };
+            click(&mut app, "Current model");
+            click(&mut app, "Other model");
+            let crate::backend::commands::Panel::Model {
+                current, effort, ..
+            } = &app.command_ui.as_ref().unwrap().panel
+            else {
+                panic!("wrong panel")
+            };
+            assert_eq!(current, "fixture-other");
+            assert_eq!(effort, "low", "switching models uses its supported default");
+            click(&mut app, "low");
+            click(&mut app, "high");
+            click(&mut app, "应用");
+            wait(&mut app);
+            assert!(
+                app.command_ui.is_none(),
+                "must wait for successful selection ACK"
+            );
+            assert_eq!(app.input, "main draft");
+            assert_eq!(app.development.input, "development draft");
+            let source = if development {
+                MessageSource::Development
+            } else {
+                MessageSource::Main
+            };
+            app.send_message(&ctx, "verify selected model".into(), source);
+            wait(&mut app);
+            assert_eq!(
+                app.development.book.turn_mut().unwrap().messages[0].1,
+                "第1轮：verify selected model"
+            );
+            if development {
+                assert!(app.text.is_empty() && app.codex_messages.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn slash_command_panels_cancel_and_save_permissions_without_restarting() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("config")).unwrap();
+        std::fs::write(
+            root.path().join("config/config.json"),
+            r#"{"codex":{"noApproval":false},"unknown":"preserved"}"#,
+        )
+        .unwrap();
+        let ctx = egui::Context::default();
+        let mut app = Wife::from_root(&ctx, false, root.path().into());
+        let project = app.development.book.add(root.path()).unwrap();
+        app.development.book.active = Some(project);
+        app.development.open = true;
+        app.codex = Some(crate::backend::codex::Client::mock("model-cancel"));
+        let wait = |app: &mut Wife| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while app.busy && Instant::now() < deadline {
+                app.poll_codex();
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(!app.busy && app.error.is_empty(), "{}", app.error);
+        };
+        let click = |app: &mut Wife, label: &str| {
+            let frame = |app: &mut Wife, events| {
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800., 600.),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        app.development_window(ctx);
+                    },
+                )
+            };
+            for _ in 0..2 {
+                frame(app, vec![]);
+            }
+            let output = frame(app, vec![]);
+            let point = output
+                .shapes
+                .iter()
+                .find_map(|shape| {
+                    if let egui::Shape::Text(text) = &shape.shape
+                        && text.galley.job.text == label
+                    {
+                        Some(text.galley.rect.translate(text.pos.to_vec2()).center())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| panic!("missing {label}"));
+            for pressed in [true, false] {
+                frame(
+                    app,
+                    vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                );
+            }
+        };
+        for command in ["/model", "/permissions"] {
+            app.send_message(&ctx, command.into(), MessageSource::Development);
+            wait(&mut app);
+            assert!(app.command_ui.is_some());
+            click(&mut app, "取消");
+            assert!(app.command_ui.is_none());
+            assert!(!Config::read(root.path()).unwrap().codex.no_approval);
+        }
+        app.send_message(&ctx, "/permissions".into(), MessageSource::Development);
+        wait(&mut app);
+        click(&mut app, "无需审批");
+        click(&mut app, "应用");
+        assert!(app.command_ui.is_none() && app.config.codex.no_approval);
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.path().join("config/config.json")).unwrap())
+                .unwrap();
+        assert_eq!(saved["unknown"], "preserved");
+        assert!(Config::read(root.path()).unwrap().codex.no_approval);
+        assert_eq!(app.development.thread_id.as_deref(), Some("fixture-thread"));
+        // Restore the baseline, and check cancel never queued a model override.
+        app.config.codex.no_approval = false;
+        app.send_message(&ctx, "after cancel".into(), MessageSource::Development);
+        wait(&mut app);
+        assert_eq!(
+            app.development.book.turn_mut().unwrap().messages[0].1,
+            "第1轮：after cancel"
+        );
     }
 
     #[test]

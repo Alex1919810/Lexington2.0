@@ -61,6 +61,7 @@ pub struct Wife {
     pub(super) last_clock_poll: Instant,
     pub(super) input: String,
     pub(super) completion: super::completion::Completion,
+    pub(super) command_ui: Option<super::command_panel::CommandUi>,
     pub(super) error: String,
     pub(super) codex: Option<Client>,
     pub(super) codex_status: String,
@@ -204,6 +205,7 @@ impl Wife {
             last_clock_poll: Instant::now() - Duration::from_secs(2),
             input: String::new(),
             completion: Default::default(),
+            command_ui: None,
             error: String::new(),
             codex: None,
             codex_status: "未启动".into(),
@@ -601,6 +603,9 @@ impl Wife {
         self.schedule_notice_ui(ctx);
         self.settings_ui(ctx);
         self.development_window(ctx);
+        if let Some(action) = self.command_panel_ui(ctx, false, true) {
+            self.apply_command_panel(action);
+        }
         self.character_memories_window(ctx);
         self.memo_window(ctx);
         self.schedule_window(ctx);

@@ -4,10 +4,64 @@ use std::path::Path;
 
 pub const COMMANDS: &[(&str, &str)] = &[
     ("/status", "会话状态"),
-    ("/model", "查看当前模型"),
-    ("/permissions", "查看当前权限"),
+    ("/model", "选择模型与推理强度"),
+    ("/permissions", "查看权限与切换审批"),
     ("/help", "指令帮助"),
 ];
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Model {
+    pub model: String,
+    pub display_name: String,
+    pub description: String,
+    pub default_reasoning_effort: String,
+    pub supported_reasoning_efforts: Vec<Effort>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Effort {
+    pub reasoning_effort: String,
+    pub description: String,
+}
+
+#[derive(Debug)]
+pub enum Panel {
+    Model {
+        current: String,
+        effort: String,
+        models: Vec<Model>,
+    },
+    Permissions(String),
+}
+
+impl Panel {
+    pub(super) fn redact(&mut self, secret: &str) {
+        let hide = |text: &mut String| *text = text.replace(secret, "[hidden]");
+        match self {
+            Self::Model {
+                current,
+                effort,
+                models,
+            } => {
+                hide(current);
+                hide(effort);
+                for model in models {
+                    hide(&mut model.model);
+                    hide(&mut model.display_name);
+                    hide(&mut model.description);
+                    hide(&mut model.default_reasoning_effort);
+                    for effort in &mut model.supported_reasoning_efforts {
+                        hide(&mut effort.reasoning_effort);
+                        hide(&mut effort.description);
+                    }
+                }
+            }
+            Self::Permissions(text) => hide(text),
+        }
+    }
+}
 
 const CLI_ONLY: &[&str] = &[
     "/plan", "/compact", "/review", "/new", "/resume", "/fork", "/diff", "/init", "/skills",
@@ -43,7 +97,7 @@ pub(super) fn response(
         );
     }
     if command == "/help" {
-        return "可用指令：\n/status — 查看会话、模型、权限、token 用量及账号剩余额度\n/model — 查看当前模型与推理强度\n/permissions — 查看审批策略与沙箱\n/help — 查看此帮助\n\n这些查询不会调用模型；/status 会向 Codex 查询最新账号额度。模型与连接配置继承本机 Codex，修改后请在设置中重启会话；无需审批开关从下一轮生效。其他 CLI 斜杠指令暂未接入 Lexington。".into();
+        return "可用指令：\n/status — 查看会话、模型、权限、token 用量及账号剩余额度\n/model — 打开模型与推理强度选择面板\n/permissions — 查看权限并切换无需审批\n/help — 查看此帮助\n\n这些指令不会调用模型；/status 按需查询账号额度，/model 按需读取可用模型。模型选择仅作用于当前会话，从下一轮生效，不修改本机 Codex 配置；无需审批开关沿用应用设置，从下一轮生效，沙箱保持本机配置。其他 CLI 斜杠指令暂未接入 Lexington。".into();
     }
     let mut lines = Vec::new();
     if command == "/status" {
