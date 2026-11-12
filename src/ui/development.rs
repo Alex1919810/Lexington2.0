@@ -44,11 +44,12 @@ struct PendingSupplement {
     project: PathBuf,
     task: u64,
     turn: usize,
+    boundary: crate::development::OutputBoundary,
 }
 
 impl Wife {
     pub(super) fn complete_development_supplement(&mut self, result: Result<(), String>) {
-        let Some(pending) = self.development.supplement.take() else {
+        let Some(mut pending) = self.development.supplement.take() else {
             return;
         };
         if let Err(error) = result {
@@ -59,6 +60,9 @@ impl Wife {
             || pending.draft.trim().to_owned(),
             |client| client.sanitize(pending.draft.trim()),
         );
+        if let Some(client) = &self.codex {
+            pending.boundary.sanitize(&|text| client.sanitize(text));
+        }
         if let Some(turn) = self
             .development
             .book
@@ -73,7 +77,7 @@ impl Wife {
             })
             .and_then(|task| task.turns.get_mut(pending.turn))
         {
-            turn.supplement(text);
+            turn.supplement(text, pending.boundary);
         }
         let draft = if self.development.book.active.as_ref() == Some(&pending.project) {
             Some(&mut self.development.input)
@@ -641,6 +645,7 @@ impl Wife {
                         project,
                         task: task.id,
                         turn: task.turns.len() - 1,
+                        boundary: task.turns.last().unwrap().output_boundary(),
                     };
                     let result = self
                         .codex
@@ -798,78 +803,103 @@ fn task_details(
                     }
                 });
             }
-            for item in turn
-                .items
-                .iter()
-                .filter(|i| i.kind != "agentMessage" && i.kind != "reasoning")
-            {
-                let title = if item.command.is_empty() {
-                    match item.kind.as_str() {
-                        "fileChange" => "文件变更",
-                        "commandExecution" => "执行命令",
-                        "mcpToolCall" | "dynamicToolCall" => "工具调用",
-                        "webSearch" => "网页搜索",
-                        kind => kind,
+            for section in 0..=turn.supplements.len() {
+                ui.push_id(("output-section", section), |ui| {
+                    if let Some(supplement_index) = section.checked_sub(1) {
+                        let text = &turn.supplements[supplement_index];
+                        ui.push_id(("supplement", supplement_index), |ui| {
+                            ui.label(
+                                egui::RichText::new("你 · 运行中补充")
+                                    .strong()
+                                    .color(egui::Color32::from_rgb(57, 97, 185)),
+                            );
+                            egui::Frame::NONE
+                                .fill(egui::Color32::from_rgb(242, 246, 253))
+                                .corner_radius(7)
+                                .inner_margin(10)
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    rich_text(ui, text);
+                                });
+                        });
                     }
-                } else {
-                    item.command.as_str()
-                };
-                // CollapsingHeader always extends its text, even inside a vertical
-                // ScrollArea. Bound the galley before handing it the command title.
-                let title = format!("{} · {}", status_text(&item.status), title);
-                let header = egui::WidgetText::from(title.as_str()).into_galley(
-                    ui,
-                    Some(egui::TextWrapMode::Truncate),
-                    (ui.available_width() - ui.spacing().indent - ui.spacing().button_padding.x)
-                        .max(0.),
-                    egui::TextStyle::Button,
-                );
-                egui::CollapsingHeader::new(header)
-                    .id_salt(&item.id)
-                    .default_open(item.status == "inProgress")
-                    .show(ui, |ui| {
-                        if !item.cwd.is_empty() {
-                            ui.label(format!("目录：{}", item.cwd));
-                        }
-                        if let Some(code) = item.exit_code {
-                            ui.label(format!("退出码：{code}"));
-                        }
-                        if let Some(ms) = item.duration_ms {
-                            ui.label(format!("耗时：{ms} ms"));
-                        }
-                        if item.truncated {
-                            ui.weak("输出过长，仅保留最后 256 KiB。");
-                        }
-                        if !item.output.is_empty() {
-                            code_text(ui, &item.output, false);
-                        }
-                        for change in &item.changes {
-                            ui.strong(format!("{} · {}", change.kind, change.path));
-                            let path = project.join(&change.path);
-                            if path.is_file()
-                                && let Some(path) = path.to_str()
-                            {
-                                let mut link = url::Url::parse("vscode://file").unwrap();
-                                link.set_path(path);
-                                ui.hyperlink_to("在 VS Code 打开", link.as_str());
+                    for item in turn
+                        .output_items(section)
+                        .filter(|i| i.kind != "agentMessage" && i.kind != "reasoning")
+                    {
+                        let title = if item.command.is_empty() {
+                            match item.kind.as_str() {
+                                "fileChange" => "文件变更",
+                                "commandExecution" => "执行命令",
+                                "mcpToolCall" | "dynamicToolCall" => "工具调用",
+                                "webSearch" => "网页搜索",
+                                kind => kind,
                             }
-                            diff_text(ui, &change.diff);
-                        }
-                    })
-                    .header_response
-                    .on_hover_text(title);
+                        } else {
+                            item.command.as_str()
+                        };
+                        // CollapsingHeader always extends its text, even inside a vertical
+                        // ScrollArea. Bound the galley before handing it the command title.
+                        let title = format!("{} · {}", status_text(&item.status), title);
+                        let header = egui::WidgetText::from(title.as_str()).into_galley(
+                            ui,
+                            Some(egui::TextWrapMode::Truncate),
+                            (ui.available_width()
+                                - ui.spacing().indent
+                                - ui.spacing().button_padding.x)
+                                .max(0.),
+                            egui::TextStyle::Button,
+                        );
+                        egui::CollapsingHeader::new(header)
+                            .id_salt(&item.id)
+                            .default_open(item.status == "inProgress")
+                            .show(ui, |ui| {
+                                if !item.cwd.is_empty() {
+                                    ui.label(format!("目录：{}", item.cwd));
+                                }
+                                if let Some(code) = item.exit_code {
+                                    ui.label(format!("退出码：{code}"));
+                                }
+                                if let Some(ms) = item.duration_ms {
+                                    ui.label(format!("耗时：{ms} ms"));
+                                }
+                                if item.truncated {
+                                    ui.weak("输出过长，仅保留最后 256 KiB。");
+                                }
+                                if !item.output.is_empty() {
+                                    code_text(ui, &item.output, false);
+                                }
+                                for change in &item.changes {
+                                    ui.strong(format!("{} · {}", change.kind, change.path));
+                                    let path = project.join(&change.path);
+                                    if path.is_file()
+                                        && let Some(path) = path.to_str()
+                                    {
+                                        let mut link = url::Url::parse("vscode://file").unwrap();
+                                        link.set_path(path);
+                                        ui.hyperlink_to("在 VS Code 打开", link.as_str());
+                                    }
+                                    diff_text(ui, &change.diff);
+                                }
+                            })
+                            .header_response
+                            .on_hover_text(title);
+                    }
+                    if turn.output_messages(section).next().is_some() {
+                        ui.add_space(6.);
+                        ui.label(
+                            egui::RichText::new("Lexington")
+                                .strong()
+                                .color(egui::Color32::from_rgb(57, 97, 185)),
+                        );
+                    }
+                    for text in turn.output_messages(section) {
+                        rich_text(ui, text);
+                    }
+                });
             }
             if !turn.diff.is_empty() {
                 ui.collapsing("本轮累计变更", |ui| diff_text(ui, &turn.diff));
-            }
-            ui.add_space(6.);
-            ui.label(
-                egui::RichText::new("Lexington")
-                    .strong()
-                    .color(egui::Color32::from_rgb(57, 97, 185)),
-            );
-            for (_, text) in &turn.messages {
-                rich_text(ui, text);
             }
             if !turn.error.is_empty() {
                 ui.scope(|ui| {
@@ -880,25 +910,6 @@ fn task_details(
             if turn.status != "running" && !turn.status.is_empty() {
                 ui.push_id((project, task.id, "file-review"), |ui| {
                     selection = super::development_review::show(ui, turn).or(selection.take());
-                });
-            }
-            // Confirmed inputs belong at the live end of the task, where the
-            // bottom-following scroll area can reveal them after a long reply.
-            for (supplement_index, text) in turn.supplements.iter().enumerate() {
-                ui.push_id(("supplement", supplement_index), |ui| {
-                    ui.label(
-                        egui::RichText::new("你 · 运行中补充")
-                            .strong()
-                            .color(egui::Color32::from_rgb(57, 97, 185)),
-                    );
-                    egui::Frame::NONE
-                        .fill(egui::Color32::from_rgb(242, 246, 253))
-                        .corner_radius(7)
-                        .inner_margin(10)
-                        .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            rich_text(ui, text);
-                        });
                 });
             }
             ui.separator();
@@ -2123,6 +2134,7 @@ mod tests {
                 project: path.clone(),
                 task: app.development.book.task().unwrap().id,
                 turn: 0,
+                boundary: app.development.book.turn_mut().unwrap().output_boundary(),
             });
             app.codex = Some(crate::backend::codex::Client::mock_events(
                 vec![crate::backend::codex::Event::Steered(Ok(()))],
@@ -2162,6 +2174,97 @@ mod tests {
                     && shape.clip_rect.contains_rect(text.galley.rect.translate(text.pos.to_vec2())))
         }), "reloaded supplement is outside the task output viewport");
         assert!(app.text.is_empty() && app.codex_messages.is_empty());
+    }
+
+    #[test]
+    fn supplement_outputs_follow_send_positions_live_and_after_reload() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("history.json");
+        let mut book = Workspaces::default();
+        book.active = Some(book.add(root.path()).unwrap());
+        book.begin("Original input".into(), "Lexington", false);
+        let turn = book.turn_mut().unwrap();
+        turn.text("reply".into(), "发送前中文🙂\n".into(), false);
+        let boundary = turn.output_boundary();
+        // Output arriving between send and ACK must already follow the input.
+        turn.text("reply".into(), "确认前追加\n".into(), false);
+        turn.supplement("First supplement".into(), boundary);
+        turn.text("reply".into(), "确认后继续".into(), false);
+        turn.activity(crate::development::Activity::Item(serde_json::json!({
+            "id":"after-first", "type":"commandExecution",
+            "command":"command after first", "status":"completed"
+        })));
+        turn.supplement("Second supplement".into(), turn.output_boundary());
+        // A final snapshot for the same ID must neither duplicate nor move text.
+        turn.text(
+            "reply".into(),
+            "发送前中文🙂\n确认前追加\n确认后继续\n最终回复".into(),
+            true,
+        );
+        turn.text("new-reply".into(), "独立消息".into(), false);
+        turn.sanitize(|text| text.replace("确认前追加", "[hidden]"));
+        turn.flush_events();
+        let ctx = egui::Context::default();
+        for reload in [false, true] {
+            if reload {
+                book.turn_mut().unwrap().finish("completed", "");
+                book.save(&file).unwrap();
+                book = Workspaces::read(&file).unwrap();
+            }
+            let task = book.task().unwrap();
+            task.turns[0].verify_replay().unwrap();
+            let mut output = None;
+            for _ in 0..3 {
+                output = Some(ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1000., 1800.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            task_details(ui, task, root.path());
+                        });
+                    },
+                ));
+            }
+            let output = output.unwrap();
+            let mut previous_bottom = 0.;
+            for expected in [
+                "发送前中文🙂",
+                "First supplement",
+                "已结束 · command after first",
+                "[hidden]\n确认后继续",
+                "Second supplement",
+                "\n最终回复",
+                "独立消息",
+            ] {
+                let matches: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| {
+                        if let egui::Shape::Text(text) = &shape.shape
+                            && text.galley.job.text == expected
+                        {
+                            return Some(text.galley.rect.translate(text.pos.to_vec2()));
+                        }
+                        None
+                    })
+                    .collect();
+                assert_eq!(
+                    matches.len(),
+                    1,
+                    "missing or repeated {expected:?}, reload={reload}"
+                );
+                assert!(
+                    matches[0].top() >= previous_bottom,
+                    "wrong order for {expected:?}, reload={reload}"
+                );
+                previous_bottom = matches[0].bottom();
+            }
+        }
     }
 
     #[test]
@@ -2309,6 +2412,7 @@ mod tests {
             project: a.clone(),
             task: app.development.book.task().unwrap().id,
             turn: 0,
+            boundary: app.development.book.turn_mut().unwrap().output_boundary(),
         });
         app.development
             .drafts

@@ -1,19 +1,24 @@
 use super::{app::Wife, style};
 use crate::{
     backend::{
-        calendar::{CalendarState, Date, Overtime, duration_label, normal_off},
+        calendar::{CalendarState, Date, Overtime, duration_label, month_festivals, normal_off},
         clock::{self, local_time},
     },
     tools::paths,
 };
 use eframe::egui;
-use std::time::{Duration, Instant};
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 
 #[derive(Default)]
 pub(super) struct CalendarUi {
     pub open: bool,
     state: Option<CalendarState>,
     month: Option<Date>,
+    festival_month: Option<(i32, u32)>,
+    festivals: BTreeMap<u32, Vec<String>>,
     selected: Option<Date>,
     error: String,
     notice: String,
@@ -172,6 +177,10 @@ impl Wife {
             calendar.selected = Some(Date { day: 1, ..month });
         }
         calendar.month = Some(month);
+        if calendar.festival_month != Some((month.year, month.month)) {
+            calendar.festivals = month_festivals(month);
+            calendar.festival_month = Some((month.year, month.month));
+        }
         if !calendar.error.is_empty() {
             ui.colored_label(egui::Color32::from_rgb(174, 54, 54), &calendar.error);
         }
@@ -188,7 +197,11 @@ impl Wife {
                     .strong()
                     .size(18.),
             );
-            ui.weak(format!("共 {days} 天 · 日期格内显示加班时长（小时:分钟）"));
+            ui.weak(format!("共 {days} 天 · 暖色为节日 · 加班时长（小时:分钟）"))
+                .on_hover_text("节日仅标注名称，放假及调休以官方安排为准");
+            if !(1900..=2100).contains(&month.year) {
+                ui.weak("农历节日支持 1900～2100 年，当前仅显示公历节日");
+            }
         });
         egui::ScrollArea::vertical()
             .id_salt("calendar-content")
@@ -196,47 +209,69 @@ impl Wife {
             .min_scrolled_height(0.)
             .show(ui, |ui| {
                 let width = (ui.available_width() - 6. * 4.) / 7.;
-                egui::Grid::new("calendar-month")
-                    .spacing(egui::vec2(4., 4.))
-                    .show(ui, |ui| {
-                        for label in ["一", "二", "三", "四", "五", "六", "日"] {
-                            ui.add_sized([width, 20.], egui::Label::new(label));
-                        }
-                        ui.end_row();
-                        for cell in 0..42 {
-                            let number = cell - month.first_weekday() as i32 + 1;
-                            if number < 1 || number > month.days_in_month() as i32 {
-                                ui.allocate_space(egui::vec2(width, 44.));
-                            } else {
-                                let date = Date {
-                                    day: number as u32,
-                                    ..month
-                                };
-                                let mut label = number.to_string();
-                                if let Some(entry) = state.entry(date) {
-                                    let minutes = entry.minutes();
-                                    label.push_str(&format!(
-                                        "\n{}:{:02}",
-                                        minutes / 60,
-                                        minutes % 60
-                                    ));
+                ui.scope(|ui| {
+                    ui.spacing_mut().button_padding = egui::vec2(4., 2.);
+                    egui::Grid::new("calendar-month")
+                        .spacing(egui::vec2(4., 4.))
+                        .show(ui, |ui| {
+                            for label in ["一", "二", "三", "四", "五", "六", "日"] {
+                                ui.add_sized([width, 20.], egui::Label::new(label));
+                            }
+                            ui.end_row();
+                            for cell in 0..42 {
+                                let number = cell - month.first_weekday() as i32 + 1;
+                                if number < 1 || number > month.days_in_month() as i32 {
+                                    ui.allocate_space(egui::vec2(width, 40.));
+                                } else {
+                                    let date = Date {
+                                        day: number as u32,
+                                        ..month
+                                    };
+                                    let festivals = calendar.festivals.get(&date.day);
+                                    let mut label = number.to_string();
+                                    if let Some(names) = festivals {
+                                        label.push('\n');
+                                        label.push_str(&names[0]);
+                                        if names.len() > 1 {
+                                            label.push('+');
+                                        }
+                                    }
+                                    if let Some(entry) = state.entry(date) {
+                                        let minutes = entry.minutes();
+                                        label.push_str(&format!(
+                                            "\n{}:{:02}",
+                                            minutes / 60,
+                                            minutes % 60
+                                        ));
+                                    }
+                                    let mut text = egui::RichText::new(label).size(12.);
+                                    if festivals.is_some() {
+                                        text = text.color(egui::Color32::from_rgb(162, 75, 36));
+                                    }
+                                    let mut button = egui::Button::new(text)
+                                        .wrap()
+                                        .selected(calendar.selected == Some(date));
+                                    if today == Some(date) {
+                                        button = button
+                                            .stroke(egui::Stroke::new(1.5_f32, style::ACCENT));
+                                    }
+                                    let response = ui.add_sized([width, 40.], button);
+                                    let response = if let Some(names) = festivals {
+                                        response.on_hover_text(names.join(" · "))
+                                    } else {
+                                        response
+                                    };
+                                    if response.clicked() {
+                                        calendar.selected = Some(date);
+                                        calendar.confirm_delete = false;
+                                    }
                                 }
-                                let mut button = egui::Button::new(label)
-                                    .selected(calendar.selected == Some(date));
-                                if today == Some(date) {
-                                    button =
-                                        button.stroke(egui::Stroke::new(1.5_f32, style::ACCENT));
-                                }
-                                if ui.add_sized([width, 44.], button).clicked() {
-                                    calendar.selected = Some(date);
-                                    calendar.confirm_delete = false;
+                                if cell % 7 == 6 {
+                                    ui.end_row();
                                 }
                             }
-                            if cell % 7 == 6 {
-                                ui.end_row();
-                            }
-                        }
-                    });
+                        });
+                });
                 ui.add_space(8.);
                 style::card().inner_margin(10).show(ui, |ui| {
                     if calendar.manual_open
@@ -311,6 +346,12 @@ impl Wife {
                 if let Some(date) = calendar.selected {
                     ui.add_space(6.);
                     ui.label(egui::RichText::new(date.label()).strong());
+                    if let Some(names) = calendar.festivals.get(&date.day) {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(162, 75, 36),
+                            format!("节日：{}", names.join(" · ")),
+                        );
+                    }
                     if let Some(entry) = state.entry(date) {
                         ui.label(format!("加班：{}", duration_label(entry.minutes())));
                         match entry {
@@ -462,7 +503,9 @@ mod tests {
                 ..Default::default()
             },
             |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.calendar_ui(ui, now));
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::new().fill(style::PANEL_BG).inner_margin(12))
+                    .show(ctx, |ui| app.calendar_ui(ui, now));
             },
         );
         app.apply_calendar_action(now);
@@ -507,6 +550,86 @@ mod tests {
                 }],
             );
         }
+    }
+
+    #[test]
+    fn calendar_festivals_remain_visible_with_overtime_and_refresh_after_navigation() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("calendar.json");
+        let ctx = egui::Context::default();
+        let mut app = Wife::from_root(&ctx, false, directory.path().to_path_buf());
+        let day = Date::parse("2020-10-01").unwrap();
+        let mut state = CalendarState::load(path.clone()).unwrap();
+        state.set_manual(day, 2, 30).unwrap();
+        app.calendar.state = Some(state);
+        app.calendar.month = Some(day);
+        app.calendar.selected = Some(day);
+        app.input = "保留草稿".into();
+        app.text = "保留回复".into();
+        let output = frame(&mut app, &ctx, now(20), vec![]);
+        let label = "1\n国庆节+\n2:30";
+        assert!(
+            output.shapes.iter().any(|shape| {
+                if let egui::Shape::Text(text) = &shape.shape
+                    && text.galley.job.text == label
+                {
+                    let rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+                    assert!(
+                        shape.clip_rect.contains_rect(rect),
+                        "clipped festival: {label}"
+                    );
+                    assert!(!text.galley.elided, "festival or overtime was truncated");
+                    true
+                } else {
+                    false
+                }
+            }),
+            "missing festival label: {label}"
+        );
+        click(&mut app, &ctx, now(20), "下个月");
+        assert_eq!(app.calendar.festival_month, Some((2020, 11)));
+        assert!(!app.calendar.festivals.contains_key(&1));
+        click(&mut app, &ctx, now(20), "上个月");
+        assert_eq!(app.calendar.festivals[&1], ["国庆节", "中秋节"]);
+        let mut detail_visible = false;
+        for _ in 0..15 {
+            let output = frame(
+                &mut app,
+                &ctx,
+                now(20),
+                vec![
+                    egui::Event::PointerMoved(egui::pos2(450., 450.)),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0., -100.),
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+            detail_visible = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text)
+                    if text.galley.job.text == "节日：国庆节 · 中秋节"
+                    && shape.clip_rect.contains_rect(egui::Rect::from_min_size(text.pos, text.galley.size())))
+            });
+            if detail_visible {
+                break;
+            }
+        }
+        assert!(
+            detail_visible,
+            "full festival names must be reachable by scrolling"
+        );
+        assert_eq!(
+            CalendarState::load(path)
+                .unwrap()
+                .entry(day)
+                .unwrap()
+                .minutes(),
+            150
+        );
+        assert_eq!(app.input, "保留草稿");
+        assert_eq!(app.text, "保留回复");
+        assert!(!app.busy && app.codex.is_none());
     }
 
     #[test]
@@ -643,7 +766,7 @@ mod tests {
         );
         click(&mut app, &ctx, now(20), "2");
         assert_eq!(app.calendar.draft_hours, "0");
-        click(&mut app, &ctx, now(20), "1\n2:30");
+        click(&mut app, &ctx, now(20), "1\n国庆节\n2:30");
         assert_eq!(app.calendar.draft_hours, "2");
         assert_eq!(app.calendar.draft_minutes, "30");
         app.calendar.draft_hours = "3".into();

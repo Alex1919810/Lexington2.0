@@ -1,6 +1,10 @@
 use super::clock::local_time;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fs, io::Write, path::PathBuf};
+use tyme4rs::tyme::{
+    Culture,
+    festival::{LUNAR_FESTIVAL_NAMES, LunarFestival, SOLAR_FESTIVAL_NAMES, SolarFestival},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Date {
@@ -58,6 +62,63 @@ impl Date {
         let offsets = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
         ((year + year / 4 - year / 100 + year / 400 + offsets[self.month as usize - 1]) % 7) as u32
     }
+}
+
+/// Offline festival names, independent of overtime records and official days off.
+/// Traditional festivals are supported for Gregorian years 1900 through 2100.
+pub fn month_festivals(month: Date) -> BTreeMap<u32, Vec<String>> {
+    let mut days: BTreeMap<u32, Vec<String>> = BTreeMap::new();
+    for index in 0..SOLAR_FESTIVAL_NAMES.len() {
+        if let Some(festival) = SolarFestival::from_index(month.year as isize, index) {
+            let date = festival.get_day();
+            if date.get_month() == month.month as usize {
+                days.entry(date.get_day() as u32)
+                    .or_default()
+                    .push(festival.get_name());
+            }
+        }
+    }
+    if (1900..=2100).contains(&month.year) {
+        // January can still belong to the previous lunar year. Enumerating both
+        // also preserves festivals that coincide with a solar or term festival.
+        for year in month.year - 1..=month.year {
+            for index in 0..LUNAR_FESTIVAL_NAMES.len() {
+                if let Some(festival) = LunarFestival::from_index(year as isize, index) {
+                    let date = festival.get_day().get_solar_day();
+                    if date.get_year() == month.year as isize
+                        && date.get_month() == month.month as usize
+                    {
+                        let names = days.entry(date.get_day() as u32).or_default();
+                        let name = festival.get_name();
+                        if !names.contains(&name) {
+                            names.push(name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for (m, day, name) in [
+        (2, 14, "情人节"),
+        (4, 1, "愚人节"),
+        (12, 24, "平安夜"),
+        (12, 25, "圣诞节"),
+    ] {
+        if month.month == m {
+            days.entry(day).or_default().push(name.into());
+        }
+    }
+    for (m, week, weekday, name) in [
+        (5, 2, 6, "母亲节"),
+        (6, 3, 6, "父亲节"),
+        (11, 4, 3, "感恩节"),
+    ] {
+        if month.month == m {
+            let day = 1 + (weekday + 7 - month.first_weekday()) % 7 + (week - 1) * 7;
+            days.entry(day).or_default().push(name.into());
+        }
+    }
+    days
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -223,6 +284,54 @@ mod tests {
         time.tm_sec = 0;
         time.tm_isdst = -1;
         crate::tools::time::timestamp(&mut time)
+    }
+
+    #[test]
+    fn festivals_follow_lunar_years_terms_weekdays_and_coinciding_dates() {
+        for (date, name) in [
+            ("2026-01-01", "元旦"),
+            ("2026-02-16", "除夕"),
+            ("2026-02-17", "春节"),
+            ("2027-02-06", "春节"),
+            ("2026-03-03", "元宵节"),
+            ("2026-04-05", "清明节"),
+            ("2024-04-04", "清明节"),
+            ("2026-05-10", "母亲节"),
+            ("2026-06-19", "端午节"),
+            ("2026-06-21", "父亲节"),
+            ("2026-09-25", "中秋节"),
+            ("2026-11-26", "感恩节"),
+            ("2026-12-25", "圣诞节"),
+            // The eve of a 29-day lunar December, in the previous lunar year.
+            ("2025-01-28", "除夕"),
+            ("2025-01-29", "春节"),
+        ] {
+            let day = Date::parse(date).unwrap();
+            assert!(
+                month_festivals(day)
+                    .get(&day.day)
+                    .is_some_and(|names| names.iter().any(|n| n == name)),
+                "missing {name} on {date}"
+            );
+        }
+        let october = month_festivals(Date::parse("2020-10-01").unwrap());
+        assert_eq!(october[&1], ["国庆节", "中秋节"]);
+        // Leap lunar May must not introduce a second Dragon Boat Festival.
+        let june = month_festivals(Date::parse("2009-06-01").unwrap());
+        assert!(!june.values().flatten().any(|name| name == "端午节"));
+        assert!(!month_festivals(Date::parse("2026-11-12").unwrap()).contains_key(&12));
+        for date in ["1900-01-01", "2100-12-01", "2101-01-01", "9999-01-01"] {
+            let day = Date::parse(date).unwrap();
+            let festivals = month_festivals(day);
+            assert!(
+                festivals
+                    .keys()
+                    .all(|n| (1..=day.days_in_month()).contains(n))
+            );
+            if day.month == 1 && day.year >= 1912 {
+                assert!(festivals[&1].iter().any(|name| name == "元旦"));
+            }
+        }
     }
 
     #[test]

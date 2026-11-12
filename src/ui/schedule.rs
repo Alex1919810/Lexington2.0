@@ -122,7 +122,9 @@ impl ScheduleDraft {
         egui::ScrollArea::vertical()
             .id_salt("scheduled-prompt-editor")
             .max_height(110.)
-            .min_scrolled_height(0.)
+            // The form can start below the outer viewport. Reserve editor height
+            // there too, so scrolling the task into view cannot collapse it.
+            .min_scrolled_height(64.)
             .show(ui, |ui| {
                 ui.add(
                     egui::TextEdit::multiline(&mut self.prompt)
@@ -1175,6 +1177,132 @@ mod tests {
             "修改后的提示词"
         );
         assert!(!app.busy && app.codex.is_none());
+    }
+    #[test]
+    fn scheduled_existing_prompt_remains_editable_when_scrolled_in_small_windows() {
+        fn frame(
+            app: &mut Wife,
+            ctx: &egui::Context,
+            size: egui::Vec2,
+            events: Vec<egui::Event>,
+        ) -> egui::FullOutput {
+            let mut action = None;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default()
+                        .show(ctx, |ui| action = app.schedule_panel(ui, &mut false));
+                },
+            );
+            if let Some(action) = action {
+                app.apply_schedule_action(action);
+            }
+            output
+        }
+        for size in [egui::vec2(640., 620.), egui::vec2(480., 380.)] {
+            let root = tempfile::tempdir().unwrap();
+            let ctx = egui::Context::default();
+            let mut app = Wife::from_root(&ctx, false, root.path().to_path_buf());
+            let path = root.path().join("schedules.json");
+            let mut state = ScheduleState::load(path.clone()).unwrap();
+            for name in ["FIRST-TASK", "SECOND-TASK"] {
+                state
+                    .save(
+                        None,
+                        TaskSpec {
+                            name: name.into(),
+                            prompt: format!("{name}-PROMPT"),
+                            schedule: Schedule::Daily {
+                                time: "09:05".into(),
+                            },
+                            target: app.schedule_target(),
+                        },
+                        clock::now(),
+                    )
+                    .unwrap();
+            }
+            let id = state.tasks()[1].id;
+            app.schedule.state = Some(state);
+            app.schedule.draft.prompt = "NEW-PROMPT-DRAFT".into();
+            app.apply_schedule_action(ScheduleAction::Edit(id));
+            for label in ["SECOND-TASK-PROMPT", "保存任务"] {
+                let mut point = None;
+                for _ in 0..30 {
+                    let output = frame(&mut app, &ctx, size, vec![]);
+                    point = output.shapes.iter().rev().find_map(|shape| {
+                        if let egui::Shape::Text(text) = &shape.shape
+                            && text.galley.job.text == label
+                        {
+                            let visible = egui::Rect::from_min_size(text.pos, text.galley.size())
+                                .intersect(shape.clip_rect);
+                            if visible.height() >= 10. && visible.width() >= 10. {
+                                return Some(visible.center());
+                            }
+                        }
+                        None
+                    });
+                    if point.is_some() {
+                        break;
+                    }
+                    frame(
+                        &mut app,
+                        &ctx,
+                        size,
+                        vec![
+                            egui::Event::PointerMoved(egui::pos2(size.x - 40., size.y / 2.)),
+                            egui::Event::MouseWheel {
+                                unit: egui::MouseWheelUnit::Point,
+                                delta: egui::vec2(0., -60.),
+                                modifiers: Default::default(),
+                            },
+                        ],
+                    );
+                }
+                let point =
+                    point.unwrap_or_else(|| panic!("{label} never became visible at {size:?}"));
+                frame(&mut app, &ctx, size, vec![egui::Event::PointerMoved(point)]);
+                for pressed in [true, false] {
+                    frame(
+                        &mut app,
+                        &ctx,
+                        size,
+                        vec![egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        }],
+                    );
+                }
+                if label == "SECOND-TASK-PROMPT" {
+                    frame(
+                        &mut app,
+                        &ctx,
+                        size,
+                        vec![egui::Event::Text("-UPDATED".into())],
+                    );
+                    assert!(
+                        app.schedule
+                            .editing
+                            .as_ref()
+                            .unwrap()
+                            .1
+                            .prompt
+                            .contains("-UPDATED")
+                    );
+                    assert_eq!(app.schedule.draft.prompt, "NEW-PROMPT-DRAFT");
+                }
+            }
+            assert!(app.schedule.editing.is_none());
+            let state = ScheduleState::load(path).unwrap();
+            assert_eq!(state.tasks()[0].spec.prompt, "FIRST-TASK-PROMPT");
+            assert!(state.tasks()[1].spec.prompt.contains("-UPDATED"));
+            assert!(!app.busy && app.codex.is_none());
+        }
     }
     #[test]
     fn scheduled_time_controls_save_padded_time_and_reopen_preserves_drafts() {

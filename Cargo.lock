@@ -1532,6 +1532,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
+name = "lazy_static"
+version = "1.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
+
+[[package]]
 name = "lexington"
 version = "2.0.0"
 dependencies = [
@@ -1550,6 +1556,7 @@ dependencies = [
  "sqlite-vec",
  "tempfile",
  "toml",
+ "tyme4rs",
  "ureq 2.12.1",
  "url",
  "windows-sys 0.61.2",
@@ -3324,6 +3331,16 @@ name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
+
+[[package]]
+name = "tyme4rs"
+version = "1.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a32c38e8ea6464a418f6c89dad69f2fdb505173c2f015e3d7d44a2122ea2191"
+dependencies = [
+ "lazy_static",
+ "regex",
+]
 
 [[package]]
 name = "type-map"

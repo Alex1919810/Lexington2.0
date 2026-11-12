@@ -86,6 +86,38 @@ impl Activity {
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
+pub struct OutputBoundary {
+    pub supplement: usize,
+    pub messages: Vec<(String, String)>,
+    pub items: Vec<String>,
+}
+impl OutputBoundary {
+    pub(super) fn sanitize(&mut self, filter: &dyn Fn(&str) -> String) {
+        for (id, text) in &mut self.messages {
+            *id = filter(id);
+            *text = filter(text);
+        }
+        for id in &mut self.items {
+            *id = filter(id);
+        }
+    }
+    fn message_end(&self, id: &str, text: &str) -> usize {
+        self.messages
+            .iter()
+            .find(|(key, _)| key == id)
+            .map_or(0, |(_, prefix)| {
+                prefix
+                    .chars()
+                    .zip(text.chars())
+                    .take_while(|(a, b)| a == b)
+                    .map(|(ch, _)| ch.len_utf8())
+                    .sum()
+            })
+    }
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct Turn {
     pub review: Option<Vec<review::FileReview>>,
     pub manifest: Option<context::Manifest>,
@@ -94,6 +126,8 @@ pub struct Turn {
     pub(crate) pending: Vec<journal::Pending>,
     pub user: String,
     pub supplements: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub output_boundaries: Vec<OutputBoundary>,
     pub messages: Vec<(String, String)>,
     pub items: Vec<ExecutionItem>,
     pub diff: String,
@@ -110,6 +144,9 @@ impl Turn {
         self.user = filter(&self.user);
         for text in &mut self.supplements {
             *text = filter(text);
+        }
+        for boundary in &mut self.output_boundaries {
+            boundary.sanitize(filter);
         }
         self.status = filter(&self.status);
         self.error = filter(&self.error);
@@ -225,6 +262,50 @@ impl Turn {
         } else {
             self.messages.push((id, text));
         }
+    }
+    /// Capture the send position; only persist it when the supplement succeeds.
+    pub fn output_boundary(&self) -> OutputBoundary {
+        OutputBoundary {
+            supplement: self.supplements.len(),
+            messages: self.messages.clone(),
+            items: self.items.iter().map(|item| item.id.clone()).collect(),
+        }
+    }
+    /// Split cumulative replies, including updates to the same message ID.
+    /// Prefixes remain valid after credential redaction.
+    pub fn output_messages(&self, section: usize) -> impl Iterator<Item = &str> {
+        let boundary = |index| {
+            self.output_boundaries
+                .iter()
+                .find(|boundary| boundary.supplement >= index)
+        };
+        let before = section.checked_sub(1).and_then(boundary);
+        let after = boundary(section);
+        self.messages.iter().filter_map(move |(id, text)| {
+            let start = if section == 0 {
+                0
+            } else {
+                before.map_or(text.len(), |boundary| boundary.message_end(id, text))
+            };
+            let end = after.map_or(text.len(), |boundary| boundary.message_end(id, text));
+            (end > start).then(|| &text[start..end])
+        })
+    }
+    pub fn output_items(&self, section: usize) -> impl Iterator<Item = &ExecutionItem> {
+        self.items.iter().filter(move |item| {
+            let position = self
+                .output_boundaries
+                .iter()
+                .find(|boundary| boundary.items.contains(&item.id))
+                .map_or(self.supplements.len(), |boundary| boundary.supplement);
+            // Histories without boundaries retain their original grouped layout.
+            section
+                == if self.output_boundaries.is_empty() {
+                    0
+                } else {
+                    position
+                }
+        })
     }
 }
 fn limit_text(text: &mut String, limit: usize) -> bool {
@@ -575,7 +656,8 @@ mod tests {
         let mut book = Workspaces::read(&path).unwrap();
         book.active = Some(book.add(root.path()).unwrap());
         book.begin("修复问题".into(), "a", true);
-        book.turn_mut().unwrap().supplement("运行中补充".into());
+        let turn = book.turn_mut().unwrap();
+        turn.supplement("运行中补充".into(), turn.output_boundary());
         book.task_mut().unwrap().thread_id = Some("thread-1".into());
         book.turn_mut()
             .unwrap()

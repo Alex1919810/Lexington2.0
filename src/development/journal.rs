@@ -9,15 +9,28 @@ const EVENT_LIMIT: usize = 4096;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Data {
-    Started { user: String, started_at: u64 },
-    Message { id: String, text: String },
+    Started {
+        user: String,
+        started_at: u64,
+    },
+    Message {
+        id: String,
+        text: String,
+    },
     Execution(Box<ExecutionItem>),
     Diff(String),
     Review(Vec<super::review::FileReview>),
     Plan(Value),
     Context(Box<Manifest>),
     Supplement(String),
-    Finished { status: String, error: String },
+    SupplementAt {
+        text: String,
+        boundary: super::OutputBoundary,
+    },
+    Finished {
+        status: String,
+        error: String,
+    },
     Checkpoint(Box<Turn>),
 }
 impl Data {
@@ -30,7 +43,7 @@ impl Data {
             Self::Review(_) => "文件全文快照",
             Self::Plan(_) => "计划更新",
             Self::Context(_) => "发送清单",
-            Self::Supplement(_) => "已确认的运行中补充",
+            Self::Supplement(_) | Self::SupplementAt { .. } => "已确认的运行中补充",
             Self::Finished { .. } => "轮次结束",
             Self::Checkpoint(_) => "合并检查点",
         }
@@ -44,6 +57,10 @@ impl Data {
             }
             Self::Execution(item) => item.sanitize(filter),
             Self::Diff(text) | Self::Supplement(text) => *text = filter(text),
+            Self::SupplementAt { text, boundary } => {
+                *text = filter(text);
+                boundary.sanitize(filter);
+            }
             Self::Review(files) => files.iter_mut().for_each(|file| file.sanitize(filter)),
             Self::Plan(plan) => sanitize_value(plan, filter),
             Self::Context(manifest) => manifest.sanitize(filter),
@@ -144,6 +161,10 @@ impl Journal {
                     turn.manifest = Some(*manifest.clone());
                 }
                 Data::Supplement(text) => turn.supplements.push(text.clone()),
+                Data::SupplementAt { text, boundary } => {
+                    turn.output_boundaries.push(boundary.clone());
+                    turn.supplements.push(text.clone());
+                }
                 Data::Finished { status, error } => turn.finish(status, error),
             }
         }
@@ -243,9 +264,11 @@ impl Turn {
         self.record(Data::Context(Box::new(manifest)));
     }
 
-    pub fn supplement(&mut self, text: String) {
+    pub fn supplement(&mut self, text: String, boundary: super::OutputBoundary) {
+        self.flush_events();
+        self.output_boundaries.push(boundary.clone());
         self.supplements.push(text.clone());
-        self.record(Data::Supplement(text));
+        self.record(Data::SupplementAt { text, boundary });
     }
 
     pub fn finish(&mut self, status: &str, error: &str) {
@@ -354,7 +377,7 @@ mod tests {
         turn.text("reply".into(), "final reply".into(), true);
         turn.sanitize(|s| s.replace("fixture-secret", "[hidden]"));
         turn.finish("completed", "");
-        turn.supplement("late confirmed input".into());
+        turn.supplement("late confirmed input".into(), turn.output_boundary());
         turn.verify_replay().unwrap();
         assert_eq!(turn.items[0].exit_code, Some(1));
         assert_eq!(turn.status, "completed");
@@ -409,6 +432,11 @@ mod tests {
             user: "start".into(),
             started_at: 0,
         });
+        turn.text("reply".into(), "before supplement".into(), true);
+        turn.supplement(
+            "keep position after compaction".into(),
+            turn.output_boundary(),
+        );
         for index in 0..150 {
             turn.text(
                 "reply".into(),
@@ -422,6 +450,11 @@ mod tests {
         let journal = turn.journal.as_ref().unwrap();
         assert!(journal.compacted);
         assert!(matches!(journal.events[0].data, Data::Checkpoint(_)));
+        assert_eq!(turn.output_boundaries.len(), 1);
+        assert_eq!(
+            turn.output_messages(1).collect::<String>(),
+            turn.messages[0].1
+        );
         assert!(journal.events[0].seq > 0);
         assert!(serde_json::to_vec(journal).unwrap().len() < LIMIT);
         turn.text("large".into(), "x".repeat(LIMIT + 1), true);
