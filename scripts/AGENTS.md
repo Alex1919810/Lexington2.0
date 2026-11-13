@@ -33,4 +33,4 @@
 - Flower 部件左右按屏幕方向；持花臂内肘到前臂须沿实际皮肤轮廓分区，粗直线会把皮肤小块划进背发。即使头发绘制在手臂后方，错误归属仍会在摆动时露出手臂缺口；先检查源部件内容，再改遮挡顺序或幅度。局部肤色筛选必须保留近白皮肤高光，不能只接受暖色差，否则会挖掉臂内高光。
 - 角色图层实验先保留完整运行模型快照；恢复外观须一并恢复 PNG、actor.json、制作脚本、测试及说明，不能仅降低动作幅度。数值通过不等于原画观感合格；回退用文件比对和脚本重建验证，避免残留实验图层再次覆盖恢复结果。
 
-- GUI smoke 阻止真实 Codex 时使用 LEXINGTON_CODEX_EXECUTABLE 和隔离 CODEX_HOME；旧 config.json 的 codex.executable 已不生效，不能用它保证测试不访问真实服务。
+- GUI smoke 阻止真实 Codex 时使用 LEXINGTON_CODEX_EXECUTABLE 和隔离 CODEX_HOME；旧 config.json 的 codex.executable 已不生效，不能用它保证测试不访问真实服务。Linux 还须使用权限 0700 的独立 XDG_RUNTIME_DIR 隔离 Inbox 实例锁；只隔离资源根和 XDG_DATA_HOME 仍会与正在运行的普通/开发实例冲突。

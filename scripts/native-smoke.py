@@ -73,7 +73,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary")
     parser.add_argument("screenshot")
-    parser.add_argument("mode", choices=["drag", "drag-edges", "position", "click-through", "clock", "input", "pin", "idle"], default="clock", nargs="?")
+    parser.add_argument("mode", choices=["drag", "drag-edges", "position", "click-through", "clock", "input", "pin", "idle", "sidebar"], default="clock", nargs="?")
     parser.add_argument("--production", action="store_true", help="check the default 500x500 window")
     parser.add_argument("--pet-point", nargs=2, type=int, metavar=("X", "Y"),
                         help="visible artwork point in native window pixels (for narrower outfits/Live2D)")
@@ -145,7 +145,7 @@ def main():
     saved_pointer = pointer()
     try:
         command = [args.binary, "--screenshot", args.screenshot, "--screenshot-delay",
-                   "20" if args.mode in ("drag-edges", "click-through") else "7"]
+                   "32" if args.mode == "sidebar" else "20" if args.mode in ("drag-edges", "click-through") else "7"]
         if not args.production:
             command.append("--dev")
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={**{key: value for key, value in os.environ.items() if key not in ("OPENAI_API_KEY", "LEXINGTON_MODEL_API_KEY")}, "LEXINGTON_CODEX_EXECUTABLE": "/lexington-smoke-unavailable-codex", "CODEX_HOME": "/lexington-smoke-no-credentials"})
@@ -264,6 +264,44 @@ def main():
                      round(start[1] + (target[1] - start[1]) * step / 5))
             button(False)
             assert position(window) == expected, (position(window), expected)
+        elif args.mode == "sidebar":
+            class ShapeRect(C.Structure):
+                _fields_ = [("x", C.c_short), ("y", C.c_short),
+                            ("width", C.c_ushort), ("height", C.c_ushort)]
+
+            shape = C.CDLL(ctypes.util.find_library("Xext"))
+            bind(shape, "XShapeGetRectangles", [D, W, I, C.POINTER(I), C.POINTER(I)],
+                 C.POINTER(ShapeRect))
+            sidebar_x = max(10, original_size[0] // 2 - 315) + 25
+            sidebar_y = original_size[1] // 2 - 125
+            # Use an empty resource fixture so the pet cannot overlap these buttons.
+            # Check both pinned and dimmed modes, plus transparent-space re-entry.
+            for point, delay, visible, toggle in [
+                ((original_size[0] - 5, 5), 0.6, True, False),
+                (None, 10.6, False, False),
+                ((original_size[0] - 5, 5), 0.6, True, False),
+                ((sidebar_x, sidebar_y), 0.6, True, True),
+                (None, 10.6, False, False),
+                ((sidebar_x, sidebar_y), 0.6, True, False),
+            ]:
+                warp(*(tuple(original[n] + point[n] for n in range(2)) if point else (0, 0)))
+                if toggle:
+                    button(True)
+                    button(False)
+                time.sleep(delay)
+                count, ordering = I(), I()
+                rectangles = shape.XShapeGetRectangles(display, window, 2,
+                                                       C.byref(count), C.byref(ordering))
+                try:
+                    for index in range(7):
+                        y = sidebar_y + 50 * index
+                        hit = any(rectangles[n].x <= sidebar_x < rectangles[n].x + rectangles[n].width
+                                  and rectangles[n].y <= y < rectangles[n].y + rectangles[n].height
+                                  for n in range(count.value))
+                        assert hit == visible, ("sidebar input shape", index, hit, visible)
+                finally:
+                    X.XFree(rectangles)
+            print("Sidebar timeout removes all button input regions; native re-entry restores both modes: passed")
         elif args.mode in ("clock", "pin"):
             sidebar_x = original_size[0] / 2 - 315
             if sidebar_x < 0:

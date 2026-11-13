@@ -351,6 +351,54 @@ fn config_hot_reload_keeps_valid_settings_and_defers_connection_changes_until_id
     std::fs::remove_dir_all(root).unwrap();
 }
 #[test]
+fn sidebar_hides_after_main_window_absence_and_recovers_on_reentry() {
+    for pinned in [false, true] {
+        for size in [vec2(500., 500.), vec2(800., 600.)] {
+            let root = tempfile::tempdir().unwrap();
+            let ctx = egui::Context::default();
+            let mut app = Wife::from_root(&ctx, pinned, root.path().into());
+            let button = pos2((size.x / 2. - 315.).max(10.) + 25., size.y / 2. - 125.);
+            let mut time = 0.;
+            // Re-entry through transparent main-window space must also reveal the bar.
+            for (expired, point, visible) in [
+                (false, None, true),
+                (true, Some(pos2(-10., -10.)), false),
+                (true, Some(pos2(size.x - 5., 5.)), true),
+                (false, None, true),
+                (true, None, false),
+                (true, Some(button), true),
+            ] {
+                if expired {
+                    app.last_main_hover = Instant::now() - Duration::from_secs(11);
+                }
+                for _ in 0..12 {
+                    time += 0.05;
+                    let _ = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(pos2(0., 0.), size)),
+                            time: Some(time),
+                            events: vec![
+                                point.map_or(egui::Event::PointerGone, egui::Event::PointerMoved),
+                            ],
+                            ..Default::default()
+                        },
+                        |ctx| app.ui(ctx),
+                    );
+                }
+                assert_eq!(
+                    app.input_regions
+                        .iter()
+                        .any(|region| region.contains(button)),
+                    visible,
+                    "pinned={pinned}, size={size:?}, point={point:?}"
+                );
+                assert_eq!(app.pinned, pinned, "auto-hide must preserve the saved mode");
+            }
+        }
+    }
+}
+
+#[test]
 fn sidebar_switches_damage_and_format_and_refresh_preserves_selection() {
     let ctx = egui::Context::default();
     let mut app = Wife::from_context(&ctx, true);

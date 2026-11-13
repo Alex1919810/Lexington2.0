@@ -2,6 +2,7 @@ use super::app::Wife;
 use super::style::draw_shadow;
 use eframe::egui::{self, Color32, Rect, pos2, vec2};
 use eframe::egui::{FontId, Sense};
+use std::time::{Duration, Instant};
 
 impl Wife {
     pub(super) fn sidebar(&mut self, ctx: &egui::Context, screen: Rect) -> bool {
@@ -12,12 +13,30 @@ impl Wife {
             screen.width() / 2. - 315.
         };
         let bounds = Rect::from_min_size(pos2(x, screen.center().y - 155.), vec2(50., 360.));
-        let hovered = ctx.input(|i| i.pointer.hover_pos().is_some_and(|p| bounds.contains(p)));
+        let pointer = ctx.input(|i| i.pointer.hover_pos());
+        #[cfg(any(target_os = "linux", windows))]
+        // Hidden buttons have no native input shape, so discover re-entry by polling.
+        let pointer = self.drag_window.as_ref().map_or(pointer, |window| {
+            window.pointer_position(ctx.pixels_per_point()).or(pointer)
+        });
+        if pointer.is_some_and(|point| screen.contains(point)) {
+            self.last_main_hover = Instant::now();
+        }
+        let hovered = pointer.is_some_and(|point| bounds.contains(point));
         let alpha = ctx.animate_value_with_time(
             egui::Id::new("sidebar-alpha"),
-            if self.pinned || hovered { 1. } else { 0.2 },
+            if self.last_main_hover.elapsed() >= Duration::from_secs(10) {
+                0.
+            } else if self.pinned || hovered {
+                1.
+            } else {
+                0.2
+            },
             0.3,
         );
+        if alpha <= 0.01 {
+            return false;
+        }
         egui::Area::new("sidebar".into())
             .fixed_pos(bounds.min + vec2(5., 10.))
             .order(egui::Order::Foreground)
