@@ -4,7 +4,10 @@
 
 - 原生指针测试需 libX11/libXtst，优先 Xephyr + WM 隔离，同一 display 必须串行；测试从可见轮廓按下，失败也须释放鼠标并恢复位置。模拟 egui 事件不能验证实际 WM 层级、移动或穿透。
 - Linux 立绘选择器使用 libdbus/XDG Portal，无 FileChooser 后端时回退 Zenity；源码和无源码安装均检查 libdbus-1-3、Zenity 及本地推理所需 libstdc++6，不能归入可跳过的菜单扩展依赖。原生立绘测试用 --pet-point 指定当前素材持续可见的实体点，不能沿用旧 GIF 的抓取坐标验证 Live2D。
-- 打包 `bash scripts/package.sh`，安装 `bash scripts/install-linux.sh`；安装先检查依赖，缺 Codex 下载固定官方原生包并核验 SHA-512、安全解包、保留完整布局，无 Node/npm；已有 CLI/登录保留，不自动登录；可选依赖取消仍保留脚本菜单，必需依赖失败终止。
+- 打包 `bash scripts/package.sh`，安装 `bash scripts/install-linux.sh`；安装先检查依赖，缺 Codex 下载官方 latest 稳定版（最低 0.166.0）原生包并核验 SHA-512、安全解包、保留完整布局，无 Node/npm；已有满足最低版本的 CLI/登录保留，旧版提示升级，不自动登录；可选依赖取消仍保留脚本菜单，必需依赖失败终止。
+- Linux 全依赖离线包使用 `bash scripts/package-full.sh`，仅面向制作机相同 Debian/Ubuntu 版本及架构；APT 必须以空 dpkg status 下载完整运行依赖闭包，不能依赖制作机已安装的软件。离线引导先校验平台及文件，再用禁用在线索引的 --no-download/--no-remove 安装本地 DEB；Python 随包引导，Codex 从随包官方归档安装，不复制本机登录或 CLI。增量夹具入口为 `python3 scripts/test-package-full.py`。
+- Linux 普通包、完整包及 DEB 使用 package_assets.py 的统一过滤/strip：排除资源树任意层级 live2d-drafts 和 runtime/windows-*，重复输出也清理遗留；--from-bundle 复用旧包仍须过滤。主程序来自 locked release，只对发布副本执行 strip --strip-all，不改构建产物或源码资源；release 默认并不代表符号表已去除，验收用 readelf 检查发布文件。
+- 标准 DEB 使用 `bash scripts/package-deb.sh`，`--from-bundle` 可离线复用完整包；系统依赖用 Depends 声明并由配套离线套件一次交给 APT，禁止在 dpkg 维护脚本中嵌套 apt 或写用户目录。GUI 由普通用户通过 /usr/bin/lexington 启动，按载荷身份复用 --system-package 分支同步个人安装；该分支不得构建、写系统资源树或补装系统依赖，用户快捷方式须调用系统启动器才能检测后续包更新。
 - 菜单和桌面显示名固定 Lexington，桌面文件 Lexington.desktop，迁移旧 lexington.desktop 避免重复；菜单 ID 保持 lexington.desktop。用 xdg-user-dir DESKTOP 定位桌面，设置可执行并尝试标记可信，核对快捷方式指向安装版。
 
 ## 增量验证

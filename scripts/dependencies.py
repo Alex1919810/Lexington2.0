@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -16,8 +17,8 @@ import tempfile
 import urllib.parse
 import urllib.request
 
-# Keep the default in sync with the app-server protocol tested by Lexington.
-CODEX_VERSION = '0.166.0'
+# Old app-server protocols are unsupported; newer stable releases are allowed.
+MIN_CODEX_VERSION = '0.166.0'
 
 
 def fetch(url, target=None):
@@ -114,33 +115,70 @@ def install_rust():
         subprocess.run([str(target), '-y', '--profile', 'minimal', '--no-modify-path', '--default-toolchain', 'stable'], check=True)
 
 
-def install_codex():
+def version_tuple(version):
+    if not re.fullmatch(r'\d+\.\d+\.\d+', version):
+        raise RuntimeError('Codex 版本必须是稳定版版本号，例如 0.166.0。')
+    return tuple(map(int, version.split('.')))
+
+
+def codex_metadata(arch, offline_dir=None, version=None):
+    if offline_dir is not None:
+        metadata = json.loads((Path(offline_dir) / 'codex.json').read_text(encoding='utf-8'))
+    else:
+        if version is None:
+            latest = json.loads(fetch('https://registry.npmjs.org/@openai/codex/latest'))
+            if latest.get('name') != '@openai/codex':
+                raise RuntimeError('Codex 官方包元数据不匹配')
+            version = latest.get('version', '')
+        if version_tuple(version) < version_tuple(MIN_CODEX_VERSION):
+            raise RuntimeError(f'Codex 最低版本为 {MIN_CODEX_VERSION}。')
+        metadata = json.loads(fetch(f'https://registry.npmjs.org/@openai/codex/{version}-linux-{arch}'))
+    suffix = f'-linux-{arch}'
+    actual = metadata.get('version', '')
+    if metadata.get('name') != '@openai/codex' or not actual.endswith(suffix):
+        raise RuntimeError('Codex 官方包元数据不匹配')
+    actual = actual[:-len(suffix)]
+    if version is not None and actual != version:
+        raise RuntimeError('Codex 官方包版本不匹配')
+    if version_tuple(actual) < version_tuple(MIN_CODEX_VERSION):
+        raise RuntimeError(f'Codex 最低版本为 {MIN_CODEX_VERSION}。')
+    if not metadata['dist']['integrity'].startswith('sha512-'):
+        raise RuntimeError('Codex 官方包缺少 SHA-512 校验')
+    return metadata, actual
+
+
+def install_codex(offline_dir=None):
     candidate = shutil.which('codex')
     if candidate:
-        result = subprocess.run([candidate, '--version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
-        if result.returncode == 0:
-            print('Codex 已安装，保留现有版本与登录配置。', flush=True)
-            return
-        raise RuntimeError('现有 codex 无法运行，请修复后重试；安装器不会覆盖已有命令。')
+        result = subprocess.run([candidate, '--version'], capture_output=True, text=True, timeout=15)
+        if result.returncode:
+            raise RuntimeError('现有 codex 无法运行，请修复后重试；安装器不会覆盖已有命令。')
+        match = re.fullmatch(r'codex-cli (\d+\.\d+\.\d+)', result.stdout.strip())
+        if not match:
+            raise RuntimeError(f'无法确认现有 Codex 版本；请安装 {MIN_CODEX_VERSION} 或更新的稳定版。')
+        if version_tuple(match[1]) < version_tuple(MIN_CODEX_VERSION):
+            raise RuntimeError(f'现有 Codex 低于最低版本 {MIN_CODEX_VERSION}，请先升级；未覆盖已有命令或登录。')
+        print(f'Codex 已安装（≥ {MIN_CODEX_VERSION}），保留现有版本与登录配置。', flush=True)
+        return
     if os.path.lexists(Path.home() / '.local/bin/codex'):
         raise RuntimeError('~/.local/bin/codex 已存在但不可执行，请修复后重试；未覆盖现有文件。')
     arch = {'x86_64': ('x64', 'x86_64'), 'aarch64': ('arm64', 'aarch64'), 'arm64': ('arm64', 'aarch64')}.get(platform.machine())
     if not arch:
         raise RuntimeError('当前架构需自行安装 Codex CLI。')
-    metadata = json.loads(fetch(f'https://registry.npmjs.org/@openai/codex/{CODEX_VERSION}-linux-{arch[0]}'))
-    if metadata.get('name') != '@openai/codex' or metadata.get('version') != f'{CODEX_VERSION}-linux-{arch[0]}':
-        raise RuntimeError('Codex 官方包元数据不匹配')
+    metadata, version = codex_metadata(arch[0], offline_dir)
     distribution = metadata['dist']
     integrity = distribution['integrity']
-    if not integrity.startswith('sha512-'):
-        raise RuntimeError('Codex 官方包缺少 SHA-512 校验')
     destination = Path.home() / '.local/share/lexington/dependencies'
     destination.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.codex-download-', dir=destination) as temporary:
         temporary = Path(temporary)
         archive = temporary / 'codex.tgz'
-        print(f'下载官方 Codex {CODEX_VERSION} 原生包（无需 Node/npm）…', flush=True)
-        fetch(distribution['tarball'], archive)
+        if offline_dir is None:
+            print(f'下载官方 Codex {version} 原生包（无需 Node/npm）…', flush=True)
+            fetch(distribution['tarball'], archive)
+        else:
+            print(f'安装随包 Codex {version} 原生包（离线）…', flush=True)
+            shutil.copyfile(Path(offline_dir) / 'codex.tgz', archive)
         digest = hashlib.sha512()
         with archive.open('rb') as content:
             for chunk in iter(lambda: content.read(1024 * 1024), b''):
@@ -165,7 +203,7 @@ def install_codex():
         executable.chmod(0o755)
         subprocess.run([str(executable), '--version'], check=True, timeout=15)
         # Preserve all sibling resources/helpers needed by the native distribution.
-        installed = destination / f'codex-{CODEX_VERSION}-{arch[1]}-{os.getpid()}'
+        installed = destination / f'codex-{version}-{arch[1]}-{os.getpid()}'
         vendor.rename(installed)
         bin_directory = Path.home() / '.local/bin'
         bin_directory.mkdir(parents=True, exist_ok=True)
@@ -182,15 +220,18 @@ if __name__ == '__main__':
     parser.add_argument('--skip-optional', action='store_true', help='跳过文件管理器顶层菜单等可选系统依赖')
     parser.add_argument('--codex-only', action='store_true', help='仅检查/安装 Codex')
     parser.add_argument('--runtime-only', action='store_true', help='安装发布包时跳过编译工具链')
+    parser.add_argument('--offline-dir', type=Path, help='使用已由离线安装入口校验的依赖目录，不下载依赖')
     options = parser.parse_args()
     try:
         if platform.system() != 'Linux':
             raise RuntimeError('自动依赖安装目前仅支持 Linux。')
-        if not options.codex_only:
+        if options.offline_dir and not options.runtime_only:
+            raise RuntimeError('离线依赖仅用于预编译发布包，不提供 Rust 构建工具链。')
+        if not options.codex_only and options.offline_dir is None:
             system_packages(not options.skip_optional, build=not options.runtime_only)
             if not options.runtime_only:
                 install_rust()
-        install_codex()
-    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, tarfile.TarError, http.client.HTTPException) as error:
+        install_codex(options.offline_dir)
+    except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError, tarfile.TarError, http.client.HTTPException) as error:
         print(f'依赖安装失败：{error}', file=sys.stderr)
         sys.exit(1)

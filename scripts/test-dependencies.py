@@ -21,7 +21,7 @@ def archive_fixture(unsafe=False):
     contents = io.BytesIO()
     with tarfile.open(fileobj=contents, mode='w:gz') as archive:
         for name, data in {
-            'package/vendor/x86_64-unknown-linux-musl/bin/codex': b'#!/bin/sh\necho codex-cli-fixture\n',
+            'package/vendor/x86_64-unknown-linux-musl/bin/codex': b'#!/bin/sh\necho codex-cli 0.168.0\n',
             'package/vendor/x86_64-unknown-linux-musl/bin/codex-code-mode-host': b'fixture',
             'package/vendor/x86_64-unknown-linux-musl/codex-package.json': b'{"layoutVersion":1}',
             'package/vendor/x86_64-unknown-linux-musl/codex-resources/fixture': b'fixture',
@@ -42,10 +42,12 @@ def fake_fetch(package, corrupt=False):
         if target:
             Path(target).write_bytes(package)
             return
-        assert url == 'https://registry.npmjs.org/@openai/codex/0.166.0-linux-x64'
+        if url == 'https://registry.npmjs.org/@openai/codex/latest':
+            return json.dumps({'name': '@openai/codex', 'version': '0.168.0'}).encode()
+        assert url == 'https://registry.npmjs.org/@openai/codex/0.168.0-linux-x64'
         digest = hashlib.sha512(b'corrupt' if corrupt else package).digest()
         return json.dumps({
-            'name': '@openai/codex', 'version': '0.166.0-linux-x64',
+            'name': '@openai/codex', 'version': '0.168.0-linux-x64',
             'dist': {'tarball': 'https://registry.npmjs.org/fixture.tgz',
                      'integrity': 'sha512-' + base64.b64encode(digest).decode()},
         }).encode()
@@ -84,6 +86,34 @@ with tempfile.TemporaryDirectory(prefix='lexington-dependency-tests-') as tempor
                 assert not (home / '.local/bin/codex').exists()
         assert config.read_text() == '# preserve existing user config\n'
     assert not (root / 'escaped').exists()
+    # Keep supported existing CLIs without a registry request; never silently use old protocols.
+    for version in ('0.165.9', '0.166.0', '0.168.0', '0.1000.0', '1.0.0', 'unknown'):
+        with patch.object(installer.shutil, 'which', return_value='/fixture/codex'), \
+             patch.object(installer.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                 [], 0, stdout='codex-cli ' + version, stderr='')), \
+             patch.object(installer, 'fetch', side_effect=AssertionError('existing CLI must not access registry')):
+            if version in ('0.165.9', 'unknown'):
+                try:
+                    installer.install_codex()
+                except RuntimeError:
+                    pass
+                else:
+                    raise AssertionError('outdated or unrecognized existing CLI must be rejected')
+            else:
+                installer.install_codex()
+    with patch.object(installer, 'fetch', side_effect=fake_fetch(archive_fixture())) as fetch:
+        metadata, version = installer.codex_metadata('x64', version='0.168.0')
+        assert version == '0.168.0' and metadata['version'] == '0.168.0-linux-x64'
+        assert len(fetch.call_args_list) == 1
+        assert fetch.call_args[0][0].endswith('/0.168.0-linux-x64')
+    for version in ('0.165.9', '0.168.0-alpha.1', 'latest', 'invalid'):
+        with patch.object(installer, 'fetch', side_effect=AssertionError('invalid version must fail before download')):
+            try:
+                installer.codex_metadata('x64', version=version)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError('invalid or outdated explicit version accepted')
     for url in ('http://registry.npmjs.org/pkg', 'https://example.com/pkg'):
         try:
             installer.fetch(url)
@@ -115,4 +145,4 @@ for build in (True, False):
         assert 'libstdc++6' in install
         assert ('zenity' in install) == (not picker_present)
         assert 'build-essential' not in install
-print('Codex integrity/config preservation and source/runtime file-picker dependency checks passed.')
+print('Codex latest/minimum version, integrity/config preservation and source/runtime dependency checks passed.')

@@ -142,9 +142,17 @@ scripts/
 ├── test-package.sh
 ├── windows-smoke.py
 ├── install-dependencies.sh
+├── install-offline-dependencies.sh
 ├── dependencies.py
 ├── test-dependencies.py
 ├── package.sh
+├── package_assets.py
+├── package-full.sh
+├── package-full.py
+├── package-deb.sh
+├── package-deb.py
+├── launch-deb.sh
+├── test-package-full.py
 ├── integrations.py
 ├── context-smoke.py
 ├── test-integrations.js
@@ -547,9 +555,15 @@ GUI smoke 使用 LEXINGTON_CODEX_EXECUTABLE 指向不可用程序，并隔离 CO
 | `integrations/browser/background.js` / 两份 manifest | Firefox/Chromium 选区右键菜单，通过 `com.lexington.context` Native Messaging 发送选区及 page/frame URL；file URL 转本地路径，含 Windows file:///C:/ 盘符 | 仅 contextMenus/nativeMessaging 权限，无页面监听/网络服务；超过大小不发送；失败工具栏 ! 与悬停提示；Chromium public key 固定 ID，Firefox ID 固定且正式包需签名；沙箱浏览器桥接仍需平台支持 |
 | `integrations/nautilus/send.py` / `lexington_menu.py` | 脚本子菜单入口按 URI 解码本地路径，读取安装位置 JSON 并调用 `--ask-files`；可选 Nautilus 4.0 顶层菜单提供器转交同一脚本 | Python 3 标准库；顶层提供器额外依赖 nautilus-python/gi。不解析 shell、不读剪贴板；失败用 notify-send 提示；最多 32 个本地文件；缺少系统扩展支持仍保留脚本入口 |
 | `scripts/integrations.py` | `build` 用标准库生成 VSIX、Firefox XPI 和 Chromium 目录；`install` 安装 Nautilus 脚本/提供器、Native Messaging 宿主与白名单，检测 code 自动安装 VSIX | 以 UTF-8 读取元数据，build 支持 Windows，install 仍仅 Linux。无 npm；Firefox 未签名只可临时加载，浏览器安装需按 integrations/README.md；遵循 XDG 数据/配置路径，不更改浏览器签名策略、不关闭文件管理器 |
-| `scripts/install-linux.sh` / `package.sh` | release 构建、保留配置的安装及打包，并带上集成客户端；先调用依赖安装，源码模式构建，发布包模式直接复制二进制且跳过 Rust；安装脚本创建桌面快捷方式、注册菜单/通信桥；发布包提供 install.sh 和安装脚本 | 安装二进制先复制到同目录临时文件再原子替换，避免运行中 ETXTBSY；桌面名 Lexington；升级后按项目约定安全重启旧实例 |
-| `scripts/install-dependencies.sh` / `dependencies.py` | Python 引导、Ubuntu/Debian 系统依赖检查/授权安装、源码安装的缺失 Rust 工具链安装，以及缺失 Codex 官方原生包下载安装 | 默认固定已验证 CLI 0.166.0；只在缺失时下载，保留现有 CLI/登录配置，无法运行的现有 CLI 明确报错。原生发行包来自 @openai/codex 官方 registry，SHA-512 完整性校验、安全解包、保留完整 vendor 布局，用户级安装 ~/.local/bin/codex，无 Node/npm；Rust rustup-init 用官方 SHA-256 校验。--runtime-only 跳过构建依赖，--skip-optional 跳过 Nautilus 等可选依赖；系统包调用 sudo/pkexec，可选取消保留脚本菜单，必需依赖失败阻止后续安装；不运行 Codex 登录 |
-| `scripts/test-dependencies.py` | 用临时 HOME、下载/包夹具验证缺失安装、已有 CLI 保留、资源布局、完整性/路径穿越拒绝及用户配置保留 | 不访问网络、不写系统目录、不安装真实 CLI，不替代真实平台安装验证 |
+| `scripts/install-linux.sh` / `package.sh` | release 构建、保留配置的安装及打包，并带上集成客户端；先调用依赖安装，源码模式构建，发布包模式直接复制二进制且跳过 Rust；安装脚本创建桌面快捷方式、注册菜单/通信桥；发布包提供 install.sh 和安装脚本 | package.sh 固定 cargo build --release --locked，并用 package_assets.py 去除发布副本的符号、复制 Linux 运行资源，完整包继承相同规则。安装二进制先复制到同目录临时文件再原子替换，避免运行中 ETXTBSY；桌面名 Lexington；升级后按项目约定安全重启旧实例。--system-package 仅用于有 package-id 的无源码 DEB 资源树：APT 已满足系统依赖，直接从本地归档检查/安装 Codex，使用系统预生成集成而不写系统 dist，快捷方式统一调用 /usr/bin/lexington 以在下次启动检测包更新 |
+| `scripts/package_assets.py` | Linux 普通包和 DEB 共享的构建期资源处理，copy_linux_resources 过滤制作草稿与其他平台运行库，strip_linux_binary 产出去除符号的可执行副本；CLI 提供 resources/binary source destination | 排除 resource 树任意层级 live2d-drafts 和 resource/runtime/windows-*，重复普通打包也清理旧输出的同类遗留，保留正式 Live2D/GIF、模型和许可；不删除源码资源。GNU binutils strip --strip-all 写同目录临时副本后原子替换，不改 target/release；去除调试段和普通符号表，保留 ELF 加载所需动态符号。拒绝原位 strip 和与源码资源重叠的输出目录；辅助模块仅制作机使用，不加入应用运行链 |
+| `scripts/install-dependencies.sh` / `dependencies.py` | Python 引导、Ubuntu/Debian 系统依赖检查/授权安装、源码安装的缺失 Rust 工具链安装，以及缺失 Codex 官方原生包下载安装 | 最低 CLI 0.166.0，缺失时先解析官方 latest 稳定版再下载对应架构包；校验三段数字版本，不接受预发布。保留满足最低版本的现有 CLI/登录，旧版、未知版本或无法运行的已有 CLI 明确报错且不覆盖。原生发行包来自 @openai/codex 官方 registry，SHA-512 完整性校验、安全解包、保留完整 vendor 布局，用户级安装 ~/.local/bin/codex，无 Node/npm；Rust rustup-init 用官方 SHA-256 校验。--runtime-only 跳过构建依赖，--skip-optional 跳过 Nautilus 等可选依赖；系统包调用 sudo/pkexec，可选取消保留脚本菜单，必需依赖失败阻止后续安装；不运行 Codex 登录 |
+| `scripts/package-full.sh` / `package-full.py` | 独立的 Debian/Ubuntu 完整离线打包入口，`--output-dir` 默认 dist，`--codex-version` 可指定 ≥0.166.0 的稳定版（默认官方 latest）；调用普通 release 打包后，以白名单及全新暂存目录组装程序、resource、集成、安装脚本及空配置 | 制作需 Python 3.10+、Rust、APT/dpkg 及更新的软件源索引；仅 amd64/arm64。APT 用空 dpkg status 解析并下载全部运行依赖闭包，包含 Python、文件选择器、Mesa 通用驱动、中文字体、Portal 和可选 Nautilus 依赖，不能只下载制作机缺失的包；仅下载，不提权或安装主机软件。Codex 复用 dependencies.py 的最低版本/最新稳定版解析及官方 HTTPS 下载规则，核验 SHA-512，不复制本机 CLI/登录。生成含实际 Codex 版本与最低版本的公开包清单、平台三元组及全部文件 SHA256SUMS；先自检再原子发布 lexington-full-发行版-版本-架构.tar.gz，失败保留旧成品；临时目录自动回收 |
+| `scripts/install-offline-dependencies.sh` | 完整包中的系统依赖引导；`--check` 仅检查所有文件 SHA-256、发行版 ID/VERSION_ID、dpkg 架构及 DEB 存在性 | Bash/coreutils/APT/dpkg 为引导前提，无需 Python。普通 install.sh → install-linux.sh → install-dependencies.sh 自动发现 offline 目录，先校验再授权安装本地 DEB、引导 Python；禁用在线索引并使用 --no-download/--no-remove，不自动降级或放宽认证，版本冲突中止。随后 dependencies.py --runtime-only --offline-dir 使用随包 Codex，继续最低版本校验、完整性校验/安全解包并保留符合要求的已有 CLI，不再请求 latest。完整包包含全部桌面依赖，--skip-optional 不裁剪离线闭包。只适用制作机相同发行版版本/架构，内核、桌面环境及专有显卡驱动不随包分发；离线安装不代表模型离线 |
+| `scripts/package-deb.sh` / `package-deb.py` | 构建标准 lexington DEB 和包含程序 DEB/全部系统 DEB 的配套离线 tar.gz；默认调用完整打包入口，--from-bundle 复用已有完整包且不联网，--output-dir 指定输出，非复用模式支持 --codex-version | 以纯数据方式校验输入路径、SHA-256、平台和 Codex 最低版本，不执行输入包的脚本。组装时再次调用 package_assets.py 过滤资源并 strip 可执行副本，复用旧完整包也不能把草稿、Windows DLL 或符号带回 DEB，原归档保持不变。dpkg-deb --root-owner-group 构建 root 所有的系统文件，版本含 UTC 构建修订；Depends 来自完整包运行依赖清单且 Python ≥3.9。/usr/bin 启动器、系统菜单及 /usr/lib/lexington 的程序/资源/空配置/官方 Codex 归档随 DEB 分发，不把系统 DEB 嵌入程序包。preinst 检查发行版，postinst/postrm 仅更新系统桌面缓存，绝不在 dpkg 锁内嵌套 APT 或操作用户目录；原子发布程序包及离线套件。离线套件复用 install-offline-dependencies.sh，一次提交所有本地 DEB 给禁用下载/移除的 APT |
+| `scripts/launch-deb.sh` | DEB 普通用户启动入口，按系统 package-id 与个人 .deb-package-id 判断首次初始化/升级，复用 install-linux.sh --system-package，成功后原子更新标记，再 exec 个人目录中的原生程序并透传全部参数 | 拒绝 root 启动 GUI；包身份基于全部载荷路径/内容哈希，资源或脚本变化也触发同步。初始化保留配置/角色卡/登录，并创建桌面快捷方式和用户集成，不写系统目录、不构建、不调用 APT；失败不写成功标记并尝试用 Zenity 提示终端排查。程序配置仍可写入既有个人资源根；卸载系统包不清理个人目录，个人快捷方式可能需手动清理 |
+| `scripts/test-package-full.py` | 临时目录与假 APT/Cargo/官方 Codex 下载夹具验证完整打包及无源码 install.sh 首装/升级链路，额外使用真实 dpkg-deb 构建/解包小型 DEB | 不联网、不安装真实系统包、不调用真实 Codex。覆盖含空格路径、空 dpkg status 下载、资源及私有配置排除、完整 CLI 辅助资源、快捷方式、已有 CLI/配置保留、禁止下载/移除、损坏及平台不匹配在提权前拒绝、失败保留上次成品及临时目录清理；普通/完整包和复用旧归档的 DEB 均排除草稿/Windows 运行库，普通包另以 test-package.sh 覆盖旧生成目录清理。真实 C ELF 夹具验证 strip 后无 .symtab/.debug_*、可运行、重复处理幂等且源二进制逐字节保留。DEB 覆盖系统 root 所有权、Depends、维护脚本无 APT/用户目录访问、无源码首次启动和标记跳过、内容升级、参数透传及个人配置保留、离线入口同时提交程序和依赖。需以普通用户运行启动夹具；不替代干净目标机断网安装实测 |
+| `scripts/test-dependencies.py` | 用临时 HOME、下载/包夹具验证缺失安装、已有 CLI 保留、资源布局、完整性/路径穿越拒绝及用户配置保留，以及最新稳定版解析、显式版本选择、最低版本边界和已有新版不下载 | 不访问网络、不写系统目录、不安装真实 CLI，不替代真实平台安装验证 |
 | `scripts/context-smoke.py` / `test-integrations.js` | 验证真实 CLI/native framing/Nautilus URI 路径和非法输入隔离；用宿主桩验证 VS Code 选区/路径/远程/未保存及浏览器菜单/来源/失败提示 | 测试不调用模型、不修改剪贴板/用户配置；前者 Python 3，后者开发机 Node；Rust UI 测试另验证 Inbox → Codex 完整队列与草稿保护 |
 | `integrations/README.md` | 各客户端安装、适用范围与 native bridge 协议说明 | 记录顶层菜单依赖、浏览器签名与沙箱限制，不宣称覆盖任意软件内部菜单 |
 
@@ -649,6 +663,8 @@ python3 scripts/settings-smoke.py target/release/lexington
 python3 scripts/context-smoke.py target/release/lexington
 node scripts/test-integrations.js
 python3 scripts/test-dependencies.py
+python3 scripts/test-package-full.py
+bash scripts/test-package.sh
 ```
 
 - native-smoke 模式为 `drag`、`drag-edges`、`click-through`、`position`、`clock`、`input`、`pin`、`idle`、`sidebar`，`--production` 验证普通尺寸。`sidebar` 另需 libXext，并使用无立绘的临时 `LEXINGTON_HOME` 与独立 `XDG_DATA_HOME`、权限 0700 的 `XDG_RUNTIME_DIR`（隔离记录、模式和 Inbox 实例锁，防止立绘覆盖侧栏采样点）。需要 libX11/libXtst，优先 Xephyr + 窗口管理器隔离，同一 display 的指针测试必须串行；脚本移动并恢复鼠标。GIF/Live2D 画布或旧 GIF 抓取坐标可能透明；`--pet-point X Y` 可指定原生窗口像素中的实体抓取点（如开发窗口婚纱 Live2D 用 `400 250`），拖动和穿透用例共用此点；验收包括阈值、精确位移、反向移动和尺寸保持，失败也须释放鼠标按钮。

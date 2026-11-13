@@ -8,8 +8,8 @@ for name in model.onnx config.json tokenizer.json tokenizer_config.json special_
 done
 bundle="$project_root/dist/lexington"
 mkdir -p "$bundle"
-cp target/release/lexington "$bundle/lexington"
-cp -R resource "$bundle/"
+python3 scripts/package_assets.py binary target/release/lexington "$bundle/lexington"
+python3 scripts/package_assets.py resources resource "$bundle/resource"
 mkdir -p "$bundle/config"
 printf '{}\n' > "$bundle/config/config.json"
 # Generated bundles must never retain private role cards or memories from an older run.

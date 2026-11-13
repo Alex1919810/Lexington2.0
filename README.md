@@ -58,6 +58,40 @@ bash scripts/install-linux.sh
 
 已有 Linux 发布包时，解压后运行 `bash install.sh`，无需 Rust。原生 Wayland 可在启动命令后添加 `--wayland`，窗口位置和层级由桌面合成器控制。
 
+### 制作 Linux 全依赖离线安装包
+
+在与目标机相同发行版版本、相同架构的 Debian/Ubuntu 制作机上运行：
+
+```bash
+bash scripts/package-full.sh
+# 可选：指定输出目录
+bash scripts/package-full.sh --output-dir /path/to/output
+# 可选：指定 Codex 稳定版，版本不得低于 0.166.0
+bash scripts/package-full.sh --codex-version 0.166.0
+```
+
+制作机需有 Rust、Python 3.10+、APT/dpkg、已更新的软件源索引和网络。脚本构建 release，下载完整系统运行依赖及制作时最新稳定版的官方原生 Codex（最低 `0.166.0`），连同立绘、中文 Embedding 模型和右键集成打入 `dist/lexington-full-<发行版>-<版本>-<架构>.tar.gz`。支持 amd64/arm64；制作时不安装系统软件，不打包个人配置、密钥、角色卡或登录数据。失败时保留上一次成功的同名安装包。原 `scripts/package.sh` 仍用于需要联网补依赖的普通包。
+
+所有 Linux 发布入口均使用 release 主程序，并通过制作机的 binutils `strip` 去除发布副本中的符号；不修改 `target/release` 构建产物。资源排除制作草稿 `live2d-drafts` 和 Windows 运行库，保留正式立绘、Live2D、模型及许可。复用旧完整包生成 DEB 时也会重新过滤和去除符号，源码资源保持完整。
+
+目标机解压后执行 `bash install.sh`，即可离线补齐运行依赖、安装程序并创建快捷方式；无需 Rust、Node 或预装 Python，系统依赖安装需管理员认证。可先用 `bash scripts/install-offline-dependencies.sh --check` 核对平台和 SHA-256。已有符合最低版本要求的 Codex、登录及应用配置会保留；旧版 Codex 会提示先升级。完整包始终包含可选桌面集成依赖。
+
+离线包只适用于相同发行版版本和架构；目标机需有 Bash、coreutils、APT/dpkg 及可用的图形桌面。包内包含 Mesa 通用驱动，内核、桌面环境和专有显卡驱动由目标机提供。安装过程中禁止下载依赖或移除系统包；本机较新的包导致版本冲突时会中止，应在匹配的系统上重新制作包。AI 对话仍需另行配置登录/API 和模型网络连接。
+
+### 制作 DEB 程序包和配套离线套件
+
+```bash
+bash scripts/package-deb.sh
+# 复用已有完整包，不重新构建或下载
+bash scripts/package-deb.sh --from-bundle dist/lexington-full-ubuntu-24.04-amd64.tar.gz
+```
+
+输出 `dist/lexington_<版本及构建修订>_<架构>.deb` 和 `dist/lexington-deb-offline-<发行版>-<版本>-<架构>.tar.gz`。支持 `--output-dir`；全新制作时也可用 `--codex-version` 指定不低于 0.166.0 的稳定版。
+
+单独的 `.deb` 包含程序、资源、模型和原生 Codex，系统依赖由标准 `Depends` 字段声明；可用软件安装器打开，或执行 `sudo apt install ./路径/lexington_版本_架构.deb`，缺失的系统依赖由 APT 联网补齐。离线安装则解压配套套件，运行 `bash install.sh`，一次将程序和全部依赖交给 APT；`bash install.sh --check` 可先校验。不要只用 `dpkg -i` 安装程序包并期待它下载依赖。
+
+安装后从应用菜单打开 **Lexington**，或运行 `lexington`。系统文件位于 `/usr/lib/lexington`；首次启动及包内容更新后，以当前普通用户同步到原有的个人安装目录并创建桌面快捷方式、注册右键集成，保留已有配置和登录。无需以 root 启动 GUI；dpkg 安装脚本不写入用户目录，也不嵌套调用 APT。DEB 要求相同发行版版本和架构。卸载系统 DEB 时保留个人安装及数据，个人快捷方式需自行清理。
+
 ### 首次使用 AI 对话
 
 AI 对话需要原生 Codex CLI；Linux 安装器可在缺失时自动安装。模型、API、凭据与权限统一继承环境及本机 Codex 配置（遵循 `CODEX_HOME`），Lexington 不再提供连接参数表单，也不使用 `config.json` 中遗留的连接参数覆盖 Codex。如需指定原生程序路径，设置环境变量 `LEXINGTON_CODEX_EXECUTABLE`（Windows 使用 `codex.exe`，不使用 `.cmd/.bat`）。使用前先完成 Codex 登录或外部 API 配置；未配置 AI 时，角色展示、台词和提醒仍可使用。

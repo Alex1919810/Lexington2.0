@@ -3,6 +3,12 @@ set -euo pipefail
 project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
+# Full releases bootstrap Python and system libraries from local DEBs first.
+if [[ -d "$project_root/offline" ]]; then
+    bash "$project_root/scripts/install-offline-dependencies.sh" "$@"
+    exec python3 "$project_root/scripts/dependencies.py" --runtime-only --offline-dir "$project_root/offline" "$@"
+fi
+
 # Python is the bootstrap dependency; other downloads use its HTTPS client.
 if ! command -v python3 >/dev/null; then
     if ! command -v apt-get >/dev/null; then

@@ -8,7 +8,18 @@ project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_root"
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 binary_source="target/release/lexington"
-if [[ -f Cargo.toml ]]; then
+system_package=false
+if [[ "${1:-}" == --system-package ]]; then
+    shift
+    if [[ -f Cargo.toml || ! -f package-id ]]; then
+        printf '%s\n' '--system-package requires an installed Debian package.' >&2
+        exit 1
+    fi
+    system_package=true
+    binary_source="lexington"
+    # APT has already installed system dependencies; never re-enter it here.
+    python3 scripts/dependencies.py --runtime-only --codex-only --offline-dir "$project_root/offline" "$@"
+elif [[ -f Cargo.toml ]]; then
     bash scripts/install-dependencies.sh "$@"
     cargo build --release --locked
 else
@@ -26,12 +37,14 @@ cp -R resource "$install_dir/"
 # Preserve a user's API key and custom configuration on subsequent installs.
 if [[ ! -f "$install_dir/config/config.json" ]]; then cp -R config "$install_dir/"; fi
 launcher="${XDG_DATA_HOME:-$HOME/.local/share}/applications/lexington.desktop"
+launcher_executable="$install_dir/lexington"
+if "$system_package"; then launcher_executable=/usr/bin/lexington; fi
 cat > "$launcher" <<DESKTOP
 [Desktop Entry]
 Type=Application
 Name=Lexington
 Comment=Rust 桌面宠物
-Exec="$install_dir/lexington"
+Exec="$launcher_executable"
 Path=$install_dir
 Icon=$install_dir/resource/icon/Normal.ico
 Terminal=false
@@ -48,6 +61,10 @@ cp "$launcher" "$desktop_launcher"
 chmod +x "$desktop_launcher"
 if command -v gio >/dev/null; then gio set "$desktop_launcher" metadata::trusted true 2>/dev/null || true; fi
 if command -v update-desktop-database >/dev/null; then update-desktop-database "$(dirname "$launcher")"; fi
-python3 scripts/integrations.py build --output "$project_root/dist/integrations"
-python3 scripts/integrations.py install --output "$project_root/dist/integrations" --directory "$install_dir"
+artifacts="$project_root/integrations/artifacts"
+if ! "$system_package"; then
+    artifacts="$project_root/dist/integrations"
+    python3 scripts/integrations.py build --output "$artifacts"
+fi
+python3 scripts/integrations.py install --output "$artifacts" --directory "$install_dir"
 printf 'Installed: %s\nDesktop shortcut: %s\n' "$install_dir/lexington" "$desktop_launcher"
