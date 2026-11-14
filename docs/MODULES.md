@@ -78,7 +78,7 @@ docs/
 | `config.rs` | 读取、校验和保存应用配置。 |
 | `resources.rs` | 扫描角色立绘、换装、格式与战损资源。 |
 | `character.rs` | 管理角色、立绘格式、换装和正常／战损选择。 |
-| `codex.rs` | 管理 Codex 进程、协议、线程、任务、审批和命令执行。 |
+| `codex.rs` | 发现本机或随包 Codex，管理进程、协议、线程、任务、审批和命令执行。 |
 | `codex_config.rs` | 读取本机 Codex 配置信息并提供凭据遮蔽支持。 |
 | `commands.rs` | 定义客户端指令、模型选项和交互面板数据。 |
 | `context.rs` | 将角色与项目上下文组织为请求发送清单。 |
@@ -130,7 +130,7 @@ docs/
 | `embedding.rs` | 加载本地 Embedding 模型，分块文本并生成向量。 |
 | `vector_store.rs` | 提供通用向量及 JSON 记录存储。 |
 | `platform.rs` | 提供跨平台窗口接口与 Linux 窗口、指针、穿透实现。 |
-| `platform_windows.rs` | 实现 Windows 窗口定位、拖动、命中和透明区域穿透。 |
+| `platform_windows.rs` | 实现 Windows 窗口定位、拖动、命中、桌面透明合成和透明区域穿透。 |
 | `proxy.rs` | 将 Windows 系统手动代理传递给 CLI 子进程。 |
 | `time.rs` | 提供跨平台本地时间与时间戳转换。 |
 | `windows.rs` | 封装 Windows 句柄、用户身份、进程 Job 和空闲查询。 |
@@ -153,6 +153,7 @@ docs/
 | --- | --- |
 | `install-linux.sh` / `install-windows.ps1` | 构建并安装桌面应用、资源与快捷方式。 |
 | `package-windows.ps1` / `package-windows.py` | 制作 Windows MSI 安装包及可选便携 ZIP。 |
+| `windows_codex.py` | 获取、校验并准备 Windows 随包 Codex 原生发行文件。 |
 | `package.sh` / `package_assets.py` | 制作普通 Linux 发布包并统一处理发布资源。 |
 | `package-full.sh` / `package-full.py` | 制作包含系统依赖的 Linux 离线安装包。 |
 | `package-deb.sh` / `package-deb.py` / `launch-deb.sh` | 制作 DEB 及离线套件，并提供系统安装后的启动入口。 |
@@ -162,6 +163,8 @@ docs/
 | `build-bikini-live2d-v2.py` / `build-flower-live2d.py` | 制作并发布对应换装的分层角色资源。 |
 | `test-dependencies.py` / `test-package.sh` / `test-package-full.py` | 验证依赖安装与 Linux 打包流程。 |
 | `test-windows.ps1` / `test-windows-msi.ps1` | 验证 Windows 构建、打包及 MSI 生命周期。 |
+| `test-windows-codex.py` | 验证 Windows Codex 分发准备及完整性保护。 |
+| `test-windows-transparency.py` | 验证 Windows 桌面像素透明合成及状态恢复。 |
 | `windows-smoke.py` / `native-smoke.py` / `settings-smoke.py` | 验证原生窗口、交互与设置功能。 |
 | `context-smoke.py` / `test-integrations.js` | 验证外部上下文交付与集成客户端。 |
 

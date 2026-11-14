@@ -10,6 +10,8 @@ import uuid
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+from windows_codex import REQUIRED
+
 
 NAMESPACE = "http://wixtoolset.org/schemas/v4/wxs"
 UPGRADE_CODE = "80BE85CF-E630-4ACB-B9D7-E51985D4C2BB"
@@ -26,6 +28,9 @@ def identifier(prefix, value):
 
 
 def author(stage, output, version):
+    for relative in REQUIRED:
+        if not (stage / 'codex' / relative).is_file():
+            raise ValueError(f'Missing bundled Codex file: {relative}')
     if not re.fullmatch(r"\d+\.\d+\.\d+", version):
         raise ValueError("MSI requires a three-part numeric Cargo version")
     if any(int(part) > limit for part, limit in zip(version.split("."), (255, 255, 65535))):
@@ -84,7 +89,7 @@ def author(stage, output, version):
         return node
 
     payload = [stage / "lexington.exe", stage / "lexington-native-host.exe", stage / "README.md"]
-    for folder in (stage / "resource", integration_root):
+    for folder in (stage / "resource", stage / "codex", integration_root):
         payload.extend(path for path in sorted(folder.rglob("*")) if path.is_file()
                        and "live2d-drafts" not in path.relative_to(stage).parts
                        and not any(part.startswith("linux-") for part in path.relative_to(stage).parts))

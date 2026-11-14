@@ -28,6 +28,8 @@ try {
     $stage = Join-Path $root ('dist\lexington-windows-' + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path (Join-Path $stage 'scripts') -Force | Out-Null
     Copy-Item -LiteralPath target/release/lexington.exe, resource, README.md -Destination $stage -Recurse
+    & $Python -X utf8 scripts/windows_codex.py --destination (Join-Path $stage 'codex')
+    if ($LASTEXITCODE -ne 0) { throw 'Native Codex staging failed.' }
     New-Item -ItemType Directory -Path (Join-Path $stage 'config') -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $stage 'config\config.json'), "{}" + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
     Copy-Item -LiteralPath scripts/install-windows.ps1 -Destination (Join-Path $stage 'scripts')
@@ -51,7 +53,7 @@ try {
     $archiveDeadline = [DateTime]::UtcNow.AddSeconds(12)
     while ($true) {
         try {
-            $portableFiles = @('lexington.exe', 'resource', 'README.md', 'config', 'scripts', 'dist') | ForEach-Object { Join-Path $stage $_ }
+            $portableFiles = @('lexington.exe', 'resource', 'codex', 'README.md', 'config', 'scripts', 'dist') | ForEach-Object { Join-Path $stage $_ }
             Compress-Archive -Path $portableFiles -DestinationPath $archive -Force
             break
         } catch {

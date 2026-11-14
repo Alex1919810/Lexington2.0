@@ -121,10 +121,30 @@ def underlay(path):
                     ('menu', wintypes.LPCWSTR), ('name', wintypes.LPCWSTR)]
 
     count = 0
+    color = 0xC0C0C0
+    gdi32.CreateSolidBrush.argtypes = [wintypes.DWORD]
+    gdi32.CreateSolidBrush.restype = wintypes.HBRUSH
+    gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+    user32.FillRect.argtypes = [wintypes.HDC, ctypes.POINTER(wintypes.RECT), wintypes.HBRUSH]
+    user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user32.InvalidateRect.argtypes = [wintypes.HWND, ctypes.c_void_p, wintypes.BOOL]
 
     @callback_type
     def procedure(handle, message, first, second):
-        nonlocal count
+        nonlocal count, color
+        if message == 0x8001:
+            color = first
+            user32.InvalidateRect(handle, None, True)
+            return 0
+        if message == 0x0014:
+            bounds = wintypes.RECT()
+            user32.GetClientRect(handle, ctypes.byref(bounds))
+            brush = gdi32.CreateSolidBrush(color)
+            try:
+                user32.FillRect(first, ctypes.byref(bounds), brush)
+            finally:
+                gdi32.DeleteObject(brush)
+            return 1
         if message == 0x0202:
             count += 1
             path.write_text(str(count), encoding='ascii')

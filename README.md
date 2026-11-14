@@ -33,6 +33,8 @@ Lexington 是一款使用 Rust 编写的桌面宠物，基于 eframe/egui + glow
 
 正式安装包为 **`lexington-amd64-windows.msi`**。双击安装到 `%LOCALAPPDATA%\lexington`，创建桌面/开始菜单快捷方式以及文件资源管理器右键菜单；无需 Rust、Python、Node 或 .NET 运行时。安装前退出 Lexington，不需要关闭浏览器或编辑器。升级保留配置、角色卡、记忆和 Codex 登录；可从 Windows“已安装的应用”卸载，用户数据不会随程序删除。当前产物未做代码签名，Windows 可能提示未知发布者。
 
+MSI 已包含官方 **Codex CLI 0.167.0 原生 Windows 版**及辅助文件，安装时一并离线安装，不需要另外安装 npm/Node。Lexington 优先使用已有原生 CLI，未找到时自动使用安装目录 `codex/vendor/x86_64-pc-windows-msvc/bin/codex.exe`；不更改系统 PATH 或登录信息，也不会自动登录。首次使用若尚未登录，可运行该 `codex.exe login`。制作机首次打包需要联网下载并核验官方发行文件，目标电脑安装 MSI 不需要联网下载 Codex。
+
 从源码安装需先准备 Rust stable（MSVC 工具链）、Visual Studio C++ Build Tools（含 Windows SDK）和 Python 3（构建右键集成）。在 PowerShell 运行：
 
 ```powershell
@@ -108,7 +110,7 @@ bash scripts/package-deb.sh --from-bundle dist/lexington-full-ubuntu-24.04-amd64
 
 ### 首次使用 AI 对话
 
-AI 对话需要原生 Codex CLI；Linux 安装器可在缺失时自动安装。模型、API、凭据与权限统一继承环境及本机 Codex 配置（遵循 `CODEX_HOME`），Lexington 不再提供连接参数表单，也不使用 `config.json` 中遗留的连接参数覆盖 Codex。如需指定原生程序路径，设置环境变量 `LEXINGTON_CODEX_EXECUTABLE`（Windows 使用 `codex.exe`，不使用 `.cmd/.bat`）。使用前先完成 Codex 登录或外部 API 配置；未配置 AI 时，角色展示、台词和提醒仍可使用。
+AI 对话需要原生 Codex CLI；Windows MSI 已随包安装，Linux 安装器可在缺失时自动安装。模型、API、凭据与权限统一继承环境及本机 Codex 配置（遵循 `CODEX_HOME`），Lexington 不再提供连接参数表单，也不使用 `config.json` 中遗留的连接参数覆盖 Codex。如需指定原生程序路径，设置环境变量 `LEXINGTON_CODEX_EXECUTABLE`（Windows 使用 `codex.exe`，不使用 `.cmd/.bat`）。使用前先完成 Codex 登录或外部 API 配置；未配置 AI 时，角色展示、台词和提醒仍可使用。
 
 Windows 会在没有代理环境变量时使用系统手动代理；代理变更后，在“设置 → 连接”重启会话。
 

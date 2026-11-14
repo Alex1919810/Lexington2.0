@@ -12,6 +12,7 @@
 ## 增量验证
 
 - Windows 穿透须逐帧比较实际 GWL_EXSTYLE 后按需更新，不能只缓存期望值；winit 在焦点或层级变化时可能重写样式。HWND 保存为指针宽度 WindowId，不能截断为 X11 的 u32。
+- Windows Glow 主窗口初始化及穿透样式切换后须恢复 DWM alpha 合成，不能只依赖 winit 创建窗口时的一次设置；像素回归必须读桌面合成结果，FBO 的透明字节不能证明桌面没有黑底。
 - Windows 跨应用穿透使用 WS_EX_LAYERED 与 WS_EX_TRANSPARENT 的组合；不能仅以 WM_NCHITTEST 返回 HTTRANSPARENT 代替，其继续命中仅保证同线程窗口。客户区指针按 DPI 换算后还须对齐 viewport 原点，裁剪后的零面积区域不得截获输入；不为命中测试替换 winit 的窗口过程。
 - Windows 本地时间使用 CRT localtime_s/_mktime64；活动采样只接受未锁定的活动本地控制台会话，不读取输入内容。采样失败应禁用自动确认，保留手动入口。
 - Windows GUI 启动的 CLI 可能不读取系统代理；桥接只通过子进程 Command.env 补充手动代理，显式代理环境变量（包括空值）优先，不修改全局环境或登录。WinHTTP 返回的代理、排除项和 PAC URL 均须 GlobalFree；仅有 PAC 时不能当成普通代理 URL。

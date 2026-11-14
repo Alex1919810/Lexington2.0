@@ -22,6 +22,24 @@ try {
     Copy-Item -LiteralPath (Join-Path $root 'integrations') -Destination $source -Recurse
     [IO.File]::WriteAllText((Join-Path $source 'README.md'), 'fixture')
     [IO.File]::WriteAllText((Join-Path $source 'Cargo.toml'), "[package]`nversion = `"2.0.0`"`n")
+    $codexFiles = @('vendor/x86_64-pc-windows-msvc/bin/codex.exe', 'vendor/x86_64-pc-windows-msvc/bin/codex-code-mode-host.exe', 'vendor/x86_64-pc-windows-msvc/codex-path/rg.exe', 'vendor/x86_64-pc-windows-msvc/codex-resources/codex-command-runner.exe', 'vendor/x86_64-pc-windows-msvc/codex-resources/codex-windows-sandbox-setup.exe', 'vendor/x86_64-pc-windows-msvc/codex-package.json', 'package.json', 'README.md', 'LICENSE')
+    foreach ($relative in $codexFiles) {
+        $path = Join-Path $source ('codex/' + $relative)
+        New-Item -ItemType Directory -Path (Split-Path $path) -Force | Out-Null
+        [IO.File]::WriteAllText($path, 'fixture native Codex')
+    }
+    $codexFixture = @"
+import argparse
+from pathlib import Path
+import shutil
+REQUIRED = $($codexFiles | ConvertTo-Json -Compress)
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--destination', type=Path, required=True)
+    options = parser.parse_args()
+    shutil.copytree(Path(__file__).resolve().parent.parent / 'codex', options.destination)
+"@
+    [IO.File]::WriteAllText((Join-Path $source 'scripts/windows_codex.py'), $codexFixture, [Text.UTF8Encoding]::new($false))
     New-Item -ItemType Directory -Path (Join-Path $source 'resource\icon') -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $root 'resource\icon\Normal.ico') -Destination (Join-Path $source 'resource\icon')
     [IO.File]::WriteAllText((Join-Path $source 'target\release\lexington.exe'), 'fixture version one')
@@ -55,6 +73,8 @@ try {
     Assert-True ((Get-Content -LiteralPath (Join-Path $installed 'resource\agents\fixture.md') -Raw) -eq 'fixture persona two') 'Agent Markdown did not update.'
     Assert-True ((Get-FileHash -LiteralPath (Join-Path $installed 'lexington.exe')).Hash -eq (Get-FileHash -LiteralPath (Join-Path $source 'target\release\lexington.exe')).Hash) 'Binary mismatch.'
     Assert-True ((Get-FileHash -LiteralPath (Join-Path $installed 'lexington-native-host.exe')).Hash -eq (Get-FileHash -LiteralPath (Join-Path $installed 'lexington.exe')).Hash) 'Host alias mismatch.'
+    Assert-True ((Get-Content -LiteralPath (Join-Path $installed 'codex/vendor/x86_64-pc-windows-msvc/bin/codex.exe') -Raw) -eq 'fixture native Codex') 'Native Codex was not installed.'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $installed 'codex/codex'))) 'Codex upgrade created a nested distribution.'
     Assert-True (@(Get-ChildItem -LiteralPath $installed -Filter '.install-*').Count -eq 0) 'Temporary binary leaked.'
     Assert-True ((Get-FileHash -LiteralPath (Join-Path $installed 'resource\models\bge-small-zh-v1.5\model.onnx')).Hash -eq (Get-FileHash -LiteralPath (Join-Path $modelDirectory 'model.onnx')).Hash) 'Installed embedding model mismatch.'
     $refused = $false
@@ -91,6 +111,7 @@ try {
         Assert-True (@($archive.Entries | Where-Object { $_.FullName.Replace('\', '/') -eq 'resource/agents/fixture.md' }).Count -eq 1) 'Agent Markdown is missing from ZIP.'
         Assert-True (@($archive.Entries | Where-Object { $_.FullName.Replace('\', '/') -eq 'resource/models/bge-small-zh-v1.5/model.onnx' }).Count -eq 1) 'Embedding model is missing from ZIP.'
         Assert-True (@($archive.Entries | Where-Object { $_.FullName.Replace('\', '/') -eq 'resource/runtime/windows-x86_64/onnxruntime.dll' }).Count -eq 1) 'CPU runtime is missing from ZIP.'
+        Assert-True (@($archive.Entries | Where-Object { $_.FullName.Replace('\', '/') -eq 'codex/vendor/x86_64-pc-windows-msvc/bin/codex.exe' }).Count -eq 1) 'Codex is missing from ZIP.'
     } finally { $archive.Dispose() }
     $unpacked = Join-Path $fixture 'unpacked release'
     Expand-Archive -LiteralPath $archivePath -DestinationPath $unpacked
@@ -98,6 +119,7 @@ try {
     & (Join-Path $unpacked 'scripts\install-windows.ps1') -InstallDir $packageInstall -NoShortcuts -NoIntegrations -NoRestart -Python 'deliberately-unavailable-python'
     Assert-True ((Get-FileHash -LiteralPath (Join-Path $packageInstall 'lexington.exe')).Hash -eq (Get-FileHash -LiteralPath (Join-Path $installed 'lexington.exe')).Hash) 'Source-free package install mismatch.'
     Assert-True ((Get-Content -LiteralPath (Join-Path $packageInstall 'config\config.json') -Raw).Trim() -eq '{}') 'Source-free install configuration mismatch.'
+    Assert-True ((Get-Content -LiteralPath (Join-Path $packageInstall 'codex/vendor/x86_64-pc-windows-msvc/bin/codex.exe') -Raw) -eq 'fixture native Codex') 'Source-free install lost Codex.'
     Assert-True ((Get-Content -LiteralPath (Join-Path $packageInstall 'resource\agents\fixture.md') -Raw) -eq 'fixture persona two') 'Source-free install lost agent Markdown.'
     Assert-True ((Get-FileHash -LiteralPath (Join-Path $packageInstall 'resource\agents\characters.json')).Hash -eq (Get-FileHash -LiteralPath (Join-Path $agentDirectory 'characters.json')).Hash) 'Source-free install lost agent mapping.'
     Assert-True ((Get-FileHash -LiteralPath (Join-Path $packageInstall 'resource\models\bge-small-zh-v1.5\model.onnx')).Hash -eq (Get-FileHash -LiteralPath (Join-Path $modelDirectory 'model.onnx')).Hash) 'Source-free install lost embedding model.'

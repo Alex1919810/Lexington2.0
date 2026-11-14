@@ -116,6 +116,33 @@ fn windows_executable() -> Option<std::path::PathBuf> {
             }
         }
     }
+    windows_executable_from(
+        candidates,
+        std::env::current_exe()
+            .ok()
+            .as_deref()
+            .and_then(Path::parent),
+    )
+}
+
+#[cfg(windows)]
+fn windows_executable_from(
+    mut candidates: Vec<std::path::PathBuf>,
+    installation: Option<&Path>,
+) -> Option<std::path::PathBuf> {
+    if let Some(installation) = installation {
+        let target = if cfg!(target_arch = "aarch64") {
+            "aarch64-pc-windows-msvc"
+        } else {
+            "x86_64-pc-windows-msvc"
+        };
+        candidates.push(
+            installation
+                .join("codex/vendor")
+                .join(target)
+                .join("bin/codex.exe"),
+        );
+    }
     candidates.into_iter().find(|path| path.is_file())
 }
 
@@ -1560,6 +1587,37 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn windows_codex_falls_back_to_bundle_without_overriding_existing_cli() {
+        let root = tempfile::tempdir().unwrap();
+        let target = if cfg!(target_arch = "aarch64") {
+            "aarch64-pc-windows-msvc"
+        } else {
+            "x86_64-pc-windows-msvc"
+        };
+        let bundled = root
+            .path()
+            .join("codex/vendor")
+            .join(target)
+            .join("bin/codex.exe");
+        let existing = root.path().join("existing/codex.exe");
+        assert!(windows_executable_from(vec![existing.clone()], Some(root.path())).is_none());
+        std::fs::create_dir_all(bundled.parent().unwrap()).unwrap();
+        std::fs::write(&bundled, b"fixture bundled CLI").unwrap();
+        assert_eq!(
+            windows_executable_from(vec![existing.clone()], Some(root.path())),
+            Some(bundled)
+        );
+        std::fs::create_dir_all(existing.parent().unwrap()).unwrap();
+        std::fs::write(&existing, b"fixture existing CLI").unwrap();
+        assert_eq!(
+            windows_executable_from(vec![existing.clone()], Some(root.path())),
+            Some(existing)
+        );
+        assert!(windows_executable_from(vec![], None).is_none());
+    }
+
     #[test]
     fn slash_model_selection_uses_catalog_efforts_and_overrides_only_the_next_turn() {
         let client = Client::mock("model-switch");

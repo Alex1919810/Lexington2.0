@@ -303,6 +303,10 @@ Windows 同样启用 UI 的 Inbox、原生位置保存/恢复、显示器检测�
 
 Windows 桌宠映射后清除 APPWINDOW 并设置 TOOLWINDOW，以原生窗口样式补强 eframe 的任务栏隐藏要求；独立设置窗口不复用此样式。
 
+主窗初始化和实际 GWL_EXSTYLE 改动后调用 restore_transparency：以空 HRGN 和 DwmEnableBlurBehindWindow 恢复 OpenGL 帧缓冲的逐像素 DWM alpha 合成，随后释放 HRGN。winit 仅在创建窗口时配置一次透明合成，不能依靠该初始状态跨越 layered/交互样式切换；只恢复命中样式可能留下不透明黑底。保留 WS_EX_LAYERED/WS_EX_TRANSPARENT 的跨进程穿透策略，不使用颜色键、不修改素材 alpha、不替换窗口过程，也不每帧重复创建 HRGN。
+
+Windows Codex 默认查找在 PATH、用户原生目录、npm 官方原生 vendor 路径之后，回退到 current_exe 的父目录下 codex/vendor/<target>/bin/codex.exe，支持当前目标架构。LEXINGTON_CODEX_EXECUTABLE 仍最高优先，已找到的本机 CLI 不被随包版本覆盖；路径不受当前工作目录或资源根重定向影响。不修改 PATH、CODEX_HOME、凭据或登录，既有进程作业/代理/协议逻辑保持。定向测试 windows_codex_falls_back_to_bundle_without_overriding_existing_cli 只在临时目录创建假 EXE，不启动模型或改变进程环境。
+
 穿透样式每帧与实际 GWL_EXSTYLE 比较后按需更新，不缓存期望布尔值：winit 在焦点/置顶变化时可能重写原生样式，缓存会使无事件透明区域永久失去穿透或控件永久不可点击。
 
 `platform_windows::is_passthrough` 接收已经按 DPI 换算的客户区局部指针，再加 viewport 原点对齐 egui 坐标；只对裁到 viewport 后仍有正面积的当前可见区域保留输入，空列表、关闭控件和零宽/零高矩形不阻挡透明区。按下拖动锚点存在时始终保留输入，直到释放。`input_window_style` 在透明区同时设置 WS_EX_LAYERED 与 WS_EX_TRANSPARENT，交互区移除二者，保持 TOOLWINDOW 并清除 APPWINDOW，保留置顶等无关位。不能用仅返回 HTTRANSPARENT 的 WM_NCHITTEST 替代该跨进程穿透方案：该返回值仅保证同线程窗口继续命中。不替换 winit 的 WNDPROC，也不维护额外的 HWND 回调生命周期。
@@ -342,8 +346,10 @@ Windows 非阻塞字节管道使用 PeekNamedPipe 区分暂时无数据与断开
 
 GUI smoke 使用 LEXINGTON_CODEX_EXECUTABLE 指向不可用程序，并隔离 CODEX_HOME；旧 config.json 的 codex.executable 不再具有测试隔离作用。
 
-- `scripts/install-windows.ps1`：源码或解压包用户级安装，参数 InstallDir/SkipBuild/NoShortcuts/NoIntegrations/NoRestart/Python。只安全关闭目标路径的旧进程，拒绝强杀；同目录临时 exe 经 File.Replace 原子替换并核对 SHA256，PowerShell 5.1 以 NullString 传递无备份参数；保留既有 config/config.json，更新资源与原生宿主别名。HKCU 注册 Explorer 经典菜单及浏览器宿主，Chromium key 计算 ID 与白名单保持一致，WScript 创建快捷方式；不修改 Codex 登录，不自动安装 CLI。
+- `scripts/install-windows.ps1`：源码或解压包用户级安装，参数 InstallDir/SkipBuild/NoShortcuts/NoIntegrations/NoRestart/Python。只安全关闭目标路径的旧进程，拒绝强杀；同目录临时 exe 经 File.Replace 原子替换并核对 SHA256，PowerShell 5.1 以 NullString 传递无备份参数；保留既有 config/config.json，更新资源与原生宿主别名。HKCU 注册 Explorer 经典菜单及浏览器宿主，Chromium key 计算 ID 与白名单保持一致，WScript 创建快捷方式。复制完整随包 codex；源码缺少分发目录时先调用 windows_codex.py，失败不替换程序，生成的 .tools/codex-stage-* 在核对绝对路径后清理。包安装缺失 Codex 时拒绝，不依赖 Python 补下载；重复安装复制目录内容而不嵌套 codex 子目录。不修改 Codex 登录或系统 PATH。
 - `scripts/package-windows.ps1`：Windows x64 正式打包入口，参数 SkipBuild/Python/Wix/PortableZip；构建 locked release、Python 标准库生成集成产物，调用 package-windows.py 和制作机 WiX 5.0.2 生成真正 MSI，成功后同目录原子发布到 dist/lexington-amd64-windows.msi，失败不覆盖旧 MSI。优先使用 .tools/wix/wix.exe，再找 PATH；缺工具明确给出 dotnet tool install 命令，不自动下载。默认不生成 ZIP；PortableZip 才附加便携包，仍带无源码安装脚本与空配置 `{}`，压缩只对共享锁 32/33 限时重试。便携文件显式列举，不包含 MSI 构建中间产物；暂存目录在忽略的 dist 下保留用于诊断。
+- `scripts/windows_codex.py`：制作机从官方 npm registry 获取固定协议基线 0.167.0-win32-x64 原生包，不调用 npm/Node。固定官方 SHA-512 校验下载和 .tools/codex 缓存；官方对应 Git tag 的 Apache-2.0 LICENSE 单独按固定 SHA256 校验。先检查全部归档成员，拒绝越界/驱动器/反斜线/链接/特殊文件和大小写重名，再解到临时目录；检查主 CLI、code-mode host、命令执行器、sandbox setup、rg、元数据及许可，保留完整 vendor（含 voice 的 DLL/许可）布局后发布。损坏缓存明确失败、不发布不完整载荷。MSI/ZIP 同时带 codex，authoring 缺必需文件即拒绝；作为普通 MSI 文件安装/升级/卸载，无目标机联网或安装期脚本。test-windows-codex.py 用假缓存/下载覆盖校验拒绝、安全解包与完整布局，无网络或真实凭据。
+- `scripts/test-windows-transparency.py`：不注入键鼠输入，隔离 HOME/USERPROFILE/LOCALAPPDATA/APPDATA/CODEX_HOME/XDG_DATA_HOME/LEXINGTON_HOME，指定不可用 Codex；创建独立底层窗，交替白/深色背景并直接 GetPixel 读取桌面，移动测试窗口而非指针来切换交互/穿透，检查窗口角及立绘画布内空白。--resource 可复制正式资源，不读取用户配置；--reset-composition 在后续切换前主动清除测试窗 DWM alpha，验证状态丢失后恢复。旧 release 在该故障注入下实测黑底，修复版通过；未注入时本机旧版也可通过，不能将本机故障注入等同于已复现用户所有 GPU/驱动环境。finally 仅关闭自建进程并恢复焦点；真实点击/拖动仍用需授权的 windows-smoke。
 - `scripts/package-windows.py`：仅制作机使用的标准库 WiX authoring 生成器，输入 --stage/--output/--cargo，从 Cargo.toml 读取符合 MSI 范围的三段版本；固定 UpgradeCode、按不区分大小写相对路径生成稳定文件 Component GUID，拒绝路径大小写冲突。perUser/x64 MSI 安装到 LocalAppDataFolder/lexington；HKCU 记录并搜索实际 InstallDir，确保升级、修复及卸载不回落到默认目录；允许同版本重建升级，拒绝低版本。每文件独立组件以 HKCU 为 KeyPath，空目录仅用 RemoveFolder 清理，不递归删除。主程序、宿主别名、README、正式 resource 与集成产物随包，排除草稿和 Linux 运行库；整个 config、用户角色/记忆/向量库、开发记录及 Codex 登录不归 MSI 管理，首次配置由程序默认创建。桌面/开始菜单快捷方式、Explorer 命令和五种浏览器宿主用原生 MSI 表注册/卸载；命令路径正确引用，manifest 的 Windows 相对路径使任意安装目录可迁移，Chromium ID 从扩展 key 推导。没有安装期自定义脚本/下载/扩展自动安装/自动启动；RESTARTMANAGERCONTROL=DisableShutdown 禁止自动关闭应用，用户应先退出 Lexington；安装不依赖 Rust/Python/Node/.NET，MSI 尚未签名。
 - `scripts/test-windows.ps1`：临时目录夹具验证含中文/空格路径的初次/重复脚本安装、资源更新、配置逐字保留、二进制/别名校验、临时文件清理、危险目标拒绝、可选 ZIP 无凭据/VSIX 完整性、共享锁重试以及无源码/Rust/Python 安装；调用 test-windows-msi.ps1 验证原生 MSI。COM 句柄及时释放，最终清理仅对共享锁限时重试。
 - `scripts/test-windows-msi.ps1`：由 test-windows.ps1 传入 Fixture/Source/Wix，只接受专用临时根；查询真实 MSI 的载荷/用户级属性/HKCU/禁止关应用属性，检查 authoring 中无私人配置及临时资源、模型/DLL/角色/扩展完整且宿主可迁移。真实 msiexec 生命周期测试前独立替换 Product/Upgrade/Component GUID、全部注册表写入与搜索前缀、默认目录及快捷方式位置，避免碰真实安装、浏览器注册和桌面；在临时目标实际安装、升级、同版本升级及卸载，只有首次传 INSTALLFOLDER，后续依赖持久记录恢复目标；验证二进制和资源更新、配置/记忆保留与菜单清理。不调用模型或真实凭据；测试 fixture 的 MSI/日志仅含假数据。
@@ -455,6 +461,15 @@ Linux/原生 Wayland、多显示器混合 DPI、锁屏/RDP 和浏览器端到端
 - scripts/test-windows.ps1 的增量夹具通过：原有脚本/可选 ZIP 安装链路保持，新增原生 MSI 表检查及隔离 msiexec 首装、2.0.0 → 2.0.1、同版本升级、卸载通过。只有首次指定临时安装路径，后续自动找回；二进制/资源更新、配置及记忆保留、菜单移除均验证，不访问模型或用户记录。夹具默认目录、GUID、注册表搜索/写入、快捷方式全部独立隔离。
 - 正式 MSI 重新构建并解出 138 个载荷文件，逐项核对资源、README、集成产物与源文件哈希，两个 EXE 与 locked release 哈希一致；检查内置模型、Windows CPU DLL、角色及 VSIX 完整，无私人 config 或草稿。产物约 80.2 MiB，签名状态 NotSigned；未进行代码签名，不宣称消除 SmartScreen 提示。
 - Python 编译检查、相关三个 PowerShell 脚本解析及 git diff --check 通过。本轮只改 MSI 脚本/文档，未重复执行已通过的 Rust/原生指针测试或全量测试；按约定调用 Linux 安装入口，由 Windows 平台守卫拒绝。初期夹具暴露目录未持久化导致卸载回落默认位置的问题，修复 InstallDir 搜索并补齐默认目录隔离后复测通过；受影响桌面程序/资源已通过源码 Windows 安装入口恢复，GUI/宿主别名与 target/release/lexington.exe 的 SHA256 一致。用户配置未纳入 MSI 载荷或删除表；正式 MSI 本身未用于用户安装/卸载，真实生命周期只对假载荷验证。
+
+### Windows MSI 透明背景与随包 Codex 修复（2026-11-14）
+
+- 修复主窗初始化和穿透样式切换后的 DWM alpha 恢复；故障注入回归在旧 release 上读到黑色不透明背景，修复版在白/深色底、交互/穿透反复切换后通过。使用正式 GIF 资源、Flower PNG 和 WeddingDress Live2D 分别读桌面像素；另通过 36 像素真实 GPU 校验。测试没有键鼠输入注入，不宣称替代真实点击、拖动或其他 GPU/远程会话验证。
+- MSI 和可选 ZIP 包含固定官方 Codex CLI 0.167.0 Windows x64 完整分发和 Apache-2.0 许可；制作机下载经固定 SHA-512/SHA256 验证，安装目录约定与后端回退发现一致。不添加 Node/npm/Python 运行链，不覆盖已有 CLI 或登录。官方原生 CLI 在隔离 HOME/CODEX_HOME、仅 System32 的 PATH 下通过版本检查及 app-server initialize/initialized，未发送 thread/turn 或模型请求。
+- 定向 Rust 共 9 项、Codex 分发 Python 3 项、fmt/Clippy 通过；脚本语法和差异检查通过。Windows 脚本/便携安装及真实隔离 MSI 首装、升级、同版升级、卸载夹具通过，新增 CLI/辅助文件载荷、哈希、无嵌套目录及卸载清理检查；不改真实产品 GUID 或注册表。未执行全量 Rust 测试。Linux 安装入口按约定调用，由平台守卫拒绝。
+- 新 MSI 约 210 MiB，已用真实 MSI 同步本机桌面安装版（安装返回 0）；GUI/原生宿主与 release SHA256 一致，48 个 Codex 文件逐一匹配验证过的载荷，原有 3 个配置/登录文件哈希不变。安装版在隔离资源/配置下通过 Live2D 白/深底像素与原生跨进程 WindowFromPoint 检查；安装目录的 Codex 在白名单环境、空 HOME/CODEX_HOME、System32-only PATH 下通过版本与 initialize/initialized 握手，不访问真实账号或模型。未运行旧实例，无需强杀或重启用户进程。
+
+透明回归的 --artwork 可单独指定 PNG/GIF 或 actor.json：复制正式单图/角色目录到临时资源根，避免默认格式掩盖 Live2D 路径；WindowFromPoint 检查真实交互与独立底层进程之间的命中切换，但不发送点击。归档预检还拒绝 Windows 设备名及尾随点/空格，避免合法校验流程之外的夹具/未来归档在 Win32 路径归一化时别名越界。
 
 ### 测试选择
 

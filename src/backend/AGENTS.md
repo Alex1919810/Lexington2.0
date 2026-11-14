@@ -8,6 +8,7 @@
 - 配置保存须保留未知字段和旧密钥；损坏 JSON 拒绝覆盖，同目录临时文件同步后原子替换，Unix 权限 0600，成功后才更新内存。应用开关仅保存对应字段，不重写外部 Codex 连接参数。
 - `codex.noApproval` 默认 false，从下一轮发送起生效，不重启、不改变当前任务或沙箱。缓存 thread/start 返回的原 approvalPolicy；开启显式传 never，关闭显式恢复原值（字符串或 granular 对象），不能省略字段恢复。
 - 会话初始模型、API、登录与提供方配置继承当前环境及本机 Codex；/model 可在当前会话选择模型与推理强度，不能写本机 Codex 配置或覆盖提供方；config.json 的旧 executable/workingDirectory/model/useCustomApi/baseUrl/apiKey 不再加载或覆盖。仅保存 Lexington 的 noApproval/developmentMode；后者默认关闭，改变后须新建会话，不能恢复旧模式线程。Windows 环境指定的 exe 优先于默认程序查找。
+- Windows 缺少本机原生 CLI 时回退到当前 EXE 旁 codex/vendor/<target>/bin/codex.exe；安装目录从 current_exe 定位，不能依赖工作区或 LEXINGTON_HOME。随包 CLI 沿用用户已有 CODEX_HOME/登录，不创建替代凭据或修改系统 PATH。
 - codex_config 只读提供方凭据用于遮蔽，不显示或保存连接参数；标准环境 Key 与当前提供方 Key 在文本、上下文、审批、执行事件及持久化前遮蔽。测试启动只读显式注入的临时凭据来源。
 - 所选工作区的任务可通过 thread/resume 恢复，返回 thread ID 绑定当前任务；恢复失败明确报错，用户新建任务可重新开始，不静默跨项目回退。开发指令从 development 模块取得，只有 developmentMode 开启时附加。
 - 立绘只解析文件名最后的 `_Normal` / `_Damage`（ASCII 大小写不敏感），前面完整服装名用于同角色、同格式配对，无后缀按正常。↻ 切换对应正常/战损，缺对禁用；▶ 仅循环当前状态队列，默认正常；格式切换尽量保留服装和状态，回退优先保留状态。重载入口在“设置 → 常规 → 重新加载”。

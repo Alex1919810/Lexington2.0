@@ -2,9 +2,12 @@ use super::DragAnchor;
 use eframe::egui::{self, Rect};
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, POINT, RECT},
-    Graphics::Gdi::{
-        ClientToScreen, EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
-        ScreenToClient,
+    Graphics::{
+        Dwm::{DWM_BB_BLURREGION, DWM_BB_ENABLE, DWM_BLURBEHIND, DwmEnableBlurBehindWindow},
+        Gdi::{
+            ClientToScreen, CreateRectRgn, DeleteObject, EnumDisplayMonitors, GetMonitorInfoW, HDC,
+            HMONITOR, MONITORINFO, ScreenToClient,
+        },
     },
     UI::{
         Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON},
@@ -31,6 +34,23 @@ fn input_window_style(style: isize, passthrough: bool) -> isize {
 }
 
 pub fn configure(_: &eframe::CreationContext<'_>) {}
+
+fn restore_transparency(window: HWND) {
+    unsafe {
+        let region = CreateRectRgn(0, 0, -1, -1);
+        if region.is_null() {
+            return;
+        }
+        let blur = DWM_BLURBEHIND {
+            dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION,
+            fEnable: 1,
+            hRgnBlur: region,
+            fTransitionOnMaximized: 0,
+        };
+        DwmEnableBlurBehindWindow(window, &blur);
+        DeleteObject(region);
+    }
+}
 
 pub struct DragWindow {
     window: HWND,
@@ -64,6 +84,7 @@ impl DragWindow {
                 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
             );
+            restore_transparency(self.window);
         }
     }
     pub fn focus(&self) {
@@ -218,6 +239,7 @@ impl DragWindow {
             let updated = input_window_style(style, passthrough);
             if updated != style {
                 SetWindowLongPtrW(self.window, GWL_EXSTYLE, updated);
+                restore_transparency(self.window);
             }
         }
     }

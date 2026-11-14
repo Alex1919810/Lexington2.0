@@ -14,6 +14,7 @@ if ($installRoot -eq [IO.Path]::GetPathRoot($installRoot) -or $installRoot -eq $
     throw 'Choose a dedicated installation directory, not a drive root or the source checkout.'
 }
 Push-Location $projectRoot
+$temporaryCodex = $null
 try {
     $source = Join-Path $projectRoot 'target\release\lexington.exe'
     if (Test-Path -LiteralPath (Join-Path $projectRoot 'Cargo.toml')) {
@@ -24,6 +25,15 @@ try {
         }
     } else { $source = Join-Path $projectRoot 'lexington.exe' }
     if (-not (Test-Path -LiteralPath $source)) { throw "Missing release binary: $source" }
+    $codexSource = Join-Path $projectRoot 'codex'
+    if (-not (Test-Path -LiteralPath $codexSource -PathType Container)) {
+        if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'Cargo.toml'))) { throw 'Packaged release is missing bundled native Codex.' }
+        $codexSource = Join-Path $projectRoot ('.tools\codex-stage-' + [Guid]::NewGuid().ToString('N'))
+        $temporaryCodex = $codexSource
+        & $Python -X utf8 scripts/windows_codex.py --destination $codexSource
+        if ($LASTEXITCODE -ne 0) { throw 'Native Codex staging failed.' }
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $codexSource 'vendor\x86_64-pc-windows-msvc\bin\codex.exe') -PathType Leaf)) { throw 'Bundled native Codex is incomplete.' }
     $destination = Join-Path $installRoot 'lexington.exe'
     $running = @(Get-Process lexington -ErrorAction SilentlyContinue | Where-Object { $_.Path -and [IO.Path]::GetFullPath($_.Path) -eq $destination })
     foreach ($process in $running) {
@@ -44,6 +54,9 @@ try {
     }
     Install-Binary $destination
     Install-Binary (Join-Path $installRoot 'lexington-native-host.exe')
+    $codexDestination = Join-Path $installRoot 'codex'
+    New-Item -ItemType Directory -Path $codexDestination -Force | Out-Null
+    Get-ChildItem -LiteralPath $codexSource | Copy-Item -Destination $codexDestination -Recurse -Force
     Copy-Item -LiteralPath (Join-Path $projectRoot 'resource') -Destination $installRoot -Recurse -Force
     $configDirectory = Join-Path $installRoot 'config'
     New-Item -ItemType Directory -Force -Path $configDirectory | Out-Null
@@ -110,5 +123,13 @@ try {
         Start-Process -FilePath $destination -WorkingDirectory $installRoot -WindowStyle Hidden | Out-Null
     }
     Write-Output "Installed and SHA256 verified: $destination"
-    Write-Output 'Codex: use your existing native codex.exe or specify its full path in connection settings. Login/configuration are not modified.'
-} finally { Pop-Location }
+    Write-Output 'Codex: bundled native CLI is available automatically; existing CLI, login and configuration are preserved.'
+} finally {
+    if ($temporaryCodex -and (Test-Path -LiteralPath $temporaryCodex)) {
+        $resolved = [IO.Path]::GetFullPath($temporaryCodex)
+        $toolsRoot = [IO.Path]::GetFullPath((Join-Path $projectRoot '.tools')) + [IO.Path]::DirectorySeparatorChar
+        if (-not $resolved.StartsWith($toolsRoot, [StringComparison]::OrdinalIgnoreCase) -or -not (Split-Path $resolved -Leaf).StartsWith('codex-stage-')) { throw 'Unsafe Codex staging cleanup path.' }
+        Remove-Item -LiteralPath $resolved -Recurse -Force
+    }
+    Pop-Location
+}

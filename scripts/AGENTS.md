@@ -12,6 +12,9 @@
 
 ## 增量验证
 
+- Windows MSI/便携包须包含经官方 SHA-512 校验的完整原生 Codex 发行布局及许可；只在制作机下载，目标机不运行 npm/Node 或安装期下载脚本。原生 Codex 辅助程序和资源不能仅以单个 codex.exe 替代；测试使用假载荷/缓存，不复制本机 Codex 登录。
+- test-windows-transparency.py 无键鼠输入注入，使用隔离配置与独立底层窗口读桌面像素；reset-composition 显式清除测试窗口的 DWM alpha 状态，覆盖穿透/交互切换后的恢复。不替代需授权的真实点击穿透和拖动测试。
+
 - Windows 正式包由 package-windows.ps1 + package-windows.py 使用 WiX 生成 MSI，ZIP 仅 PortableZip 显式附加；MSI 不拥有 config 或用户数据，也不运行安装期脚本。per-user MSI 的注册表 KeyPath 不能恢复自定义文件目录，须用 HKCU 保存/RegistrySearch 读取 InstallDir，防止升级/卸载回落默认目录。生命周期夹具必须隔离 Product/Upgrade/Component GUID、注册表写入及搜索、默认目录和快捷方式，不能只改安装命令的 INSTALLFOLDER。源码/便携安装使用 install-windows.ps1；PowerShell 5 调用 File.Replace 的空备份参数用 [NullString]::Value，不能用 $null。ZIP 配置必须为空对象，不得复制源码密钥；安装不依赖 Rust/Python。刚复制的 EXE 可能短暂被共享锁占用；仅对 Win32 32/33 限时重试，不能吞掉其他错误或无限等待。MSI 表检查需释放 COM Record/View/Database，否则会锁住夹具文件。
 - Windows 原生测试用 windows-smoke.py，需明确授权、同桌面串行；使用隔离配置/记录和不可用的 Codex 路径，退出恢复鼠标和焦点，仅回收测试创建的进程。GIF 画布中心未必有 alpha，抓取点必须选持续可见的实体区域。直接跳跃定位可能漏掉恢复穿透后的悬停事件；先到邻近点再真实微移到目标，并检查原生命中，不能用模拟 UI 消息或放宽拖动断言代替。宿主副本删除遇到共享锁时限时重试，临时目录清理完成后才报告通过。
 

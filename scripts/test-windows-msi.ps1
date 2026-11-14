@@ -29,6 +29,7 @@ $database = $engine.OpenDatabase($productionMsi, 0)
 try {
 $files = @(Read-MsiColumn $database 'SELECT `FileName` FROM `File`' | ForEach-Object { $_.Split('|')[-1] })
 Assert-Msi ($files -contains 'lexington.exe' -and $files -contains 'lexington-native-host.exe') 'MSI executable aliases are missing.'
+Assert-Msi ($files -contains 'codex.exe' -and $files -contains 'codex-windows-sandbox-setup.exe' -and $files -contains 'rg.exe') 'MSI native Codex distribution is missing.'
 Assert-Msi (@($files | Where-Object { $_ -match 'lexington-context.vsix' }).Count -eq 1) 'MSI VSIX is missing.'
 $properties = @(Read-MsiColumn $database 'SELECT `Property` FROM `Property`')
 Assert-Msi ($properties -notcontains 'ALLUSERS') 'MSI must be per-user.'
@@ -81,6 +82,8 @@ try {
         Invoke-Msi "/i `"$msi`" /qn /norestart$destinationArgument /l*v `"$log`""
         $activeProduct = $productCode
         Assert-Msi ((Get-FileHash -LiteralPath (Join-Path $installed 'lexington.exe')).Hash -eq (Get-FileHash -LiteralPath (Join-Path $stage.FullName 'lexington.exe')).Hash) 'MSI executable hash mismatch.'
+        $codexRelative = 'codex/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
+        Assert-Msi ((Get-FileHash -LiteralPath (Join-Path $installed $codexRelative)).Hash -eq (Get-FileHash -LiteralPath (Join-Path $stage.FullName $codexRelative)).Hash) 'MSI native Codex hash mismatch.'
         $config = Join-Path $installed 'config\config.json'
         $memory = Join-Path $installed 'config\roleplay-memory.json'
         if (-not (Test-Path -LiteralPath $config)) {
@@ -104,6 +107,7 @@ try {
     Invoke-Msi "/x $activeProduct /qn /norestart /l*v `"$uninstallLog`""
     $activeProduct = $null
     Assert-Msi (-not (Test-Path -LiteralPath (Join-Path $installed 'lexington.exe'))) 'MSI uninstall left its executable behind.'
+    Assert-Msi (-not (Test-Path -LiteralPath (Join-Path $installed $codexRelative))) 'MSI uninstall left bundled Codex behind.'
     Assert-Msi ((Get-Content -LiteralPath $config -Raw) -eq 'fixture-user-config-must-survive') 'MSI uninstall removed user configuration.'
     Assert-Msi ((Get-Content -LiteralPath $memory -Raw) -eq 'fixture-user-memory-must-survive') 'MSI uninstall removed user memory.'
     Assert-Msi (-not (Test-Path -LiteralPath $key)) 'MSI uninstall left a context command registered.'
