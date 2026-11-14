@@ -1,13 +1,13 @@
 # 界面约定
 
-继承根目录 [AGENTS.md](../../AGENTS.md)；此处仅补充本目录约束。模块职责、接口及详细场景见 [docs/MODULES.md](../../docs/MODULES.md)。
+继承根目录 [AGENTS.md](../../AGENTS.md)；此处仅补充本目录约束。模块与功能见 [docs/MODULES.md](../../docs/MODULES.md)；接口约束、实现细节及验证场景见 [docs/DEVELOPMENT_NOTES.md](../../docs/DEVELOPMENT_NOTES.md)。
 
 - “关于”正文在 app.rs 的主窗更新逻辑中内联维护；它使用主窗内 egui::Window，可见时须保留其原生输入区域注册。
 - UI 每 500ms 按配置修改时间/长度检查热加载；用 `Config::read`，失败保留上次有效值，禁止默认回退覆盖。普通设置/审批保持会话；developmentMode 改变，等当前任务结束后清除各项目的活动任务并新建会话；外部模型/API 配置改变后由用户重启会话。资源手动重载。
 - 连接参数继承环境，不提供模型/API/Key 表单，也不把凭据复制到用户配置；普通输入只发送裁首尾空白的原文；外部请求单独使用 `handoff::Request::prompt`。等待/忙碌文案使用 Lexington，等待提示固定“Lexington正在思考”。
-- 普通窗口 500×500，开发窗口 800×600，立绘容器 450×450；侧栏独立，立绘/对话/输入共享悬停变换。气泡按全文测高、限制最大高度，Area 禁用自动约束以允许溢出；几何和字体参数见模块文档。图片用线性 mipmap；CJK 字体不要再用 FontTweak.scale 放大。
+- 普通窗口 500×500，开发窗口 800×600，立绘容器 450×450；侧栏独立，立绘/对话/输入共享悬停变换。气泡按全文测高、限制最大高度，Area 禁用自动约束以允许溢出；几何和字体参数见开发说明。图片用线性 mipmap；CJK 字体不要再用 FontTweak.scale 放大。
 - 设置与中央提醒必须用独立原生 viewport，不能受主窗内 egui::Window 限制；X11 使用 Dock + AlwaysOnTop，不套用桌宠 XShape。映射后延迟一次性激活，提醒须晚于桌宠启动置顶；长内容可滚动、确认按钮固定。show_viewport_immediate 仅主线程使用；Embedded 后端提供 Window 回退，设置用 Foreground。设置操作在 viewport 回调后执行，忙碌禁用重启会话。
-- 设置标题栏及正文空白可拖动，按钮/输入/滚动条不得拖窗，正文关闭拖拽滚动。X11/Windows 按原生指针和窗口位置移动，保留按下候选等待 egui 命中结果，不能依赖跨阈值后的 StartDrag 或缓存 outer_rect；其他平台/Wayland 使用 StartDrag。位置仅首次打开初始化，关闭只销毁子 viewport；详细命中与时序规则见模块文档。
+- 设置标题栏及正文空白可拖动，按钮/输入/滚动条不得拖窗，正文关闭拖拽滚动。X11/Windows 按原生指针和窗口位置移动，保留按下候选等待 egui 命中结果，不能依赖跨阈值后的 StartDrag 或缓存 outer_rect；其他平台/Wayland 使用 StartDrag。位置仅首次打开初始化，关闭只销毁子 viewport；详细命中与时序规则见开发说明。
 - 透明区无 motion 事件，X11 用原生指针轮询发现悬停，失败回退 egui。输入在悬停共同变换后的立绘容器/输入区域、聚焦或生成中显示；离开且失焦后淡出，草稿/错误保留但不强制显示。原生失焦须 surrender_focus；Enter 同时判断 has_focus/lost_focus，启动不主动聚焦。侧栏点击阻止同帧“外部点击关闭”，避免清掉新消息。侧栏超时使用独立的主窗悬停计时，不复用聊天 last_activity；完全隐藏后移除按钮输入区域，并用原生指针轮询发现透明主窗重入，不能依赖隐藏控件收到 motion。侧栏动作索引与显示顺序分离，重排时保留动作/动画 ID，并同步依赖按钮坐标的受影响回归。
 - egui 0.31 菜单打开时 context_menu 可能返回 None；输入区域须在菜单绘制闭包中取当前矩形加菜单边距，仅打开时提交。回归检查立绘外的“关闭”项连续帧可点击；模拟 UI 事件不能替代原生穿透验证。
 - 应用重启由 UI 设置共享标记并正常关闭，main 等 run_native 返回后再拉起进程，确保状态落盘、Codex 回收及 Inbox 实例锁释放；不能在菜单回调或 on_exit 内提前启动。可执行路径在启动时捕获，避免 Linux 原子升级后的 current_exe 带 `(deleted)`。

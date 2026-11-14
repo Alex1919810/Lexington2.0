@@ -1,7 +1,8 @@
 [CmdletBinding()]
-param([string]$Python = 'python')
+param([string]$Python = 'python', [string]$Wix = '')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+if (-not $Wix) { $Wix = Join-Path $root '.tools\wix\wix.exe' }
 $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $fixture = Join-Path $temporaryRoot ('lexington-windows-test-' + [Guid]::NewGuid().ToString('N'))
 if (-not $fixture.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe fixture path.' }
@@ -15,12 +16,14 @@ try {
     foreach ($directory in @('scripts', 'resource', 'config', 'target\release')) {
         New-Item -ItemType Directory -Path (Join-Path $source $directory) -Force | Out-Null
     }
-    foreach ($name in @('install-windows.ps1', 'package-windows.ps1', 'integrations.py')) {
+    foreach ($name in @('install-windows.ps1', 'package-windows.ps1', 'package-windows.py', 'integrations.py')) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $source 'scripts')
     }
     Copy-Item -LiteralPath (Join-Path $root 'integrations') -Destination $source -Recurse
     [IO.File]::WriteAllText((Join-Path $source 'README.md'), 'fixture')
-    [IO.File]::WriteAllText((Join-Path $source 'Cargo.toml'), 'fixture')
+    [IO.File]::WriteAllText((Join-Path $source 'Cargo.toml'), "[package]`nversion = `"2.0.0`"`n")
+    New-Item -ItemType Directory -Path (Join-Path $source 'resource\icon') -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $root 'resource\icon\Normal.ico') -Destination (Join-Path $source 'resource\icon')
     [IO.File]::WriteAllText((Join-Path $source 'target\release\lexington.exe'), 'fixture version one')
     [IO.File]::WriteAllText((Join-Path $source 'resource\fixture.txt'), 'resource one')
     $modelDirectory = Join-Path $source 'resource\models\bge-small-zh-v1.5'
@@ -58,7 +61,23 @@ try {
     try { & $installer -InstallDir $source -SkipBuild -NoShortcuts -NoIntegrations } catch { $refused = $true }
     Assert-True $refused 'Installer accepted the source checkout as destination.'
     [IO.File]::WriteAllText((Join-Path $source 'config\config.json'), '{"codex":{"apiKey":"fixture-only-not-real"}}')
-    & (Join-Path $source 'scripts\package-windows.ps1') -SkipBuild -Python $Python
+    $archiveProbe = @{ Attempts = 0 }
+    function Compress-Archive {
+        [CmdletBinding()]
+        param([string[]]$Path, [string]$DestinationPath, [switch]$Force)
+        $archiveProbe.Attempts++
+        if ($archiveProbe.Attempts -eq 1) {
+            throw [IO.IOException]::new('Fixture sharing conflict', -2147024864)
+        }
+        Microsoft.PowerShell.Archive\Compress-Archive @PSBoundParameters
+    }
+    try {
+        & (Join-Path $source 'scripts\package-windows.ps1') -SkipBuild -Python $Python -Wix $Wix -PortableZip
+        Assert-True ($archiveProbe.Attempts -eq 2) 'ZIP did not retry a transient sharing conflict.'
+    } finally {
+        Remove-Item -LiteralPath Function:\Compress-Archive
+    }
+    & (Join-Path $PSScriptRoot 'test-windows-msi.ps1') -Fixture $fixture -Source $source -Wix $Wix
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archivePath = (Get-ChildItem -LiteralPath (Join-Path $source 'dist') -Filter '*.zip' | Select-Object -First 1).FullName
     $archive = [IO.Compression.ZipFile]::OpenRead($archivePath)
@@ -84,9 +103,20 @@ try {
     Assert-True ((Get-FileHash -LiteralPath (Join-Path $packageInstall 'resource\models\bge-small-zh-v1.5\model.onnx')).Hash -eq (Get-FileHash -LiteralPath (Join-Path $modelDirectory 'model.onnx')).Hash) 'Source-free install lost embedding model.'
     Assert-True ((Get-FileHash -LiteralPath (Join-Path $packageInstall 'resource\runtime\windows-x86_64\onnxruntime.dll')).Hash -eq (Get-FileHash -LiteralPath (Join-Path $runtimeDirectory 'onnxruntime.dll')).Hash) 'Source-free install lost CPU runtime.'
     Write-Output 'Windows install/upgrade/preservation/hash/package fixture checks passed.'
+} catch {
+    Write-Error $_ -ErrorAction Continue
+    throw
 } finally {
     $resolved = [IO.Path]::GetFullPath($fixture)
     if ($resolved.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase) -and (Split-Path $resolved -Leaf).StartsWith('lexington-windows-test-')) {
-        if (Test-Path -LiteralPath $resolved) { Remove-Item -LiteralPath $resolved -Recurse -Force }
+        [GC]::Collect()
+        [GC]::WaitForPendingFinalizers()
+        $cleanupDeadline = [DateTime]::UtcNow.AddSeconds(12)
+        while (Test-Path -LiteralPath $resolved) {
+            try { Remove-Item -LiteralPath $resolved -Recurse -Force } catch {
+                if (($_.Exception.HResult -band 0xffff) -notin @(32, 33) -or [DateTime]::UtcNow -ge $cleanupDeadline) { throw }
+                Start-Sleep -Milliseconds 200
+            }
+        }
     }
 }

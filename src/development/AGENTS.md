@@ -1,6 +1,6 @@
 # Development 模块
 
-继承根目录约定，职责与接口见 [docs/MODULES.md](../../docs/MODULES.md)。
+继承根目录约定，模块与功能见 [docs/MODULES.md](../../docs/MODULES.md)；接口约束、实现细节及验证场景见 [docs/DEVELOPMENT_NOTES.md](../../docs/DEVELOPMENT_NOTES.md)。
 
 - 工作区、任务记录、执行事件模型与开发提示集中于本目录；不实现第二套 Codex 协议或权限系统。
 - 本目录不依赖 UI、后端或 egui；原生 viewport 与交互状态放在 `src/ui/development.rs`。

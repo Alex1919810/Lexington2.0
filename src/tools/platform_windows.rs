@@ -12,6 +12,24 @@ use windows_sys::Win32::{
     },
 };
 
+fn is_passthrough(pointer: egui::Pos2, regions: &[Rect], screen: Rect, dragging: bool) -> bool {
+    let pointer = pointer + screen.min.to_vec2();
+    !dragging
+        && !regions.iter().any(|region| {
+            let clipped = region.intersect(screen);
+            clipped.is_positive() && clipped.contains(pointer)
+        })
+}
+
+fn input_window_style(style: isize, passthrough: bool) -> isize {
+    let base = (style & !(WS_EX_APPWINDOW as isize)) | WS_EX_TOOLWINDOW as isize;
+    if passthrough {
+        base | (WS_EX_TRANSPARENT | WS_EX_LAYERED) as isize
+    } else {
+        base & !((WS_EX_TRANSPARENT | WS_EX_LAYERED) as isize)
+    }
+}
+
 pub fn configure(_: &eframe::CreationContext<'_>) {}
 
 pub struct DragWindow {
@@ -194,21 +212,93 @@ impl DragWindow {
         let Some(pointer) = self.pointer_position(scale) else {
             return;
         };
-        let passthrough = self.drag.is_none()
-            && !regions
-                .iter()
-                .any(|region| region.intersect(screen).contains(pointer));
+        let passthrough = is_passthrough(pointer, regions, screen, self.drag.is_some());
         unsafe {
             let style = GetWindowLongPtrW(self.window, GWL_EXSTYLE);
-            let base = (style & !(WS_EX_APPWINDOW as isize)) | WS_EX_TOOLWINDOW as isize;
-            let updated = if passthrough {
-                base | (WS_EX_TRANSPARENT | WS_EX_LAYERED) as isize
-            } else {
-                base & !((WS_EX_TRANSPARENT | WS_EX_LAYERED) as isize)
-            };
+            let updated = input_window_style(style, passthrough);
             if updated != style {
                 SetWindowLongPtrW(self.window, GWL_EXSTYLE, updated);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{input_window_style, is_passthrough};
+    use eframe::egui::{Rect, pos2};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+        WS_EX_TRANSPARENT,
+    };
+
+    #[test]
+    fn windows_hit_test_passes_through_empty_regions() {
+        let screen = Rect::from_min_size(pos2(0., 0.), [500., 500.].into());
+        let regions = [Rect::from_min_max(pos2(100., 100.), pos2(200., 200.))];
+        assert!(is_passthrough(pos2(10., 10.), &regions, screen, false));
+        assert!(!is_passthrough(pos2(150., 150.), &regions, screen, false));
+        assert!(is_passthrough(pos2(150., 150.), &[], screen, false));
+    }
+
+    #[test]
+    fn windows_hit_test_clips_regions_and_ignores_empty_bounds() {
+        let screen = Rect::from_min_max(pos2(0., 0.), pos2(100., 100.));
+        let regions = [
+            Rect::from_min_max(pos2(80., 80.), pos2(120., 120.)),
+            Rect::from_min_max(pos2(20., 20.), pos2(20., 40.)),
+            Rect::NOTHING,
+        ];
+        assert!(!is_passthrough(pos2(90., 90.), &regions, screen, false));
+        assert!(is_passthrough(pos2(110., 110.), &regions, screen, false));
+        assert!(is_passthrough(pos2(20., 30.), &regions, screen, false));
+    }
+
+    #[test]
+    fn windows_hit_test_converts_client_points_to_viewport_coordinates() {
+        let screen = Rect::from_min_max(pos2(50., 100.), pos2(250., 300.));
+        let regions = [Rect::from_min_max(pos2(100., 150.), pos2(150., 200.))];
+        for scale in [1., 1.25, 1.5, 2.] {
+            let physical_pointer = pos2(75., 75.) * scale;
+            assert!(!is_passthrough(
+                physical_pointer / scale,
+                &regions,
+                screen,
+                false
+            ));
+            assert!(is_passthrough(pos2(10., 10.), &regions, screen, false));
+        }
+    }
+
+    #[test]
+    fn windows_hit_test_keeps_input_during_drag() {
+        let screen = Rect::from_min_max(pos2(0., 0.), pos2(100., 100.));
+        assert!(!is_passthrough(pos2(10., 10.), &[], screen, true));
+        assert!(is_passthrough(pos2(10., 10.), &[], screen, false));
+    }
+
+    #[test]
+    fn windows_input_style_uses_layered_transparency_and_preserves_other_flags() {
+        let preserved = (WS_EX_TOPMOST | WS_EX_NOACTIVATE) as isize;
+        let transparent = input_window_style(preserved | WS_EX_APPWINDOW as isize, true);
+        let expected = preserved | (WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT | WS_EX_LAYERED) as isize;
+        assert_eq!(transparent, expected);
+        assert_eq!(input_window_style(transparent, true), expected);
+        assert_eq!(
+            input_window_style(transparent, false),
+            preserved | WS_EX_TOOLWINDOW as isize
+        );
+    }
+
+    #[test]
+    fn windows_input_style_reasserts_flags_after_external_style_changes() {
+        let style = input_window_style(WS_EX_APPWINDOW as isize, true);
+        for removed in [WS_EX_TRANSPARENT, WS_EX_LAYERED, WS_EX_TOOLWINDOW] {
+            assert_eq!(input_window_style(style & !(removed as isize), true), style);
+        }
+        assert_eq!(
+            input_window_style(style | WS_EX_APPWINDOW as isize, true),
+            style
+        );
     }
 }

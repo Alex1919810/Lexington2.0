@@ -1,9 +1,18 @@
 [CmdletBinding()]
-param([switch]$SkipBuild, [string]$Python = 'python')
+param([switch]$SkipBuild, [string]$Python = 'python', [string]$Wix = '', [switch]$PortableZip)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Push-Location $root
 try {
+    if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'Windows packages currently require an x64 build host and x64 release binary.' }
+    if (-not $Wix) {
+        $Wix = Join-Path $root '.tools\wix\wix.exe'
+        if (-not (Test-Path -LiteralPath $Wix)) {
+            $command = Get-Command wix -ErrorAction SilentlyContinue
+            if (-not $command) { throw 'Install WiX: dotnet tool install wix --version 5.0.2 --tool-path .tools/wix' }
+            $Wix = $command.Source
+        }
+    }
     if (-not $SkipBuild) {
         & cargo build --release --locked
         if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
@@ -24,7 +33,32 @@ try {
     Copy-Item -LiteralPath scripts/install-windows.ps1 -Destination (Join-Path $stage 'scripts')
     New-Item -ItemType Directory -Path (Join-Path $stage 'dist') -Force | Out-Null
     Copy-Item -LiteralPath dist/integrations -Destination (Join-Path $stage 'dist') -Recurse
+    $authoring = Join-Path $stage 'installer.wxs'
+    & $Python -X utf8 scripts/package-windows.py --stage $stage --output $authoring --cargo Cargo.toml
+    if ($LASTEXITCODE -ne 0) { throw 'MSI authoring failed.' }
+    $builtMsi = Join-Path $stage 'lexington.msi'
+    & $Wix build $authoring -arch x64 -pdbtype none -intermediatefolder (Join-Path $stage 'obj') -out $builtMsi
+    if ($LASTEXITCODE -ne 0) { throw 'MSI build failed.' }
+    $msi = Join-Path $root 'dist\lexington-amd64-windows.msi'
+    if (Test-Path -LiteralPath $msi) {
+        [IO.File]::Replace($builtMsi, $msi, [NullString]::Value)
+    } else {
+        [IO.File]::Move($builtMsi, $msi)
+    }
+    Write-Output $msi
+    if (-not $PortableZip) { return }
     $archive = Join-Path $root ('dist\lexington-' + $env:PROCESSOR_ARCHITECTURE.ToLowerInvariant() + '-windows.zip')
-    Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive -Force
+    $archiveDeadline = [DateTime]::UtcNow.AddSeconds(12)
+    while ($true) {
+        try {
+            $portableFiles = @('lexington.exe', 'resource', 'README.md', 'config', 'scripts', 'dist') | ForEach-Object { Join-Path $stage $_ }
+            Compress-Archive -Path $portableFiles -DestinationPath $archive -Force
+            break
+        } catch {
+            $archiveError = $_.Exception.HResult -band 0xffff
+            if ($archiveError -notin @(32, 33) -or [DateTime]::UtcNow -ge $archiveDeadline) { throw }
+            Start-Sleep -Milliseconds 200
+        }
+    }
     Write-Output $archive
 } finally { Pop-Location }

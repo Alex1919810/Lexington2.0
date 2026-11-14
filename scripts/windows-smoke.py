@@ -21,6 +21,8 @@ user32.DefWindowProcW.restype = ctypes.c_ssize_t
 user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 user32.CreateWindowExW.restype = wintypes.HWND
 user32.GetForegroundWindow.restype = wintypes.HWND
+user32.WindowFromPoint.argtypes = [wintypes.POINT]
+user32.WindowFromPoint.restype = wintypes.HWND
 user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
 user32.SetForegroundWindow.argtypes = [wintypes.HWND]
 user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
@@ -48,6 +50,16 @@ def wait_for(predicate, timeout=12):
     raise AssertionError('Timed out waiting for native Windows state')
 
 
+def remove_executable(path):
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as error:
+        if error.winerror not in (32, 33):
+            raise
+        return False
+    return True
+
+
 def find_window(pid, title):
     found = []
 
@@ -72,6 +84,8 @@ def rectangle(handle):
 
 
 def move_pointer(point):
+    assert user32.SetCursorPos(round(point[0]) + 1, round(point[1]))
+    time.sleep(0.15)
     assert user32.SetCursorPos(round(point[0]), round(point[1]))
     time.sleep(0.15)
 
@@ -84,8 +98,9 @@ def click(point, right=False):
     time.sleep(0.25)
 
 
-def drag(start, end):
+def drag(handle, start, end):
     move_pointer(start)
+    wait_for(lambda: user32.WindowFromPoint(wintypes.POINT(round(start[0]), round(start[1]))) == handle)
     user32.mouse_event(0x0002, 0, 0, 0, 0)
     try:
         time.sleep(0.15)
@@ -162,6 +177,7 @@ def run(binary, artwork=None, pet_point=(250, 250)):
         for credential in ("OPENAI_API_KEY", "LEXINGTON_MODEL_API_KEY"):
             env.pop(credential, None)
         counter = root / 'clicks.txt'
+        alias = root / 'lexington-native-host.exe'
 
         def launch():
             process = subprocess.Popen([str(binary)], env=env, stdin=subprocess.DEVNULL,
@@ -198,7 +214,7 @@ def run(binary, artwork=None, pet_point=(250, 250)):
             click((left + 35 * scale, top + 115 * scale))
             assert counter.read_text() == '1', ('Sidebar passed its click through', rectangle(handle), hex(user32.GetWindowLongW(handle, -20)), scale)
             start = (left + offset[0], top + offset[1])
-            drag(start, (start[0] + 70 * scale, start[1] + 45 * scale))
+            drag(handle, start, (start[0] + 70 * scale, start[1] + 45 * scale))
             moved = rectangle(handle)
             assert abs(moved[0] - left - 70 * scale) <= 3 and abs(moved[1] - top - 45 * scale) <= 3, (moved, left, top)
             assert moved[2:] == (width, height)
@@ -210,17 +226,32 @@ def run(binary, artwork=None, pet_point=(250, 250)):
             time.sleep(1)
             before = rectangle(settings)
             title = (before[0] + 150 * scale, before[1] + 17 * scale)
-            drag(title, (title[0] + 60 * scale, title[1] + 35 * scale))
+            drag(settings, title, (title[0] + 60 * scale, title[1] + 35 * scale))
             after = rectangle(settings)
             assert abs(after[0] - before[0] - 60 * scale) <= 3 and abs(after[1] - before[1] - 35 * scale) <= 3, (before, after)
             assert rectangle(handle) == moved, 'Settings drag moved the pet'
             click((after[0] + after[2] - 26 * scale, after[1] + 26 * scale))
             wait_for(lambda: not find_window(process.pid, 'Lexington 设置'))
+            before = rectangle(handle)
+            for target in [(25, 25), (user32.GetSystemMetrics(0) - 25, 25),
+                           (user32.GetSystemMetrics(0) - 25, user32.GetSystemMetrics(1) - 25),
+                           (25, user32.GetSystemMetrics(1) - 25)]:
+                current = rectangle(handle)
+                drag(handle, (current[0] + offset[0], current[1] + offset[1]), target)
+                edge = rectangle(handle)
+                assert abs(edge[0] + offset[0] - target[0]) <= 3 and abs(edge[1] + offset[1] - target[1]) <= 3, (edge, target)
+                assert edge[2:] == (width, height)
+            current = rectangle(handle)
+            drag(handle, (current[0] + offset[0], current[1] + offset[1]), (before[0] + offset[0], before[1] + offset[1]))
+            saved = rectangle(handle)
+            user32.PostMessageW(handle, 0x0010, 0, 0)
+            assert process.wait(timeout=10) == 0
+            process, handle = launch()
+            assert rectangle(handle) == saved, ('Position was not restored', saved, rectangle(handle))
             selection = {'text': 'Windows 原生通信夹具', 'files': [], 'source': 'fixture'}
             result = subprocess.run([str(binary), '--ask-json'], input=json.dumps(selection).encode(),
                                     env=env, capture_output=True, timeout=8)
             assert result.returncode == 0, 'ask-json failed'
-            alias = root / 'lexington-native-host.exe'
             shutil.copy2(binary, alias)
             payload = json.dumps(selection).encode()
             result = subprocess.run([str(alias)], input=struct.pack('<I', len(payload)) + payload,
@@ -228,23 +259,6 @@ def run(binary, artwork=None, pet_point=(250, 250)):
             assert result.returncode == 0 and len(result.stdout) >= 4, 'Release native host framing failed'
             length, = struct.unpack('<I', result.stdout[:4])
             assert len(result.stdout) == length + 4 and json.loads(result.stdout[4:])['ok'] is True
-            before = rectangle(handle)
-            for target in [(25, 25), (user32.GetSystemMetrics(0) - 25, 25),
-                           (user32.GetSystemMetrics(0) - 25, user32.GetSystemMetrics(1) - 25),
-                           (25, user32.GetSystemMetrics(1) - 25)]:
-                current = rectangle(handle)
-                drag((current[0] + offset[0], current[1] + offset[1]), target)
-                edge = rectangle(handle)
-                assert abs(edge[0] + offset[0] - target[0]) <= 3 and abs(edge[1] + offset[1] - target[1]) <= 3, (edge, target)
-                assert edge[2:] == (width, height)
-            current = rectangle(handle)
-            drag((current[0] + offset[0], current[1] + offset[1]), (before[0] + offset[0], before[1] + offset[1]))
-            saved = rectangle(handle)
-            user32.PostMessageW(handle, 0x0010, 0, 0)
-            assert process.wait(timeout=10) == 0
-            process, handle = launch()
-            assert rectangle(handle) == saved, ('Position was not restored', saved, rectangle(handle))
-            print('Windows native smoke passed: cross-process click-through, focus/topmost/taskbar, pet/settings drag, four edges, position restore, JSON/native host.')
         finally:
             user32.mouse_event(0x0004 | 0x0010, 0, 0, 0, 0)
             living = {process.pid for process in owned if process.poll() is None}
@@ -262,6 +276,8 @@ def run(binary, artwork=None, pet_point=(250, 250)):
             user32.SetCursorPos(original_pointer.x, original_pointer.y)
             if original_focus:
                 user32.SetForegroundWindow(original_focus)
+            wait_for(lambda: remove_executable(alias))
+    print('Windows native smoke passed: cross-process click-through, focus/topmost/taskbar, pet/settings drag, four edges, position restore, JSON/native host.')
 
 
 if __name__ == '__main__':

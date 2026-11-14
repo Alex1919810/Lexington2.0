@@ -1,6 +1,6 @@
 # 角色扮演模块约定
 
-继承根目录 [AGENTS.md](../../AGENTS.md)，职责与接口见 [docs/MODULES.md](../../docs/MODULES.md)。
+继承根目录 [AGENTS.md](../../AGENTS.md)，模块与功能见 [docs/MODULES.md](../../docs/MODULES.md)；接口约束、实现细节及验证场景见 [docs/DEVELOPMENT_NOTES.md](../../docs/DEVELOPMENT_NOTES.md)。
 
 - 本模块与 backend 平级，保存角色卡、角色映射、提示组装、世界书匹配及角色配置持久化；不依赖 backend、UI、egui，不启动 Codex 或访问其登录信息。
 - Codex 进程、会话、协议、审批和权限属于 backend；UI 只编辑草稿及请求保存。角色内容不增加权限。

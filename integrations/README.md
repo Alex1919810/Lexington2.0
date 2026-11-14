@@ -8,7 +8,7 @@
 
 ### Windows 文件资源管理器
 
-运行 `powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1`，在 HKCU 注册文件/文件夹的“看看Lexington怎么说”。Windows 11 经典菜单通常位于“显示更多选项”，不代表新菜单的原生扩展。命令直接启动带引号的 exe 和本地路径，不通过 shell。VS Code 默认程序为 `%LOCALAPPDATA%\lexington\lexington.exe`。
+安装正式 MSI（`lexington-amd64-windows.msi`）或运行源码安装入口 `powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1`，在 HKCU 注册文件/文件夹的“看看Lexington怎么说”。Windows 11 经典菜单通常位于“显示更多选项”，不代表新菜单的原生扩展。命令直接启动带引号的 exe 和本地路径，不通过 shell。VS Code 默认程序为 `%LOCALAPPDATA%\lexington\lexington.exe`。MSI 不调用 VS Code，也不自动启动桌宠；需要时手动安装 `%LOCALAPPDATA%\lexington\integrations\artifacts\lexington-context.vsix`。MSI 卸载清理自身菜单、宿主注册和快捷方式，保留用户数据；浏览器/编辑器内安装的扩展仍由各应用管理。
 
 浏览器宿主注册在 HKCU 的 Chrome/Chromium/Edge/Brave/Firefox NativeMessagingHosts。`lexington-native-host.exe` 是同一 Rust 二进制的别名，stdout 仅协议帧；启动桌宠时转交同目录 lexington.exe。Chromium key/宿主白名单与产物保持一致；扩展仍需浏览器加载，Firefox 持久安装仍需签名。宿主注册和边界测试不代表所有浏览器已端到端验证。
 

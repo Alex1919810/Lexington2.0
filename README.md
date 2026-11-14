@@ -4,6 +4,11 @@
 
 Lexington 是一款使用 Rust 编写的桌面宠物，基于 eframe/egui + glow 绘制透明原生窗口，将角色陪伴、AI 对话和日常提醒放在桌面上。支持 Windows 和 Linux，运行桌宠无需 Node.js 或浏览器环境。
 
+## 开发文档
+
+- [模块与功能](docs/MODULES.md)：项目模块索引与功能描述。
+- [开发说明与避坑](docs/DEVELOPMENT_NOTES.md)：接口约束、实现细节、平台兼容及验证入口。
+
 ## 基本功能
 
 - **角色陪伴**：GIF/PNG 立绘、侧栏 L 切换 Live2D、多角色与服装切换、随机台词和打字机气泡，可自定义气泡背景。在“设置 → 角色卡”新建角色，填写名称并导入至少一张 PNG/GIF 立绘，再编辑角色设定。Lexington 婚纱支持点击头部眨眼、点击花束抬花；Flower 采用 AI 补全分层，支持点击花束、手臂、草帽、蝴蝶飘带和独立蝴蝶，待机持续呼吸和头发摆动。
@@ -26,7 +31,9 @@ Lexington 是一款使用 Rust 编写的桌面宠物，基于 eframe/egui + glow
 
 ### Windows
 
-源码安装需先准备 Rust stable（MSVC 工具链）、Visual Studio C++ Build Tools（含 Windows SDK）和 Python 3（构建右键集成）。在 PowerShell 运行：
+正式安装包为 **`lexington-amd64-windows.msi`**。双击安装到 `%LOCALAPPDATA%\lexington`，创建桌面/开始菜单快捷方式以及文件资源管理器右键菜单；无需 Rust、Python、Node 或 .NET 运行时。安装前退出 Lexington，不需要关闭浏览器或编辑器。升级保留配置、角色卡、记忆和 Codex 登录；可从 Windows“已安装的应用”卸载，用户数据不会随程序删除。当前产物未做代码签名，Windows 可能提示未知发布者。
+
+从源码安装需先准备 Rust stable（MSVC 工具链）、Visual Studio C++ Build Tools（含 Windows SDK）和 Python 3（构建右键集成）。在 PowerShell 运行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1
@@ -38,7 +45,14 @@ powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1
 & "$env:LOCALAPPDATA\lexington\lexington.exe"
 ```
 
-已有 Windows 发布 ZIP 包时，解压后执行同一安装命令即可，无需 Rust 或 Python。再次安装会保留已有配置。
+开发者制作 MSI 时，另需 .NET 8 SDK 和固定版本 WiX（仅制作机使用）：
+
+```powershell
+dotnet tool install wix --version 5.0.2 --tool-path .tools/wix
+powershell -ExecutionPolicy Bypass -File scripts/package-windows.ps1 -Python python
+```
+
+产物位于 `dist/lexington-amd64-windows.msi`。`-SkipBuild` 复用现有 release；`-Wix <wix.exe>` 可指定构建工具。默认只生成 MSI；显式传入 `-PortableZip` 才额外生成 ZIP，作为可选便携/脚本分发包，解压后运行 `scripts/install-windows.ps1`，不是正式安装器。MSI 注册浏览器通信宿主但不自动安装浏览器/VS Code 扩展；相应产物在安装目录的 `integrations/artifacts`，参见[集成安装说明](integrations/README.md)。
 
 ### Linux
 

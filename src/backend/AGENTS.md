@@ -1,6 +1,6 @@
 # 后端约定
 
-继承根目录 [AGENTS.md](../../AGENTS.md)；此处仅补充本目录约束。模块职责、接口及详细场景见 [docs/MODULES.md](../../docs/MODULES.md)。
+继承根目录 [AGENTS.md](../../AGENTS.md)；此处仅补充本目录约束。模块与功能见 [docs/MODULES.md](../../docs/MODULES.md)；接口约束、实现细节及验证场景见 [docs/DEVELOPMENT_NOTES.md](../../docs/DEVELOPMENT_NOTES.md)。
 
 - 协议基线为 Codex CLI **0.167.0**，字段以该版本生成的 JSON Schema 为准；升级须回归握手、真实流式回复和进程清理。启动即运行 `codex app-server --stdio`，按 initialize → initialized → thread/start 握手，同一角色会话复用一个 thread，切换角色新建 thread。默认继承本机登录、模型和权限；程序路径由环境 `LEXINGTON_CODEX_EXECUTABLE` 指定，工作目录由所选工作区决定；桌面 PATH 缺失时补查 `~/.local/bin`、`~/.cargo/bin`。
 - Unix 子进程必须使用独立进程组，退出/重启整组终止并回收；关闭 stdin 后再等待读线程，避免启动器后代持有 stdout 导致退出卡住。后台通过标准库事件通道回传，回调只唤醒 UI。
