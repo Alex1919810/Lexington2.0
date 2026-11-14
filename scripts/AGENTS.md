@@ -17,8 +17,9 @@
 
 - Windows 正式包由 package-windows.ps1 + package-windows.py 使用 WiX 生成 MSI，ZIP 仅 PortableZip 显式附加；MSI 不拥有 config 或用户数据，也不运行安装期脚本。per-user MSI 的注册表 KeyPath 不能恢复自定义文件目录，须用 HKCU 保存/RegistrySearch 读取 InstallDir，防止升级/卸载回落默认目录。生命周期夹具必须隔离 Product/Upgrade/Component GUID、注册表写入及搜索、默认目录和快捷方式，不能只改安装命令的 INSTALLFOLDER。源码/便携安装使用 install-windows.ps1；PowerShell 5 调用 File.Replace 的空备份参数用 [NullString]::Value，不能用 $null。安装不依赖 Rust/Python。刚复制的 EXE 可能短暂被共享锁占用；仅对 Win32 32/33 限时重试，不能吞掉其他错误或无限等待。MSI 表检查需释放 COM Record/View/Database，否则会锁住夹具文件。
 - Windows 原生测试用 windows-smoke.py，需明确授权、同桌面串行；使用隔离配置/记录和不可用的 Codex 路径，退出恢复鼠标和焦点，仅回收测试创建的进程。GIF 画布中心未必有 alpha，抓取点必须选持续可见的实体区域。直接跳跃定位可能漏掉恢复穿透后的悬停事件；先到邻近点再真实微移到目标，并检查原生命中，不能用模拟 UI 消息或放宽拖动断言代替。宿主副本删除遇到共享锁时限时重试，临时目录清理完成后才报告通过。
+- windows-smoke 默认只运行无鼠标输入的 window 检查，按影响用 --case 选择；交互用例还须 --allow-input，该参数不替代用户授权。仅用户明确要求全套原生回归时选择 all；位置恢复复用已选桌宠拖动，不追加同义手势。用例选择与调度改动优先运行 test-windows-smoke.py 的无输入夹具，不能因此重跑真实拖窗；夹具不替代受影响原生行为的验收。
 
-- 仅运行改动涉及的脚本：依赖安装用 `python3 scripts/test-dependencies.py`；集成客户端用 `node scripts/test-integrations.js`；CLI/桥接用 `python3 scripts/context-smoke.py target/release/lexington`；设置用 settings-smoke；平台窗口用相关 native-smoke 模式。命令和场景详见开发说明。
+- 仅运行改动涉及的脚本：依赖安装用 test-dependencies.py，集成客户端用 test-integrations.js，CLI/桥接用 context-smoke.py 或 Windows bridge 用例；设置标题/空白拖动及命中布局变化才选 settings-smoke 或 Windows settings 用例，不能因普通设置字段/API/配置改动附带拖窗回归。平台窗口只选受影响模式，透明合成优先无输入像素回归；命令与覆盖矩阵见开发说明。
 - 依赖安装夹具不得安装真实依赖。
 - 发布包配置使用空对象，不打包 config/roleplay.json、config/roleplay-memory.json 或 roleplay-vectors.sqlite3 及 journal/wal/shm；重复 Linux 打包还须清除旧生成目录遗留的私人配置与数据库。`bash scripts/test-package.sh` 使用假构建器和临时资源检查此行为。
 - 内置 Embedding 的模型、tokenizer、哈希清单及许可必须随 resource 分发，打包缺文件即失败；Windows x64 还携带经校验的原生 CPU DLL 及其许可/第三方声明，不引入 Python/Node 运行链。安装/无源码发布包测试用假模型与假 DLL 验证完整复制；显式 `--check-embedding` 仅用固定文本验收随包本地模型，不读取用户记录或启动对话模型。

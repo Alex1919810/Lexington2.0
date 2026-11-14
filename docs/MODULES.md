@@ -166,7 +166,9 @@ docs/
 | `test-windows.ps1` / `test-windows-msi.ps1` | 验证 Windows 构建、打包及 MSI 生命周期。 |
 | `test-windows-codex.py` | 验证 Windows Codex 分发准备及完整性保护。 |
 | `test-windows-transparency.py` | 验证 Windows 桌面像素透明合成及状态恢复。 |
-| `windows-smoke.py` / `native-smoke.py` / `settings-smoke.py` | 验证原生窗口、交互与设置功能。 |
+| `windows-smoke.py` | 按用例验证 Windows 原生窗口、穿透、拖动、位置恢复与通信。 |
+| `test-windows-smoke.py` | 使用无输入夹具验证 Windows 原生检查的用例选择、手势复用与清理。 |
+| `native-smoke.py` / `settings-smoke.py` | 验证 X11 原生窗口、交互与设置功能。 |
 | `context-smoke.py` / `test-integrations.js` | 验证外部上下文交付与集成客户端。 |
 
 ## 资源、技能与文档

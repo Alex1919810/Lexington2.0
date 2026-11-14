@@ -498,6 +498,37 @@ cargo run --locked -- --dev --screenshot /tmp/lexington.png  # 涉及真实渲�
 
 不带过滤器的 `cargo test --locked` 仅在用户明确要求全量测试时使用。专项 smoke、GIF 参考像素及性能测试按改动影响选择，受影响检查通过且无新问题后不重复运行。
 
+#### 原生检查去重与影响选择
+
+原生手势看起来相同不代表断言相同：普通拖动检查位移/尺寸，边缘重抓检查边界夹取和释放回弹，设置检查子窗口独立性，position 检查跨进程恢复；Linux 设置还覆盖标题/两处正文空白、控件排除、失焦/重开及两档 DPI。这些覆盖保留，不因使用同一 drag 辅助函数删除；配置字段或后端逻辑修改则不应附带执行它们。
+
+Windows 原生脚本原先每次固定执行 7 次拖动，并捆绑穿透、设置、四角、重启与桥接；现默认仅运行 window，不注入鼠标，也不在 finally 中移动/释放鼠标。--case 可重复并去重，执行顺序固定；all 是明确选择的整套原生回归，不作为日常默认。交互用例需要用户授权后再加 --allow-input；缺少参数会在创建窗口/进程前拒绝。window 会创建隔离底窗并切换/恢复焦点，不等于无界面检查。
+
+| 改动范围 | Windows 最小入口 | Linux 最小入口 |
+| --- | --- | --- |
+| API/Key、官方/第三方配置、普通设置字段、后端逻辑 | 对应 Rust 模块/用例，不运行拖窗 | 同左 |
+| 窗口层级、焦点、任务栏样式 | window（默认） | native-smoke 对应模式 |
+| alpha 合成/透明背景 | test-windows-transparency.py，无鼠标输入 | 对应像素回归 |
+| 原生命中/点击穿透 | click-through，不附带拖动 | native-smoke click-through |
+| 桌宠拖动锚点/位移 | drag | native-smoke drag |
+| 屏幕边界、贴边重抓 | drag-edges | native-smoke drag-edges |
+| 设置标题拖动及相关命中布局 | settings，仅设置窗口拖动 | settings-smoke |
+| 窗口位置持久化/恢复 | position | native-smoke position |
+| JSON/原生宿主交付 | bridge，无鼠标输入 | context-smoke |
+| smoke 用例选择/调度/手势复用 | test-windows-smoke.py，无输入夹具 | 不扩大到原生指针测试 |
+
+仅命中多个风险时才组合用例。drag + position 只拖桌宠一次；drag-edges + position 复用最后一次边缘位置，合计四次；all 共六次（普通桌宠一次、设置一次、四角四次），移除原先仅为位置保存而拖回原处的冗余动作，并保留每个边缘释放后不回弹断言。单独 settings 不再先拖桌宠，bridge 不再顺带测试窗口交互。透明像素检查中的 WindowFromPoint 和模拟夹具不能替代真实点击验收。
+
+`python scripts/test-windows-smoke.py` 只模拟 Win32/进程/手势，覆盖默认与去重选择、交互许可、各用例手势数、组合复用、恢复失败断言及失败清理；不会启动桌宠或注入键鼠，也不证明真实 WM/拖动已通过。
+
+```powershell
+python scripts/windows-smoke.py target/release/lexington.exe
+python scripts/windows-smoke.py target/release/lexington.exe --case bridge
+# 以下仅在用户明确授权真实鼠标测试后选择相关用例：
+python scripts/windows-smoke.py target/release/lexington.exe --case settings --allow-input
+python scripts/windows-smoke.py target/release/lexington.exe --case drag --case position --allow-input
+```
+
 `scripts/settings-smoke.py` 在临时配置/资源根目录下验证设置标题栏和正文空白拖动、按钮手势不拖窗、独立设置不移动桌宠、关闭/重开和失焦、开关点击、1×/1.5× DPI（坐标对应 720×560 的设置布局）；不调用真实模型，显示默认粉色宠物，宜在隔离显示中运行，退出恢复指针并回收测试进程。
 
 `scripts/native-smoke.py` 验证原生窗口尺寸、层级、拖动与交互；`position` 拖动后正常关闭并再次启动，断言位置精确恢复、透明边距可出屏及尺寸不变；`click-through` 创建真实底层窗口验证透明空白点击传递、立绘及侧栏保留点击；`drag-edges` 用真实指针逐步拖动可见立绘抓取点到四角，断言透明边距出屏、释放不回弹、重新按下拖回和尺寸保持；`sidebar` 在无资源临时根目录中查询 XShape 输入区域，验证固定/淡显两种模式离开主窗 10 秒后七个按钮均不命中，透明区及按钮重入通过原生轮询恢复。失败清理时也释放鼠标按钮。涉及窗口、缩放或拖动的改动还应在隔离 X11 桌面运行该脚本；可用模式、环境要求和调用方式见下文。
