@@ -110,7 +110,7 @@ bash scripts/package-deb.sh --from-bundle dist/lexington-full-ubuntu-24.04-amd64
 
 ### 首次使用 AI 对话
 
-AI 对话需要原生 Codex CLI；Windows MSI 已随包安装，Linux 安装器可在缺失时自动安装。模型、API、凭据与权限统一继承环境及本机 Codex 配置（遵循 `CODEX_HOME`），Lexington 不再提供连接参数表单，也不使用 `config.json` 中遗留的连接参数覆盖 Codex。如需指定原生程序路径，设置环境变量 `LEXINGTON_CODEX_EXECUTABLE`（Windows 使用 `codex.exe`，不使用 `.cmd/.bat`）。使用前先完成 Codex 登录或外部 API 配置；未配置 AI 时，角色展示、台词和提醒仍可使用。
+AI 对话需要原生 Codex CLI；Windows MSI 已随包安装，Linux 安装器可在缺失时自动安装。模型、API、凭据与权限始终继承环境及本机 Codex 配置（遵循 `CODEX_HOME`），无需选择“继承模式”。“设置 → 连接”显示当前属于 OpenAI 官方 API、官方本机登录还是第三方 API，并可直接修改模型、API 地址和 Key；官方支持沿用本机登录或填写 API Key，第三方需兼容 OpenAI Responses API。保存直接更新本机 Codex 的 `config.toml`，也影响其他使用此配置的 Codex 客户端；Key 默认遮罩，保存为本机 Codex 配置中的明文，不写入 Lexington `config.json`，不覆盖已有登录。保存成功后当前任务结束再新建会话；关闭设置不保存草稿。仍不使用 `config.json` 中遗留的连接字段覆盖 Codex。如需指定原生程序路径，设置环境变量 `LEXINGTON_CODEX_EXECUTABLE`（Windows 使用 `codex.exe`，不使用 `.cmd/.bat`）。未配置 AI 时，角色展示、台词和提醒仍可使用。
 
 Windows 会在没有代理环境变量时使用系统手动代理；代理变更后，在“设置 → 连接”重启会话。
 

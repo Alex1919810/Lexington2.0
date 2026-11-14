@@ -334,9 +334,12 @@ impl Client {
         let home = lookup("CODEX_HOME")
             .map(std::path::PathBuf::from)
             .or_else(|| {
-                lookup("HOME")
-                    .or_else(|| lookup("USERPROFILE"))
-                    .map(|home| Path::new(&home).join(".codex"))
+                let home = if cfg!(windows) {
+                    lookup("USERPROFILE").or_else(|| lookup("HOME"))
+                } else {
+                    lookup("HOME")
+                };
+                home.map(|home| Path::new(&home).join(".codex"))
             });
         if let Some(home) = home
             && let Ok(local) = super::codex_config::LocalCodexConfig::read(&home)

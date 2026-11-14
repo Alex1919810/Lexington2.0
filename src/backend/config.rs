@@ -32,6 +32,8 @@ pub struct CodexConfig {
     pub executable: String,
     #[serde(skip)]
     pub working_directory: Option<PathBuf>,
+    #[serde(skip)]
+    pub connection_revision: u64,
     pub no_approval: bool,
     pub development_mode: bool,
 }
@@ -39,6 +41,7 @@ impl CodexConfig {
     pub fn connection_changed(&self, other: &Self) -> bool {
         self.executable != other.executable
             || self.working_directory != other.working_directory
+            || self.connection_revision != other.connection_revision
             || self.development_mode != other.development_mode
     }
 }
@@ -47,6 +50,7 @@ impl Default for CodexConfig {
         Self {
             executable: "codex".into(),
             working_directory: None,
+            connection_revision: 0,
             no_approval: false,
             development_mode: false,
         }

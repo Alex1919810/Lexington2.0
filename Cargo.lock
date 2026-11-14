@@ -1556,6 +1556,7 @@ dependencies = [
  "sqlite-vec",
  "tempfile",
  "toml",
+ "toml_edit",
  "tyme4rs",
  "ureq 2.12.1",
  "url",
@@ -3288,6 +3289,7 @@ dependencies = [
  "indexmap",
  "toml_datetime 1.1.2+spec-1.1.0",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.5",
 ]
 

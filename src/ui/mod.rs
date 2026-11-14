@@ -7,6 +7,7 @@ mod clock;
 mod codex;
 mod command_panel;
 mod completion;
+mod connection;
 mod development;
 mod development_diagnostics;
 mod development_memory;

@@ -84,6 +84,7 @@ pub struct Wife {
     pub(super) about: bool,
     pub(super) settings: bool,
     pub(super) settings_page: u8,
+    pub(super) connection_editor: super::connection::ConnectionEditor,
     pub(super) settings_viewport_open: bool,
     pub(super) settings_started: Instant,
     pub(super) settings_raised: bool,
@@ -240,6 +241,7 @@ impl Wife {
             about: false,
             settings: false,
             settings_page: 0,
+            connection_editor: Default::default(),
             settings_viewport_open: false,
             settings_started: Instant::now(),
             settings_raised: false,
@@ -288,7 +290,8 @@ impl Wife {
             .ok()
             .and_then(|m| m.modified().ok().map(|time| (time, m.len())));
         match Config::read(&self.root) {
-            Ok(config) => {
+            Ok(mut config) => {
+                config.codex.connection_revision = self.config.codex.connection_revision;
                 if config.clock_in.auto_start != self.config.clock_in.auto_start
                     || config.clock_in.confirmation_seconds
                         != self.config.clock_in.confirmation_seconds

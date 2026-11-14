@@ -13,12 +13,14 @@ struct SettingsActions {
     development_mode: Option<bool>,
     weather: Option<super::weather::WeatherAction>,
     role_card: Option<(String, crate::roleplay::RoleCard)>,
+    connection: Option<super::connection::ConnectionAction>,
 }
 
 impl Wife {
     pub(super) fn settings_ui(&mut self, ctx: &egui::Context) {
         if !self.settings {
             self.role_editor = Default::default();
+            self.connection_editor = Default::default();
             self.settings_viewport_open = false;
             self.settings_drag = None;
             self.settings_pointer_down = false;
@@ -229,6 +231,7 @@ impl Wife {
         self.settings = open;
         if !open {
             self.role_editor = Default::default();
+            self.connection_editor = Default::default();
             self.settings_viewport_open = false;
             self.settings_drag = None;
             self.settings_pointer_down = false;
@@ -267,6 +270,9 @@ impl Wife {
         if let Some(action) = actions.weather {
             self.weather_action(action, ctx);
         }
+        if let Some(action) = actions.connection {
+            self.apply_connection_action(action);
+        }
         if let Some((character, card)) = actions.role_card {
             self.save_role_card(&character, &card);
         }
@@ -293,6 +299,7 @@ impl Wife {
         let mut development_mode_changed = false;
         let mut weather = None;
         let mut role_card = None;
+        let mut connection = None;
         super::style::panel_style(ui);
         ui.horizontal_top(|ui| {
             ui.allocate_ui_with_layout(
@@ -371,8 +378,8 @@ impl Wife {
                                 } else if self.settings_page == 2 {
                                     (clock_auto_changed, clock_action) = self.clock_settings_ui(ui);
                                 } else if self.settings_page == 1 {
-                                    ui.label("模型、API 和登录继承当前环境与本机 Codex 配置。");
-                                    ui.small("修改外部配置后重启会话。Lexington 不保存连接参数或凭据。");
+                                    connection = self.connection_settings_ui(ui);
+                                    ui.separator();
                                     development_mode_changed = ui.checkbox(&mut development_mode, "development 模式").changed();
                                     ui.small("开启后注入代码开发指令。切换将在当前任务结束后新建会话。");
                                     if ui.button("打开 development").clicked() {
@@ -472,6 +479,7 @@ impl Wife {
             development_mode: development_mode_changed.then_some(development_mode),
             weather,
             role_card,
+            connection,
         }
     }
 }
