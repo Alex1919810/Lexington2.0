@@ -1,6 +1,9 @@
 # 工具与平台约定
 
-继承根目录 [AGENTS.md](../../AGENTS.md)；此处仅补充本目录约束。模块与功能见 [docs/MODULES.md](../../docs/MODULES.md)；接口约束、实现细节及验证场景见 [docs/DEVELOPMENT_NOTES.md](../../docs/DEVELOPMENT_NOTES.md)。
+继承根目录 [AGENTS.md](../../AGENTS.md)。
+
+- 本目录负责路径、解码和平台适配；解码器只产出像素，不持有 GPU 纹理，仅平台工具允许依赖 eframe。
+- 资源根按 `LEXINGTON_HOME` → 可执行文件旁 → 当前目录寻找。
 
 - Linux 默认 X11/XWayland，原生 Wayland 用 `--wayland`，位置/层级由合成器管理。X11 桌宠必须是受 WM 管理的 Dock，不设置 strut；Utility 会被 GNOME 约束在屏幕内。设置 SKIP_TASKBAR/SKIP_PAGER/ABOVE，映射后再次置顶；仅鼠标按下时获取焦点，启动/悬停不抢焦点。
 - X11 透明绘制不等于点击穿透：只设 XShape Input（≥1.1），禁止改变 Bounding 或全窗 CursorPassthrough。每帧收集当前立绘 alpha、可见控件/菜单范围，经 DPI 换算裁到 viewport 并缓存相同遮罩；禁止加入全屏 pet Area/历史区域。隐藏输入及关闭窗口立即移除范围，独立 viewport 不加入主窗遮罩；原生 Wayland 暂无局部输入区域实现。

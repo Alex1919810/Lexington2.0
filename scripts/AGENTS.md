@@ -1,6 +1,6 @@
 # 脚本约定
 
-继承根目录 [AGENTS.md](../AGENTS.md)；此处仅补充本目录约束。模块与功能见 [docs/MODULES.md](../docs/MODULES.md)；接口约束、实现细节及验证场景见 [docs/DEVELOPMENT_NOTES.md](../docs/DEVELOPMENT_NOTES.md)。
+继承根目录 [AGENTS.md](../AGENTS.md)。
 
 - 原生指针测试需 libX11/libXtst，优先 Xephyr + WM 隔离，同一 display 必须串行；测试从可见轮廓按下，失败也须释放鼠标并恢复位置。模拟 egui 事件不能验证实际 WM 层级、移动或穿透。
 - Linux 立绘选择器使用 libdbus/XDG Portal，无 FileChooser 后端时回退 Zenity；源码和无源码安装均检查 libdbus-1-3、Zenity 及本地推理所需 libstdc++6，不能归入可跳过的菜单扩展依赖。原生立绘测试用 --pet-point 指定当前素材持续可见的实体点，不能沿用旧 GIF 的抓取坐标验证 Live2D。
@@ -15,12 +15,12 @@
 - Windows MSI/便携包须包含经官方 SHA-512 校验的完整原生 Codex 发行布局及许可；只在制作机下载，目标机不运行 npm/Node 或安装期下载脚本。原生 Codex 辅助程序和资源不能仅以单个 codex.exe 替代；测试使用假载荷/缓存，不复制本机 Codex 登录。
 - test-windows-transparency.py 无键鼠输入注入，使用隔离配置与独立底层窗口读桌面像素；reset-composition 显式清除测试窗口的 DWM alpha 状态，覆盖穿透/交互切换后的恢复。不替代需授权的真实点击穿透和拖动测试。
 
-- Windows 正式包由 package-windows.ps1 + package-windows.py 使用 WiX 生成 MSI，ZIP 仅 PortableZip 显式附加；MSI 不拥有 config 或用户数据，也不运行安装期脚本。per-user MSI 的注册表 KeyPath 不能恢复自定义文件目录，须用 HKCU 保存/RegistrySearch 读取 InstallDir，防止升级/卸载回落默认目录。生命周期夹具必须隔离 Product/Upgrade/Component GUID、注册表写入及搜索、默认目录和快捷方式，不能只改安装命令的 INSTALLFOLDER。源码/便携安装使用 install-windows.ps1；PowerShell 5 调用 File.Replace 的空备份参数用 [NullString]::Value，不能用 $null。ZIP 配置必须为空对象，不得复制源码密钥；安装不依赖 Rust/Python。刚复制的 EXE 可能短暂被共享锁占用；仅对 Win32 32/33 限时重试，不能吞掉其他错误或无限等待。MSI 表检查需释放 COM Record/View/Database，否则会锁住夹具文件。
+- Windows 正式包由 package-windows.ps1 + package-windows.py 使用 WiX 生成 MSI，ZIP 仅 PortableZip 显式附加；MSI 不拥有 config 或用户数据，也不运行安装期脚本。per-user MSI 的注册表 KeyPath 不能恢复自定义文件目录，须用 HKCU 保存/RegistrySearch 读取 InstallDir，防止升级/卸载回落默认目录。生命周期夹具必须隔离 Product/Upgrade/Component GUID、注册表写入及搜索、默认目录和快捷方式，不能只改安装命令的 INSTALLFOLDER。源码/便携安装使用 install-windows.ps1；PowerShell 5 调用 File.Replace 的空备份参数用 [NullString]::Value，不能用 $null。安装不依赖 Rust/Python。刚复制的 EXE 可能短暂被共享锁占用；仅对 Win32 32/33 限时重试，不能吞掉其他错误或无限等待。MSI 表检查需释放 COM Record/View/Database，否则会锁住夹具文件。
 - Windows 原生测试用 windows-smoke.py，需明确授权、同桌面串行；使用隔离配置/记录和不可用的 Codex 路径，退出恢复鼠标和焦点，仅回收测试创建的进程。GIF 画布中心未必有 alpha，抓取点必须选持续可见的实体区域。直接跳跃定位可能漏掉恢复穿透后的悬停事件；先到邻近点再真实微移到目标，并检查原生命中，不能用模拟 UI 消息或放宽拖动断言代替。宿主副本删除遇到共享锁时限时重试，临时目录清理完成后才报告通过。
 
 - 仅运行改动涉及的脚本：依赖安装用 `python3 scripts/test-dependencies.py`；集成客户端用 `node scripts/test-integrations.js`；CLI/桥接用 `python3 scripts/context-smoke.py target/release/lexington`；设置用 settings-smoke；平台窗口用相关 native-smoke 模式。命令和场景详见开发说明。
-- 夹具不调用模型、不安装真实依赖；安装验收仍遵守根 AGENTS 的 release、用户配置保留及安装版核对要求。
-- 发布包配置使用空对象，不打包 config/roleplay.json、config/roleplay-memory.json 或 roleplay-vectors.sqlite3 及 journal/wal/shm；重复 Linux 打包还须清除旧生成目录遗留的私人配置与数据库。`bash scripts/test-package.sh` 使用假构建器和临时资源检查此行为，不访问真实配置。
+- 依赖安装夹具不得安装真实依赖。
+- 发布包配置使用空对象，不打包 config/roleplay.json、config/roleplay-memory.json 或 roleplay-vectors.sqlite3 及 journal/wal/shm；重复 Linux 打包还须清除旧生成目录遗留的私人配置与数据库。`bash scripts/test-package.sh` 使用假构建器和临时资源检查此行为。
 - 内置 Embedding 的模型、tokenizer、哈希清单及许可必须随 resource 分发，打包缺文件即失败；Windows x64 还携带经校验的原生 CPU DLL 及其许可/第三方声明，不引入 Python/Node 运行链。安装/无源码发布包测试用假模型与假 DLL 验证完整复制；显式 `--check-embedding` 仅用固定文本验收随包本地模型，不读取用户记录或启动对话模型。
 - 个人角色卡及立绘保存在 config/characters，升级须保留，发布包须排除；重复 Linux 打包清除旧生成包内的该目录前，先核对解析后的目标位于项目 dist 内，不删除源配置。
 - import-live2d.py 只作离线原包格式转换，输出目录须不存在，不执行 ZIP 内脚本；其 NumPy/Pillow/OpenCV 工具环境不可加入原生应用运行链。Live2D 原生 PNG/JSON/f32 随 resource 分发，数值资源禁止换行转换。

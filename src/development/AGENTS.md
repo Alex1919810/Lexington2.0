@@ -1,12 +1,11 @@
 # Development 模块
 
-继承根目录约定，模块与功能见 [docs/MODULES.md](../../docs/MODULES.md)；接口约束、实现细节及验证场景见 [docs/DEVELOPMENT_NOTES.md](../../docs/DEVELOPMENT_NOTES.md)。
+继承根目录 [AGENTS.md](../../AGENTS.md)。
 
 - 工作区、任务记录、执行事件模型与开发提示集中于本目录；不实现第二套 Codex 协议或权限系统。
 - 本目录不依赖 UI、后端或 egui；原生 viewport 与交互状态放在 `src/ui/development.rs`。
 - 开发指令仅在 developmentMode 开启时注入；模式切换须新建会话，不能恢复带有旧模式指令的线程。任务和工作区隔离，外部路径不得跨项目复用线程。
 - 工作区记录是私人用户数据，使用独立状态文件、原子保存、Unix 0600；损坏文件不得覆盖，运行中任务恢复为中断，不当成成功。
-- 测试只用临时项目和模拟协议，不读取真实用户任务、登录或模型。
 
 - 私人状态当前版本 3，兼容迁移版本 1/2 并保留任务；诊断按真实路径验证项目归属，空快照表示清空。测试领域仅描述 argv/结果，执行必须复用 backend 的 app-server command/exec，不能隐式拼 shell 或扩大本机沙箱。
 - 项目记忆只载入 confirmed && enabled 且文件依据仍匹配的条目；依据用项目内路径与 SHA256，源文件变化须失效。记忆 revision 与载入文本 stamp 同时绑定任务，变更后不得恢复带旧背景的线程。保存失败不得更新记忆或丢弃编辑草稿。
