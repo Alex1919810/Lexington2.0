@@ -61,7 +61,7 @@ docs/
 | `development_review.rs` | 展示任务文件汇总和全文差异面板。 |
 | `development_memory.rs` | 编辑、核对和管理项目记忆。 |
 | `memo.rs` | 展示备忘录、筛选、编辑与完成操作。 |
-| `schedule.rs` | 展示定时任务表单、运行状态、历史与通知。 |
+| `schedule.rs` | 展示定时任务表单、每周执行日多选、运行状态、历史与通知。 |
 | `alarm.rs` | 展示闹钟配置及到期提醒。 |
 | `calendar.rs` | 展示月历、节日、加班记录与统计。 |
 | `clock.rs` | 编排打卡、自动活动确认和下班提醒。 |
@@ -88,7 +88,7 @@ docs/
 | `handoff_windows.rs` | 提供 Windows 本地 Inbox 与集成宿主交付。 |
 | `weather.rs` | 查询城市和天气并管理请求、缓存与结果。 |
 | `memo.rs` | 管理备忘录数据与持久化。 |
-| `schedule.rs` | 管理定时任务、调度执行及运行历史。 |
+| `schedule.rs` | 管理单次、每天、每周及固定间隔任务的调度与运行历史。 |
 | `alarm.rs` | 管理闹钟、到期状态与持久化。 |
 | `calendar.rs` | 计算月历与节日，管理加班记录和统计。 |
 | `clock.rs` | 管理打卡、工作时长和自动打卡状态。 |

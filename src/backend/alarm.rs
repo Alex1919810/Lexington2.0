@@ -33,6 +33,19 @@ pub struct AlarmState {
 /// Next occurrence of a local HH:MM, strictly after now. mktime handles local
 /// calendar days rather than adding 86400 seconds across DST changes.
 pub(super) fn next_due(text: &str, now: i64) -> Result<i64, String> {
+    Ok(local_occurrences(text, now, &[true; 7])?.1)
+}
+
+/// Today's matching local time (if any) and the first match strictly after now.
+/// Weekdays are ordered Monday through Sunday.
+pub(super) fn local_occurrences(
+    text: &str,
+    now: i64,
+    weekdays: &[bool; 7],
+) -> Result<(Option<i64>, i64), String> {
+    if !weekdays.contains(&true) {
+        return Err("请至少选择一天执行任务。".into());
+    }
     let bytes = text.as_bytes();
     if bytes.len() != 5
         || bytes[2] != b':'
@@ -45,26 +58,37 @@ pub(super) fn next_due(text: &str, now: i64) -> Result<i64, String> {
     if hour > 23 || minute > 59 {
         return Err("时间超出范围".into());
     }
-    {
-        let date = crate::tools::time::local(now).ok_or("无法读取本地日期")?;
-        // A nonexistent spring-forward time is skipped, not shifted an hour.
-        for offset in 0..=3 {
-            let mut target = date;
-            target.tm_mday += offset;
-            target.tm_hour = hour;
-            target.tm_min = minute;
-            target.tm_sec = 0;
-            target.tm_isdst = -1;
-            let result = crate::tools::time::timestamp(&mut target);
-            if result > now
-                && local_time(result)
-                    .is_some_and(|t| t.hour == hour as u32 && t.minute == minute as u32)
-            {
-                return Ok(result);
-            }
+    let date = crate::tools::time::local(now).ok_or("无法读取本地日期")?;
+    let mut today = None;
+    // Allow a second week when the only selected time falls in a DST gap.
+    for offset in 0..=14 {
+        let weekday = (date.tm_wday + 6 + offset) % 7;
+        if !weekdays[weekday as usize] {
+            continue;
         }
-        Err("无法计算下次闹钟时间".into())
+        let mut target = date;
+        target.tm_mday += offset;
+        target.tm_hour = hour;
+        target.tm_min = minute;
+        target.tm_sec = 0;
+        target.tm_isdst = -1;
+        let result = crate::tools::time::timestamp(&mut target);
+        // mktime normalizes nonexistent wall times and skipped calendar dates.
+        if result == -1
+            || target.tm_hour != hour
+            || target.tm_min != minute
+            || target.tm_wday != (date.tm_wday + offset) % 7
+        {
+            continue;
+        }
+        if offset == 0 {
+            today = Some(result);
+        }
+        if result > now {
+            return Ok((today, result));
+        }
     }
+    Err("无法计算下次执行时间".into())
 }
 
 impl AlarmState {

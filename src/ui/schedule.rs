@@ -60,10 +60,21 @@ pub(super) enum ScheduleAction {
     MarkRead,
     Stop,
 }
+const WEEKDAY_LABELS: [&str; 7] = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScheduleKind {
+    Once,
+    Daily,
+    Weekly,
+    Interval,
+}
+
 struct ScheduleDraft {
     name: String,
     prompt: String,
-    kind: usize,
+    kind: ScheduleKind,
+    weekdays: [bool; 7],
     time_parts: [u32; 2],
     minutes: u32,
     target: Option<Target>,
@@ -73,7 +84,8 @@ impl Default for ScheduleDraft {
         Self {
             name: String::new(),
             prompt: String::new(),
-            kind: 0,
+            kind: ScheduleKind::Once,
+            weekdays: [false; 7],
             time_parts: [9, 0],
             minutes: 60,
             target: None,
@@ -96,12 +108,24 @@ impl ScheduleDraft {
                 .desired_width(f32::INFINITY),
         );
         ui.horizontal(|ui| {
-            for (kind, label) in [(0, "单次"), (1, "每天"), (2, "固定间隔")] {
+            for (kind, label) in [
+                (ScheduleKind::Once, "单次"),
+                (ScheduleKind::Daily, "每天"),
+                (ScheduleKind::Weekly, "每周"),
+                (ScheduleKind::Interval, "固定间隔"),
+            ] {
                 ui.selectable_value(&mut self.kind, kind, label);
             }
         });
+        if self.kind == ScheduleKind::Weekly {
+            ui.horizontal_wrapped(|ui| {
+                for (day, label) in self.weekdays.iter_mut().zip(WEEKDAY_LABELS) {
+                    ui.checkbox(day, label);
+                }
+            });
+        }
         ui.horizontal(|ui| {
-            if self.kind == 2 {
+            if self.kind == ScheduleKind::Interval {
                 ui.label("每");
                 ui.add(egui::DragValue::new(&mut self.minutes).range(1..=525_600));
                 ui.label("分钟（保存后开始计时）");
@@ -116,7 +140,11 @@ impl ScheduleDraft {
                     );
                     ui.label(unit);
                 }
-                ui.weak("已过则安排明天");
+                if self.kind == ScheduleKind::Weekly {
+                    ui.weak("仅在勾选日执行");
+                } else {
+                    ui.weak("已过则安排明天");
+                }
             }
         });
         egui::ScrollArea::vertical()
@@ -160,6 +188,7 @@ impl ScheduleDraft {
                 })
                 .clicked()
             {
+                let time = format!("{:02}:{:02}", self.time_parts[0], self.time_parts[1]);
                 action = Some(ScheduleAction::Save(
                     id,
                     TaskSpec {
@@ -167,20 +196,14 @@ impl ScheduleDraft {
                         prompt: self.prompt.clone(),
                         target,
                         schedule: match self.kind {
-                            1 => Schedule::Daily {
-                                time: format!(
-                                    "{:02}:{:02}",
-                                    self.time_parts[0], self.time_parts[1]
-                                ),
+                            ScheduleKind::Once => Schedule::Once { time },
+                            ScheduleKind::Daily => Schedule::Daily { time },
+                            ScheduleKind::Weekly => Schedule::Weekly {
+                                time,
+                                weekdays: self.weekdays,
                             },
-                            2 => Schedule::Interval {
+                            ScheduleKind::Interval => Schedule::Interval {
                                 minutes: self.minutes,
-                            },
-                            _ => Schedule::Once {
-                                time: format!(
-                                    "{:02}:{:02}",
-                                    self.time_parts[0], self.time_parts[1]
-                                ),
                             },
                         },
                     },
@@ -382,7 +405,7 @@ impl Wife {
         }
         let mut action = None;
         let target = self.schedule_target();
-        ui.small("后台自动执行，无需审批，不占用当前聊天。保持 Lexington 运行；关闭期间错过的多次执行会在下次启动合并补发一次。");
+        ui.small("后台自动执行，无需审批，不占用当前聊天。保持 Lexington 运行；每周任务只补发勾选日当天错过的执行，其他任务错过多次会合并补发一次。");
         ui.add_enabled_ui(self.schedule.state.is_some(), |ui| {
             ui.push_id("new-scheduled-task", |ui| {
                 action = self.schedule.draft.show(ui, target, None);
@@ -448,6 +471,17 @@ impl Wife {
                                 ui.weak(match &task.spec.schedule {
                                     Schedule::Once { time } => format!("单次 {time}"),
                                     Schedule::Daily { time } => format!("每天 {time}"),
+                                    Schedule::Weekly { time, weekdays } => {
+                                        let days = WEEKDAY_LABELS
+                                            .into_iter()
+                                            .zip(weekdays)
+                                            .filter_map(|(label, selected)| {
+                                                selected.then_some(label)
+                                            })
+                                            .collect::<Vec<_>>()
+                                            .join("、");
+                                        format!("{days} {time}")
+                                    }
                                     Schedule::Interval { minutes } => format!("每 {minutes} 分钟"),
                                 });
                                 ui.add(egui::Label::new(&task.spec.prompt).truncate())
@@ -520,17 +554,26 @@ impl Wife {
                         target: Some(task.spec.target.clone()),
                         ..Default::default()
                     };
-                    match &task.spec.schedule {
-                        Schedule::Once { time } | Schedule::Daily { time } => {
-                            draft.kind =
-                                usize::from(matches!(task.spec.schedule, Schedule::Daily { .. }));
-                            for (value, part) in draft.time_parts.iter_mut().zip(time.split(':')) {
-                                *value = part.parse().unwrap_or_default();
-                            }
+                    let time = match &task.spec.schedule {
+                        Schedule::Once { time } => Some(time),
+                        Schedule::Daily { time } => {
+                            draft.kind = ScheduleKind::Daily;
+                            Some(time)
+                        }
+                        Schedule::Weekly { time, weekdays } => {
+                            draft.kind = ScheduleKind::Weekly;
+                            draft.weekdays = *weekdays;
+                            Some(time)
                         }
                         Schedule::Interval { minutes } => {
-                            draft.kind = 2;
+                            draft.kind = ScheduleKind::Interval;
                             draft.minutes = *minutes;
+                            None
+                        }
+                    };
+                    if let Some(time) = time {
+                        for (value, part) in draft.time_parts.iter_mut().zip(time.split(':')) {
+                            *value = part.parse().unwrap_or_default();
                         }
                     }
                     self.schedule.editing = Some((id, draft));
@@ -1129,7 +1172,7 @@ mod tests {
         assert_eq!(app.schedule.draft.name, "NEW-TASK-DRAFT");
         assert_eq!(app.schedule.draft.prompt, "新增草稿");
         let (_, draft) = app.schedule.editing.as_mut().unwrap();
-        assert_eq!(draft.kind, 1);
+        assert_eq!(draft.kind, ScheduleKind::Daily);
         assert_eq!(draft.time_parts, [9, 5]);
         draft.prompt.clear();
         click(&mut app, &ctx, save);
@@ -1144,7 +1187,28 @@ mod tests {
         let (_, draft) = app.schedule.editing.as_mut().unwrap();
         draft.prompt = "修改后的提示词".into();
         draft.time_parts = [10, 7];
-        click(&mut app, &ctx, save);
+        // Both forms contain a mode selector. Click the one inside the edited card.
+        let weekly = output
+            .shapes
+            .iter()
+            .rev()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == "每周" => {
+                    Some(text.pos + text.galley.size() / 2.)
+                }
+                _ => None,
+            })
+            .unwrap();
+        click(&mut app, &ctx, weekly);
+        let output = frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, point(&output, "保存任务"));
+        assert!(app.schedule.error.contains("至少选择一天"));
+        for day in ["周一", "周日"] {
+            let output = frame(&mut app, &ctx, vec![]);
+            click(&mut app, &ctx, point(&output, day));
+        }
+        let output = frame(&mut app, &ctx, vec![]);
+        click(&mut app, &ctx, point(&output, "保存任务"));
         assert!(app.schedule.error.is_empty());
         assert!(app.schedule.editing.is_none());
         let state = ScheduleState::load(path.clone()).unwrap();
@@ -1152,13 +1216,17 @@ mod tests {
         assert_eq!(state.tasks()[0].spec.prompt, "修改后的提示词");
         assert!(state.tasks()[0].spec.target == target);
         assert!(
-            matches!(&state.tasks()[0].spec.schedule, Schedule::Daily { time } if time == "10:07")
+            matches!(&state.tasks()[0].spec.schedule, Schedule::Weekly { time, weekdays } if time == "10:07" && *weekdays == [true, false, false, false, false, false, true])
         );
         assert_eq!(app.schedule.draft.name, "NEW-TASK-DRAFT");
         assert_eq!(app.schedule.draft.prompt, "新增草稿");
 
         let output = frame(&mut app, &ctx, vec![]);
         click(&mut app, &ctx, point(&output, "编辑"));
+        assert_eq!(
+            app.schedule.editing.as_ref().unwrap().1.weekdays,
+            [true, false, false, false, false, false, true]
+        );
         app.schedule.editing.as_mut().unwrap().1.prompt = "未保存的修改".into();
         let output = frame(&mut app, &ctx, vec![]);
         // Adding a task while editing must not save over the task being edited.

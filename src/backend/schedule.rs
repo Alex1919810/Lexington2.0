@@ -17,12 +17,16 @@ pub struct Target {
 pub enum Schedule {
     Once { time: String },
     Daily { time: String },
+    Weekly { time: String, weekdays: [bool; 7] },
     Interval { minutes: u32 },
 }
 impl Schedule {
     fn next_due(&self, now: i64) -> Result<i64, String> {
         match self {
             Self::Once { time } | Self::Daily { time } => super::alarm::next_due(time, now),
+            Self::Weekly { time, weekdays } => {
+                Ok(super::alarm::local_occurrences(time, now, weekdays)?.1)
+            }
             Self::Interval { minutes } => {
                 if !(1..=525_600).contains(minutes) {
                     return Err("间隔需为 1～525600 分钟。".into());
@@ -102,6 +106,10 @@ pub struct Task {
     pub next_due: i64,
     pub status: Status,
     pub last_run: Option<i64>,
+    // Automatic weekly runs expire at local midnight, including across restarts.
+    // Explicitly queued runs have no date restriction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_day: Option<String>,
 }
 pub const MAX_HISTORY: usize = 200;
 pub const MAX_OUTPUT_CHARS: usize = 64_000;
@@ -163,6 +171,9 @@ impl ScheduleState {
             })
             || record.tasks.iter().any(|t| {
                 !ids.insert(t.id)
+                    || t.pending_day.is_some()
+                        && (t.status != Status::Pending
+                            || !matches!(t.spec.schedule, Schedule::Weekly { .. }))
                     || t.spec.validate(t.next_due).is_err()
                     || super::clock::local_time(t.next_due).is_none()
                     || t.last_run
@@ -220,6 +231,7 @@ impl ScheduleState {
             if task.status.active() {
                 return Err("运行中的任务不能编辑。".into());
             }
+            task.pending_day = None;
             task.spec = spec;
             task.next_due = due;
             task.status = Status::Ready;
@@ -240,6 +252,7 @@ impl ScheduleState {
                 next_due: due,
                 status: Status::Ready,
                 last_run: None,
+                pending_day: None,
             });
         }
         self.store(record)
@@ -256,6 +269,7 @@ impl ScheduleState {
             task.next_due = task.spec.schedule.next_due(now)?;
         }
         if task.status == Status::Pending {
+            task.pending_day = None;
             task.status = Status::Ready;
         }
         self.store(record)
@@ -272,15 +286,37 @@ impl ScheduleState {
         let mut record = self.record.clone();
         let mut changed = false;
         for task in &mut record.tasks {
+            if let Some(day) = &task.pending_day
+                && super::clock::local_time(now).ok_or("无法读取本地日期")?.day != *day
+            {
+                task.status = Status::Ready;
+                task.pending_day = None;
+                changed = true;
+            }
             if !task.enabled || task.next_due > now {
                 continue;
             }
             changed = true;
+            let due = task.next_due;
+            let eligible = if let Schedule::Weekly { time, weekdays } = &task.spec.schedule {
+                let (today, next) = super::alarm::local_occurrences(time, now, weekdays)?;
+                task.next_due = next;
+                today.is_some_and(|slot| slot >= due && slot <= now)
+            } else {
+                task.next_due = task.spec.schedule.next_due(now)?;
+                true
+            };
             // Coalesce missed intervals and avoid adding a backlog while busy.
-            if !task.status.active() && task.status != Status::Unknown {
+            if eligible
+                && !task.status.active()
+                && !matches!(task.status, Status::Unknown | Status::Pending)
+            {
                 task.status = Status::Pending;
+                if matches!(task.spec.schedule, Schedule::Weekly { .. }) {
+                    task.pending_day =
+                        Some(super::clock::local_time(now).ok_or("无法读取本地日期")?.day);
+                }
             }
-            task.next_due = task.spec.schedule.next_due(now)?;
             if matches!(task.spec.schedule, Schedule::Once { .. }) {
                 task.enabled = false;
             }
@@ -298,6 +334,7 @@ impl ScheduleState {
             return Err("任务仍在运行。".into());
         }
         task.status = Status::Pending;
+        task.pending_day = None;
         self.store(record)
     }
     pub fn begin(&mut self, id: u64, now: i64) -> Result<Run, String> {
@@ -313,6 +350,12 @@ impl ScheduleState {
         if task.status != Status::Pending {
             return Err("任务未在等待队列中。".into());
         }
+        if let Some(day) = &task.pending_day
+            && super::clock::local_time(now).ok_or("无法读取本地日期")?.day != *day
+        {
+            return Err("已过每周任务的执行日期。".into());
+        }
+        task.pending_day = None;
         task.status = Status::Dispatching;
         task.last_run = Some(now);
         let run_id = loop {
@@ -619,6 +662,111 @@ mod tests {
         }
     }
     #[test]
+    fn weekly_runs_only_in_todays_selected_slot_including_after_restart() {
+        // 2026-11-01 is Sunday. Build each fixture in the host's local calendar.
+        let at = |day, hour| {
+            let mut date = crate::tools::time::local(NOW).unwrap();
+            date.tm_year = 126;
+            date.tm_mon = 10;
+            date.tm_mday = day;
+            date.tm_hour = hour;
+            date.tm_min = 0;
+            date.tm_sec = 0;
+            date.tm_isdst = -1;
+            crate::tools::time::timestamp(&mut date)
+        };
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("schedules.json");
+        let mut state = ScheduleState::load(path.clone()).unwrap();
+        let schedule = Schedule::Weekly {
+            time: "09:00".into(),
+            weekdays: [true, false, false, false, false, false, true],
+        };
+        state.save(None, spec(schedule.clone()), at(1, 8)).unwrap();
+        let id = state.tasks()[0].id;
+        assert_eq!(state.tasks()[0].next_due, at(1, 9));
+        state.poll(at(1, 10)).unwrap();
+        assert!(state.tasks()[0].status == Status::Pending);
+        let mut state = ScheduleState::load(path.clone()).unwrap();
+        // A busy Sunday's queue must not run early on the following Monday.
+        assert!(state.begin(id, at(2, 8)).is_err());
+        state.poll(at(2, 8)).unwrap();
+        assert!(state.tasks()[0].status == Status::Ready);
+        assert_eq!(state.tasks()[0].next_due, at(2, 9));
+        // Resume on Tuesday, then a week later on a selected day before its slot.
+        state.poll(at(3, 12)).unwrap();
+        assert!(state.tasks()[0].status == Status::Ready);
+        assert_eq!(state.tasks()[0].next_due, at(8, 9));
+        state.poll(at(9, 8)).unwrap();
+        assert!(state.tasks()[0].status == Status::Ready);
+        assert_eq!(state.tasks()[0].next_due, at(9, 9));
+        // Several missed weeks coalesce into today's occurrence once it is due.
+        state.poll(at(22, 11)).unwrap();
+        assert_eq!(state.tasks()[0].next_due, at(23, 9));
+        let mut state = ScheduleState::load(path.clone()).unwrap();
+        let run = state.begin(id, at(22, 12)).unwrap();
+        assert!(run.spec.schedule == schedule);
+        state
+            .finish(
+                run.id,
+                &Outcome {
+                    status: Status::Completed,
+                    output: String::new(),
+                    error: String::new(),
+                },
+                at(22, 13),
+            )
+            .unwrap();
+        state.poll(at(22, 14)).unwrap();
+        assert!(state.tasks()[0].status == Status::Completed);
+        state.poll(at(23, 9)).unwrap();
+        let mut state = ScheduleState::load(path).unwrap();
+        // An already queued automatic run also expires on an unselected day.
+        state.poll(at(24, 0)).unwrap();
+        assert!(state.tasks()[0].status == Status::Ready);
+        assert_eq!(state.tasks()[0].next_due, at(29, 9));
+        state.toggle(id, at(24, 1)).unwrap();
+        state.toggle(id, at(30, 10)).unwrap();
+        assert_eq!(state.tasks()[0].next_due, at(36, 9));
+        // An explicit manual run remains available outside the weekly schedule.
+        state.queue(id).unwrap();
+        state.poll(at(31, 13)).unwrap();
+        assert!(state.begin(id, at(31, 13)).is_ok());
+    }
+
+    #[test]
+    fn weekly_sunday_skips_a_nonexistent_local_time() {
+        let mut date = crate::tools::time::local(NOW).unwrap();
+        date.tm_year = 126;
+        date.tm_mon = 2;
+        date.tm_mday = 7;
+        date.tm_hour = 12;
+        date.tm_min = 0;
+        date.tm_sec = 0;
+        date.tm_isdst = -1;
+        let saturday = crate::tools::time::timestamp(&mut date);
+        let sunday = Schedule::Weekly {
+            time: "02:30".into(),
+            weekdays: [false, false, false, false, false, false, true],
+        };
+        date.tm_mday = 8;
+        date.tm_hour = 2;
+        date.tm_min = 30;
+        date.tm_isdst = -1;
+        let first_sunday = crate::tools::time::timestamp(&mut date);
+        let due = sunday.next_due(saturday).unwrap();
+        if date.tm_hour == 2 && date.tm_min == 30 {
+            assert_eq!(due, first_sunday);
+        } else {
+            let time = super::super::clock::local_time(due).unwrap();
+            assert_eq!(
+                (time.day.as_str(), time.label().as_str()),
+                ("2026-03-15", "02:30")
+            );
+        }
+    }
+
+    #[test]
     fn schedule_restart_marks_unconfirmed_run_and_requires_explicit_retry() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("schedule.json");
@@ -669,6 +817,10 @@ mod tests {
                 time: "1:00".into(),
             },
             Schedule::Interval { minutes: 0 },
+            Schedule::Weekly {
+                time: "09:00".into(),
+                weekdays: [false; 7],
+            },
         ] {
             assert!(state.save(None, spec(schedule), NOW).is_err());
         }
